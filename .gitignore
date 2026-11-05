@@ -1,0 +1,13 @@
+/_build/
+/deps/
+/.local/
+/.env
+/erl_crash.dump
+/sdks/**/node_modules/
+/sdks/**/dist/
+/sdks/**/coverage/
+/bench/apps/meteor/.meteor/local/
+/bench/apps/meteor/.meteor/.id
+/bench/apps/meteor/node_modules/
+*.log
+.DS_Store

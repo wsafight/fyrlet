@@ -1,0 +1,23 @@
+{
+  "name": "@fyrlet/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fyrlet client for typed operations and recoverable Phoenix subscriptions",
+  "type": "module",
+  "files": ["dist", "README.md"],
+  "exports": {
+    ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
+    "./server": {"types": "./dist/server.d.ts", "import": "./dist/server.js"},
+    "./example-contract": {"types": "./dist/generated/app.d.ts", "import": "./dist/generated/app.js"}
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs ../../priv/contract.json src/generated/app.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "npm run build && node --test test/unit.test.mjs",
+    "test:integration": "npm run build && node --test test/integration.test.mjs"
+  },
+  "dependencies": {"phoenix": "1.8.16"},
+  "devDependencies": {"@types/phoenix": "1.6.8", "typescript": "7.0.2"},
+  "engines": {"node": ">=22"}
+}

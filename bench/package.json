@@ -1,0 +1,13 @@
+{
+  "name": "@fyrlet/bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "run": "node runner.mjs",
+    "local": "node local.mjs",
+    "report": "node report.mjs"
+  }
+}
