@@ -8,6 +8,7 @@
     "test": "node --test test/*.test.mjs",
     "run": "node runner.mjs",
     "local": "node local.mjs",
-    "report": "node report.mjs"
+    "report": "node report.mjs",
+    "capacity": "node capacity.mjs"
   }
 }

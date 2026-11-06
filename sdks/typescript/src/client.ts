@@ -2,6 +2,8 @@ import { Socket } from "phoenix";
 import type { Channel } from "phoenix";
 import { ApiError, asApiError, channelError } from "./errors.js";
 import { endpointURL, request } from "./http.js";
+import { applyDelta, immutable } from "./delta.js";
+import { decodeFrames } from "./transport.js";
 import type { CallOptions, Client, ClientOptions, FyrletContract, Subscription, SubscriptionState } from "./types.js";
 
 interface Identity { project_id: string; subject_id: string }
@@ -12,6 +14,7 @@ interface Snapshot extends Identity {
   generation: string;
   seq: number;
   data: unknown;
+  delivery?: string;
 }
 
 interface Entry {
@@ -21,6 +24,7 @@ interface Entry {
   state: SubscriptionState<unknown>;
   listeners: Set<(state: SubscriptionState<unknown>) => void>;
   channel: Channel | undefined;
+  delta: boolean;
 }
 
 export function createClient<Contract extends FyrletContract>(options: ClientOptions): Client<Contract> {
@@ -34,6 +38,9 @@ class FyrletClient implements Client<FyrletContract> {
   private readonly entries = new Map<string, Entry>();
   private readonly controllers = new Set<ManagedController>();
   private socket: Socket | undefined;
+  private operationChannel: Channel | undefined;
+  private operationJoin: Promise<Channel> | undefined;
+  private readonly operationFailures = new Set<(error: ApiError) => void>();
   private identity: Identity | undefined;
   private token: string | undefined;
   private tokenFlight: Promise<string> | undefined;
@@ -58,7 +65,9 @@ class FyrletClient implements Client<FyrletContract> {
     this.assertOpen();
     const idempotencyKey = options.idempotencyKey ?? this.createId();
     const controller = this.controller(options.signal);
-    const perform = async (token: string) => this.http<unknown>(`/api/v1/operations/${encodeURIComponent(name)}`, token, {
+    const perform = async (token: string) => this.options.operationTransport === "socket"
+      ? this.socketCall(name, input, idempotencyKey, controller.signal)
+      : this.http<unknown>(`/api/v1/operations/${encodeURIComponent(name)}`, token, {
       method: "POST",
       headers: { "content-type": "application/json", "idempotency-key": idempotencyKey },
       body: JSON.stringify({ input }),
@@ -66,14 +75,15 @@ class FyrletClient implements Client<FyrletContract> {
     });
 
     try {
-      const token = await this.awaitToken(this.authorize(false), controller.signal);
+      const token = await this.awaitAbortable(this.authorize(false), controller.signal);
       this.assertOpen();
       try {
         return await perform(token);
       } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 401) throw error;
-        const fresh = await this.awaitToken(this.authorize(true), controller.signal);
+        if (!(error instanceof ApiError) || (error.status !== 401 && error.code !== "UNAUTHENTICATED")) throw error;
+        const fresh = await this.awaitAbortable(this.authorize(true), controller.signal);
         this.assertOpen();
+        if (this.options.operationTransport === "socket") { this.detach(); this.recovering(); }
         return await perform(fresh);
       }
     } catch (error) {
@@ -90,7 +100,7 @@ class FyrletClient implements Client<FyrletContract> {
     const id = this.createId();
     if (this.entries.has(id)) throw new TypeError("createId returned a duplicate subscription ID");
     const entry: Entry = {
-      id, name, params, listeners: new Set(), channel: undefined,
+      id, name, params, listeners: new Set(), channel: undefined, delta: false,
       state: { status: "connecting", data: undefined, error: undefined, generation: undefined, seq: 0 },
     };
     this.entries.set(id, entry);
@@ -121,7 +131,7 @@ class FyrletClient implements Client<FyrletContract> {
         channel?.leave(0);
         this.setState(entry, { ...entry.state, status: "closed", data: undefined, error: undefined });
         entry.listeners.clear();
-        if (!this.entries.size) this.detach();
+        if (!this.needsSocket()) this.detach();
       },
     };
   }
@@ -130,7 +140,7 @@ class FyrletClient implements Client<FyrletContract> {
     this.assertOpen();
     this.detach();
     for (const entry of this.entries.values()) this.setState(entry, { ...entry.state, status: "recovering", error: undefined });
-    if (this.entries.size) {
+    if (this.needsSocket()) {
       try { await this.connect(true); }
       catch (error) { this.connectionFailed(error); throw error; }
     }
@@ -198,12 +208,18 @@ class FyrletClient implements Client<FyrletContract> {
 
   private connect(forceRefresh: boolean): Promise<void> {
     if (this.connecting) return this.connecting;
-    if (this.closed || !this.entries.size) return Promise.resolve();
+    if (this.socket || this.closed || !this.needsSocket()) return Promise.resolve();
     const epoch = this.epoch;
     const flight = (async () => {
       const token = await this.authorize(forceRefresh);
-      if (this.closed || this.epoch !== epoch || !this.entries.size) return;
+      if (this.closed || this.epoch !== epoch || !this.needsSocket()) return;
       const socketOptions = {
+        decode: (raw: string, callback: Parameters<typeof decodeFrames>[1]) => {
+          try { decodeFrames(raw, callback); }
+          catch {
+            if (this.epoch === epoch) this.connectionFailed(new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid transport frame" }));
+          }
+        },
         params: { project_id: this.options.projectId },
         authToken: () => token,
         timeout: this.options.timeoutMs ?? 10_000,
@@ -223,18 +239,73 @@ class FyrletClient implements Client<FyrletContract> {
     return flight;
   }
 
+  private needsSocket(): boolean { return this.entries.size > 0 || this.options.operationTransport === "socket"; }
+
+  private async operations(): Promise<Channel> {
+    await this.connect(false);
+    this.assertOpen();
+    if (this.operationJoin) return this.operationJoin;
+    const socket = this.socket;
+    if (!socket) throw new ApiError({ code: "NETWORK_ERROR", message: "The socket is unavailable", retryable: true });
+    const channel = socket.channel("operations", { protocol_version: 1 });
+    this.operationChannel = channel;
+    const flight = new Promise<Channel>((resolve, reject) => {
+      const fail = (error: ApiError) => { this.operationFailures.delete(fail); reject(error); };
+      this.operationFailures.add(fail);
+      channel.onError(() => { if (this.operationChannel === channel) this.transportFailed(socket); });
+      channel.onClose(() => { if (this.operationChannel === channel) this.transportFailed(socket); });
+      channel.join(this.options.timeoutMs ?? 10_000)
+        .receive("ok", (payload: { protocol_version?: unknown }) => {
+          if (this.operationChannel !== channel) return;
+          this.operationFailures.delete(fail);
+          if (payload?.protocol_version === 1) resolve(channel);
+          else reject(new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid operation channel" }));
+        })
+        .receive("error", (payload: unknown) => fail(channelError(payload)))
+        .receive("timeout", () => fail(new ApiError({ code: "TIMEOUT", message: "Operation channel join timed out", retryable: true })));
+    });
+    this.operationJoin = flight;
+    void flight.catch(() => {
+      if (this.operationJoin === flight) { this.operationJoin = undefined; this.operationChannel = undefined; channel.leave(0); }
+    });
+    return flight;
+  }
+
+  private async socketCall(name: string, input: unknown, key: string, signal: AbortSignal): Promise<unknown> {
+    const channel = await this.awaitAbortable(this.operations(), signal);
+    if (signal.aborted) throw signal.reason;
+    return new Promise((resolve, reject) => {
+      const cleanup = () => { signal.removeEventListener("abort", abort); this.operationFailures.delete(fail); };
+      const fail = (error: unknown) => { cleanup(); reject(error); };
+      const abort = () => fail(signal.reason);
+      this.operationFailures.add(fail);
+      signal.addEventListener("abort", abort, { once: true });
+      channel.push("call", { name, input, idempotency_key: key }, this.options.timeoutMs ?? 10_000)
+        .receive("ok", (payload: unknown) => {
+          cleanup();
+          if (payload && typeof payload === "object" && "data" in payload) resolve(payload.data);
+          else reject(new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid operation response" }));
+        })
+        .receive("error", (payload: unknown) => fail(channelError(payload)))
+        .receive("timeout", () => fail(new ApiError({ code: "TIMEOUT", message: "Operation timed out", retryable: true })));
+    });
+  }
+
   private attach(entry: Entry, socket: Socket, epoch: number): void {
-    const channel = socket.channel(`subscription:${entry.id}`, { protocol_version: 1, name: entry.name, params: entry.params });
+    const channel = socket.channel(`subscription:${entry.id}`, { protocol_version: 1, name: entry.name, params: entry.params,
+      ...(this.options.delta === false ? {} : { delivery: "delta-v1" }) });
     entry.channel = channel;
     const current = () => !this.closed && this.epoch === epoch && entry.channel === channel && this.entries.has(entry.id);
     channel.on("snapshot", (payload: Snapshot) => { if (current()) this.apply(entry, channel, payload, false); });
+    channel.on("delta", (payload: unknown) => { if (current()) this.applyPatch(entry, channel, payload); });
     channel.on("status", (payload: unknown) => {
       if (!current()) return;
       const error = channelError(payload);
       if (this.isAuthError(error) && error.code === "UNAUTHENTICATED") {
         for (const item of this.entries.values()) this.setState(item, { ...item.state, data: undefined });
         this.transportFailed(socket);
-      } else this.fail(entry, error);
+      } else if (error.retryable) this.transportFailed(socket);
+      else this.fail(entry, error);
     });
     channel.onError(() => { if (current()) this.transportFailed(socket); });
     channel.onClose(() => {
@@ -263,10 +334,45 @@ class FyrletClient implements Client<FyrletContract> {
       return;
     }
     if (!initial && snapshot.generation !== entry.state.generation) return;
+    if (initial) entry.delta = snapshot.delivery === "delta-v1";
     if (initial || snapshot.seq > entry.state.seq) {
-      this.setState(entry, { status: "ready", data: snapshot.data, generation: snapshot.generation, seq: snapshot.seq, error: undefined });
+      this.setState(entry, { status: "ready", data: immutable(snapshot.data), generation: snapshot.generation, seq: snapshot.seq, error: undefined });
     }
-    if (entry.channel === channel) channel.push("ack", { generation: snapshot.generation, seq: snapshot.seq });
+    this.acknowledge(entry, channel, snapshot.generation, snapshot.seq);
+  }
+
+  private acknowledge(entry: Entry, channel: Channel, generation: unknown, sequence: unknown): void {
+    if (entry.channel !== channel || !this.socket?.isConnected()) return;
+    this.socket.push({ topic: channel.topic, event: "ack", payload: { g: generation, s: sequence }, ref: null, join_ref: null });
+  }
+
+  private applyPatch(entry: Entry, channel: Channel, payload: unknown): void {
+    if (!payload || typeof payload !== "object") {
+      this.fail(entry, new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid subscription delta" }));
+      return;
+    }
+    const delta = payload as { g?: unknown; s?: unknown; b?: unknown; p?: unknown };
+    if (delta.g !== entry.state.generation) return;
+    if (!entry.delta || !Number.isSafeInteger(delta.s) || !Number.isSafeInteger(delta.b) ||
+        (delta.s as number) < 2 || (delta.b as number) < 1 || delta.s !== (delta.b as number) + 1) {
+      this.fail(entry, new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid subscription delta sequence" }));
+      return;
+    }
+    if ((delta.s as number) <= entry.state.seq) {
+      this.acknowledge(entry, channel, delta.g, delta.s);
+      return;
+    }
+    if (delta.b !== entry.state.seq) {
+      if (this.socket) this.transportFailed(this.socket);
+      return;
+    }
+    try {
+      const data = applyDelta(entry.state.data, delta.p);
+      this.setState(entry, { status: "ready", data, generation: entry.state.generation, seq: delta.s as number, error: undefined });
+      this.acknowledge(entry, channel, delta.g, delta.s);
+    } catch {
+      this.fail(entry, new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid subscription delta" }));
+    }
   }
 
   private transportFailed(socket: Socket): void {
@@ -287,7 +393,7 @@ class FyrletClient implements Client<FyrletContract> {
   }
 
   private scheduleRetry(): void {
-    if (this.closed || this.retryTimer || !this.entries.size) return;
+    if (this.closed || this.retryTimer || !this.needsSocket()) return;
     const attempt = ++this.retries;
     const delay = this.options.retryDelayMs?.(attempt) ?? Math.min(250 * 2 ** Math.min(attempt - 1, 7), 30_000);
     this.retryTimer = setTimeout(() => {
@@ -322,6 +428,13 @@ class FyrletClient implements Client<FyrletContract> {
     this.connecting = undefined;
     const socket = this.socket;
     this.socket = undefined;
+    const operations = this.operationChannel;
+    this.operationChannel = undefined;
+    this.operationJoin = undefined;
+    const failure = new ApiError({ code: this.closed ? "CLIENT_CLOSED" : "NETWORK_ERROR",
+      message: this.closed ? "The client is closed" : "The connection was interrupted", retryable: !this.closed });
+    for (const fail of [...this.operationFailures]) fail(failure);
+    operations?.leave(0);
     for (const entry of this.entries.values()) {
       const channel = entry.channel;
       entry.channel = undefined;
@@ -367,7 +480,7 @@ class FyrletClient implements Client<FyrletContract> {
     return controller;
   }
 
-  private awaitToken(promise: Promise<string>, signal: AbortSignal): Promise<string> {
+  private awaitAbortable<Value>(promise: Promise<Value>, signal: AbortSignal): Promise<Value> {
     return new Promise((resolve, reject) => {
       const abort = () => reject(signal.reason);
       if (signal.aborted) { reject(signal.reason); return; }

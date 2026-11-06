@@ -1,7 +1,7 @@
 defmodule Fyrlet.Runtime do
   import Ecto.Query
   require Logger
-  alias Fyrlet.{Auth, Error, Idempotency, Registry, Repo, Schema}
+  alias Fyrlet.{Auth, CommittedChange, Error, Idempotency, Registry, Repo, Schema, View}
 
   def call(actor, name, input, idempotency_key \\ nil) do
     started = System.monotonic_time()
@@ -51,13 +51,13 @@ defmodule Fyrlet.Runtime do
     end)
   end
 
+  # Full, non-incremental result of a subscription. Production delivery goes through
+  # Observer and view/4; this is the reference the incremental tests compare against.
   def snapshot(actor, subscription) do
-    with {:ok, snapshot} <- snapshot_with_metadata(actor, subscription) do
-      {:ok, snapshot.data}
-    end
+    with {:ok, view} <- view(actor, subscription), do: {:ok, View.data(view)}
   end
 
-  def snapshot_with_metadata(actor, subscription) do
+  def view(actor, subscription, previous \\ nil, change \\ nil) do
     safely(fn ->
       started = System.monotonic_time()
 
@@ -69,19 +69,11 @@ defmodule Fyrlet.Runtime do
                  current_actor,
                  subscription.parameters
                ),
-             {:ok, data, _scopes} <-
-               subscription.module.execute(
-                 subscription.name,
-                 current_actor,
-                 subscription.parameters
-               ),
-             {:ok, checked} <- validate_output(subscription.specification["output"], data),
+             {:ok, snapshot} <-
+               subscription_view(current_actor, subscription, previous, change),
              {:ok, _actor} <- Auth.revalidate(current_actor) do
-          encoded = Jason.encode!(checked)
-          bytes = byte_size(encoded)
-
-          if bytes <= Application.fetch_env!(:fyrlet, :max_snapshot_bytes) do
-            {:ok, %{data: checked, bytes: bytes, fingerprint: :crypto.hash(:sha256, encoded)}}
+          if snapshot.bytes <= Application.fetch_env!(:fyrlet, :max_snapshot_bytes) do
+            {:ok, snapshot}
           else
             {:error, Error.new("LIMIT_EXCEEDED", "The snapshot exceeds the response size limit")}
           end
@@ -123,7 +115,17 @@ defmodule Fyrlet.Runtime do
             %Idempotency{} = cached ->
               if DateTime.compare(cached.expires_at, Auth.now()) != :gt do
                 Repo.delete!(cached)
-                execute_write(module, name, current_actor, input, specification, key, input_hash)
+
+                execute_write(
+                  module,
+                  name,
+                  current_actor,
+                  input,
+                  specification,
+                  key,
+                  input_hash,
+                  nested
+                )
               else
                 if cached.input_hash == input_hash,
                   do: {cached.result["data"], nil},
@@ -134,7 +136,16 @@ defmodule Fyrlet.Runtime do
               end
 
             nil ->
-              execute_write(module, name, current_actor, input, specification, key, input_hash)
+              execute_write(
+                module,
+                name,
+                current_actor,
+                input,
+                specification,
+                key,
+                input_hash,
+                nested
+              )
           end
         end)
 
@@ -149,7 +160,7 @@ defmodule Fyrlet.Runtime do
     end
   end
 
-  defp execute_write(module, name, actor, input, specification, key, input_hash) do
+  defp execute_write(module, name, actor, input, specification, key, input_hash, nested) do
     {data, scopes} =
       case module.execute(name, actor, input) do
         {:ok, data, scopes} -> {data, scopes}
@@ -172,21 +183,120 @@ defmodule Fyrlet.Runtime do
     job =
       if scopes != [] do
         %{"scopes" => Enum.uniq(scopes), "project_id" => actor.project_id}
-        |> Fyrlet.InvalidationWorker.new()
+        |> Fyrlet.InvalidationWorker.new(fallback_options(nested))
         |> Oban.insert()
         |> unwrap!()
       end
 
-    {checked, job}
+    change =
+      if function_exported?(module, :change, 4),
+        do: module.change(name, actor, input, checked)
+
+    change =
+      if not is_nil(change) do
+        %CommittedChange{
+          change: change,
+          output: checked,
+          schema: specification["output"],
+          bytes: byte_size(Jason.encode!(checked))
+        }
+      end
+
+    {checked, if(job, do: {job, change})}
   end
 
-  defp notify_after_commit(job) do
-    Fyrlet.InvalidationWorker.broadcast(job)
+  # Outside a caller transaction the immediate broadcast is the primary path, so the
+  # durable job only needs to run if it failed. Delaying it lets Oban stage jobs in
+  # batches instead of fetching one per write; nested writes keep it immediate.
+  defp fallback_options(true), do: []
+
+  defp fallback_options(false) do
+    case Application.fetch_env!(:fyrlet, :invalidation_fallback_delay) do
+      seconds when is_integer(seconds) and seconds > 0 -> [schedule_in: seconds]
+      _immediate -> []
+    end
+  end
+
+  defp notify_after_commit({job, change}) do
+    Fyrlet.InvalidationWorker.broadcast(job, change)
   rescue
     _error -> Logger.warning("Immediate invalidation failed; the durable job will retry")
   catch
     _kind, _reason ->
       Logger.warning("Immediate invalidation failed; the durable job will retry")
+  end
+
+  defp subscription_view(actor, subscription, previous, change) do
+    updated =
+      if match?(%View{records: records} when is_map(records), previous) and not is_nil(change) and
+           function_exported?(subscription.module, :update_subscription, 5) do
+        subscription.module.update_subscription(
+          subscription.name,
+          actor,
+          subscription.parameters,
+          previous,
+          change_body(change)
+        )
+      else
+        :reload
+      end
+
+    schema = subscription.specification["output"]
+
+    case updated do
+      {:replace, identifier, record} when is_binary(identifier) ->
+        if schema["type"] == "array" and Map.has_key?(previous.records, identifier) and
+             is_map(record) and record["id"] == identifier do
+          with {:ok, checked, record_bytes} <-
+                 validate_replacement(schema["items"], record, change) do
+            {:ok, View.replace(previous, identifier, checked, record_bytes)}
+          end
+        else
+          {:error, Error.new("INTERNAL_ERROR", "Invalid subscription replacement")}
+        end
+
+      {:reset, data, context} ->
+        with {:ok, checked} <- validate_output(schema, data) do
+          {:ok, View.reset(previous, checked, context)}
+        end
+
+      {:context, context} ->
+        {:ok, %{previous | context: context, patch: %{}, unchanged: true}}
+
+      :unchanged ->
+        {:ok, %{previous | patch: %{}, unchanged: true}}
+
+      :reload ->
+        with {:ok, data, context} <- load_subscription(actor, subscription),
+             {:ok, checked} <- validate_output(schema, data) do
+          {:ok, View.reset(previous, checked, context)}
+        end
+    end
+  end
+
+  defp load_subscription(actor, subscription) do
+    if function_exported?(subscription.module, :load_subscription, 3) do
+      subscription.module.load_subscription(subscription.name, actor, subscription.parameters)
+    else
+      with {:ok, data, _scopes} <-
+             subscription.module.execute(subscription.name, actor, subscription.parameters),
+           do: {:ok, data, %{}}
+    end
+  end
+
+  defp change_body(%CommittedChange{change: change}), do: change
+  defp change_body(change), do: change
+
+  defp validate_replacement(schema, record, %CommittedChange{
+         schema: schema,
+         output: record,
+         bytes: bytes
+       }),
+       do: {:ok, record, bytes}
+
+  defp validate_replacement(schema, record, _change) do
+    with {:ok, checked} <- validate_output(schema, record),
+         do: {:ok, checked, byte_size(Jason.encode!(checked))}
   end
 
   defp validate_output(schema, data) do

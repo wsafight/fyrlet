@@ -4,6 +4,8 @@ alias Fyrlet.{Auth, InboxItem, Repo}
 rows = String.to_integer(System.fetch_env!("BENCH_ROWS"))
 payload_bytes = String.to_integer(System.fetch_env!("BENCH_PAYLOAD_BYTES"))
 users = String.to_integer(System.fetch_env!("BENCH_USERS"))
+devices = String.to_integer(System.get_env("BENCH_DEVICES", "1"))
+session_model = System.get_env("BENCH_SESSION_MODEL", "shared")
 
 fixtures =
   for index <- 1..users do
@@ -32,7 +34,25 @@ fixtures =
       end
 
     Repo.insert_all(InboxItem, records)
-    %{token: session["token"], ids: Enum.map(records, & &1.id)}
+
+    observer_tokens =
+      if session_model == "device" do
+        for _device <- 1..devices do
+          {:ok, device_session} =
+            Auth.issue_session(project.service_key, %{
+              "external_subject" => "bench-user-#{index}",
+              "issuer" => "benchmark",
+              "ttl_seconds" => 900
+            })
+
+          true = device_session["subject_id"] == session["subject_id"]
+          device_session["token"]
+        end
+      else
+        []
+      end
+
+    %{token: session["token"], observer_tokens: observer_tokens, ids: Enum.map(records, & &1.id)}
   end
 
 fixture = %{
@@ -41,6 +61,7 @@ fixture = %{
   project_id: project.project.id,
   rows: rows,
   payload_bytes: payload_bytes,
+  session_model: session_model,
   users: fixtures
 }
 

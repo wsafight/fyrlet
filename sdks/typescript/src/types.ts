@@ -37,6 +37,8 @@ export interface ClientOptions {
   timeoutMs?: number;
   retryDelayMs?: (attempt: number) => number;
   onListenerError?: (error: unknown) => void;
+  delta?: boolean;
+  operationTransport?: "http" | "socket";
 }
 
 export interface CallOptions {

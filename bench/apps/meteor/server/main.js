@@ -28,12 +28,13 @@ const authenticated = async (context) => {
 Meteor.onConnection((connection) => connection.onClose(() => actors.delete(connection.id)));
 
 Meteor.methods({
-  async "bench.seed"(secret, runId, users, rows, payloadBytes) {
+  async "bench.seed"(secret, runId, users, rows, payloadBytes, devices, sessions) {
     admin(secret);
     check(runId, Match.Where((value) => typeof value === "string" && /^bench-[\d]+-[a-f\d-]{8}$/.test(value)));
-    for (const [value, maximum] of [[users, 1000], [rows, 100], [payloadBytes, 16384]]) {
+    for (const [value, maximum] of [[users, 5000], [rows, 100], [payloadBytes, 16384], [devices, 100]]) {
       check(value, Match.Where((number) => Number.isSafeInteger(number) && number >= 1 && number <= maximum));
     }
+    check(sessions, Match.OneOf("shared", "device"));
     const fixtures = [];
     for (let index = 0; index < users; index++) {
       const subject = `${runId}:${index}`;
@@ -45,10 +46,16 @@ Meteor.methods({
         inserted_at: new Date(Date.now() + row), updated_at: new Date(Date.now() + row),
       }));
       await Items.rawCollection().insertMany(records);
-      fixtures.push({ token, ids: records.map((item) => item._id) });
+      const observerTokens = [];
+      if (sessions === "device") for (let device = 0; device < devices; device++) {
+        const deviceToken = `mbt_${randomBytes(32).toString("hex")}`;
+        await Sessions.insertAsync({ _id: hash(deviceToken), project_id: runId, subject_id: subject, expires_at: new Date(Date.now() + 900000) });
+        observerTokens.push(deviceToken);
+      }
+      fixtures.push({ token, observer_tokens: observerTokens, ids: records.map((item) => item._id) });
     }
     const build = await Items.rawCollection().client.db("admin").command({ buildInfo: 1 });
-    return { target: "meteor", run_id: runId, project_id: runId, rows, payload_bytes: payloadBytes, users: fixtures, mongo_version: build.version,
+    return { target: "meteor", run_id: runId, project_id: runId, rows, payload_bytes: payloadBytes, session_model: sessions, users: fixtures, mongo_version: build.version,
       runtime_node: process.version,
       observer_config: { oplogConfigured: Boolean(process.env.MONGO_OPLOG_URL), changeStreamsMode: process.env.METEOR_CHANGE_STREAMS_MODE ?? "default" } };
   },
@@ -112,7 +119,15 @@ Meteor.publish("inbox.recent", async function (rows) {
 
 WebApp.handlers.use("/__bench/health", (_request, response) => {
   response.writeHead(ready ? 200 : 503, { "content-type": "application/json" });
-  response.end(JSON.stringify({ ready }));
+  const multiplexers = Object.values(Items._driver?.mongo?._observeMultiplexers ?? {}).filter((entry) =>
+    entry._observeDriver?._cursorDescription?.collectionName === "bench_items");
+  const activeDrivers = {};
+  for (const entry of multiplexers) {
+    const name = entry._observeDriver?.constructor?.name || "unknown";
+    activeDrivers[name] = (activeDrivers[name] ?? 0) + 1;
+  }
+  response.end(JSON.stringify({ ready, applicationPid: process.pid, loggedInConnections: actors.size, observedQueries: multiplexers.length, activeDrivers,
+    driverIntrospection: "Meteor 3.5.4 private _observeMultiplexers/_observeDriver; benchmark diagnostics only" }));
 });
 
 Meteor.startup(async () => {

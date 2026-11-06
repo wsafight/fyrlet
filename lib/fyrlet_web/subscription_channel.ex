@@ -1,50 +1,45 @@
 defmodule FyrletWeb.SubscriptionChannel do
-  use Phoenix.Channel, log_join: false, log_handle_in: false
-  alias Fyrlet.{Error, Runtime, SubscriptionTracker}
-  @recent_invalidation_limit 64
+  use Phoenix.Channel,
+    log_join: false,
+    log_handle_in: false,
+    hibernate_after: Application.compile_env(:fyrlet, :channel_hibernate_after, 15_000)
+
+  alias Fyrlet.{Auth, Error, Observer, Runtime, SubscriptionTracker}
 
   @impl true
   def join(
         "subscription:" <> identifier,
-        %{"protocol_version" => 1, "name" => name, "params" => parameters},
+        %{"protocol_version" => 1, "name" => name, "params" => parameters} = options,
         socket
       ) do
+    delivery = if options["delivery"] == "delta-v1", do: "delta-v1", else: "snapshot"
+
     with {:ok, _uuid} <- Ecto.UUID.cast(identifier),
          {:ok, subscription} <-
            Runtime.prepare_subscription(socket.assigns.actor, name, parameters),
-         :ok <- SubscriptionTracker.claim(socket.transport_pid, self()) do
-      Phoenix.PubSub.subscribe(Fyrlet.PubSub, subscription.scope)
+         :ok <- SubscriptionTracker.claim(socket.transport_pid, self()),
+         {:ok, observer, revision, encoded} <-
+           Observer.attach(socket.assigns.actor, subscription, delivery) do
+      remaining = max(DateTime.diff(socket.assigns.actor.expires_at, Auth.now(), :millisecond), 1)
 
-      case Runtime.snapshot_with_metadata(socket.assigns.actor, subscription) do
-        {:ok, snapshot} ->
-          remaining =
-            max(
-              DateTime.diff(socket.assigns.actor.expires_at, Fyrlet.Auth.now(), :millisecond),
-              1
-            )
+      socket =
+        socket
+        |> assign(
+          subscription: subscription,
+          subscription_id: identifier,
+          delivery: delivery,
+          generation: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
+          observer: observer,
+          observer_monitor: Process.monitor(observer),
+          revision: revision,
+          seq: 1,
+          awaiting: 1,
+          ack_timer: nil,
+          expiry_timer: Process.send_after(self(), :expired, remaining)
+        )
+        |> awaiting(1)
 
-          socket =
-            assign(socket,
-              subscription: subscription,
-              subscription_id: identifier,
-              generation: Ecto.UUID.generate(),
-              seq: 1,
-              pending: false,
-              scheduled: false,
-              recent_invalidations: [],
-              force_refresh: false,
-              snapshot_fingerprint: snapshot.fingerprint,
-              awaiting: 1,
-              ack_timer: ack_timer(1),
-              reconcile_timer: reconcile_timer(),
-              expiry_timer: Process.send_after(self(), :expired, remaining)
-            )
-
-          {:ok, envelope(socket, snapshot), socket}
-
-        {:error, error} ->
-          {:error, %{"error" => Error.to_map(error)}}
-      end
+      {:ok, envelope(socket, encoded), socket}
     else
       :error ->
         {:error,
@@ -69,120 +64,134 @@ defmodule FyrletWeb.SubscriptionChannel do
   end
 
   @impl true
-  def handle_in("ack", %{"generation" => generation, "seq" => sequence}, socket) do
-    if generation == socket.assigns.generation and sequence == socket.assigns.awaiting do
-      Process.cancel_timer(socket.assigns.ack_timer)
-      socket = assign(socket, awaiting: nil)
-      {:reply, {:ok, %{}}, if(socket.assigns.pending, do: schedule(socket), else: socket)}
+  def handle_in("ack", %{"g" => generation, "s" => sequence}, socket) do
+    if is_integer(sequence) and sequence > 0 and generation == socket.assigns.generation and
+         sequence == socket.assigns.awaiting do
+      Observer.ready(socket.assigns.observer, socket.assigns.revision)
+      {:noreply, assign(socket, awaiting: nil)}
     else
-      {:reply, {:ok, %{}}, socket}
+      {:noreply, socket}
     end
   end
 
-  def handle_in("refresh", _parameters, socket),
-    do: {:reply, {:ok, %{"accepted" => true}}, schedule(assign(socket, :force_refresh, true))}
+  def handle_in("refresh", _parameters, socket) do
+    Observer.refresh(socket.assigns.observer)
+    {:reply, {:ok, %{"accepted" => true}}, socket}
+  end
 
   def handle_in(_event, _parameters, socket),
     do: {:reply, {:error, %{"error" => Error.to_map(Error.not_found())}}, socket}
 
   @impl true
-  def handle_info({:invalidated, identifier}, socket) when is_integer(identifier) do
-    if identifier in socket.assigns.recent_invalidations do
-      {:noreply, socket}
-    else
-      recent = [
-        identifier
-        | Enum.take(socket.assigns.recent_invalidations, @recent_invalidation_limit - 1)
-      ]
+  def handle_info(
+        {:observer_update, observer, revision, event, encoded},
+        %{assigns: %{observer: observer}} = socket
+      ) do
+    case Auth.validate_session(socket.assigns.actor, socket.assigns.actor.expires_at, nil) do
+      {:ok, _actor} ->
+        sequence = socket.assigns.seq + 1
 
-      bounded_schedule(assign(socket, :recent_invalidations, recent))
+        {event, payload} =
+          case event do
+            :delta ->
+              :telemetry.execute(
+                [:fyrlet, :subscription, :delta],
+                %{bytes: byte_size(encoded)},
+                %{name: socket.assigns.subscription.name}
+              )
+
+              {"delta",
+               %{
+                 "g" => socket.assigns.generation,
+                 "b" => socket.assigns.seq,
+                 "s" => sequence,
+                 "p" => fragment(socket, encoded)
+               }}
+
+            :snapshot ->
+              {"snapshot", envelope(assign(socket, seq: sequence), encoded)}
+          end
+
+        push(socket, event, payload)
+        {:noreply, socket |> assign(seq: sequence, revision: revision) |> awaiting(sequence)}
+
+      {:error, error} ->
+        stop(socket, error)
     end
   end
 
-  def handle_info(:invalidated, socket), do: bounded_schedule(socket)
+  def handle_info({:observer_error, observer, error}, %{assigns: %{observer: observer}} = socket),
+    do: stop(socket, error)
 
-  def handle_info(:reconcile, socket) do
-    bounded_schedule(assign(socket, :reconcile_timer, reconcile_timer()))
-  end
+  def handle_info(
+        {:DOWN, monitor, :process, observer, _reason},
+        %{assigns: %{observer_monitor: monitor, observer: observer}} = socket
+      ),
+      do:
+        stop(
+          socket,
+          Error.new("INTERNAL_ERROR", "The observer stopped; reconnect to recover", %{}, true)
+        )
 
-  def handle_info(:refresh, socket) do
-    socket = assign(socket, scheduled: false)
+  def handle_info(:ack_timeout, socket) do
+    socket = assign(socket, ack_timer: nil)
 
-    if socket.assigns.awaiting do
-      {:noreply, assign(socket, pending: true)}
-    else
-      case Runtime.snapshot_with_metadata(socket.assigns.actor, socket.assigns.subscription) do
-        {:ok, snapshot}
-        when snapshot.fingerprint == socket.assigns.snapshot_fingerprint and
-               not socket.assigns.force_refresh ->
-          {:noreply, assign(socket, pending: false)}
+    cond do
+      socket.assigns.awaiting == nil ->
+        {:noreply, socket}
 
-        {:ok, snapshot} ->
-          sequence = socket.assigns.seq + 1
+      socket.assigns.ack_deadline <= System.monotonic_time(:millisecond) ->
+        stop(socket, Error.new("LIMIT_EXCEEDED", "The snapshot was not acknowledged in time"))
 
-          socket =
-            assign(socket,
-              seq: sequence,
-              pending: false,
-              force_refresh: false,
-              snapshot_fingerprint: snapshot.fingerprint,
-              awaiting: sequence,
-              ack_timer: ack_timer(sequence)
-            )
-
-          push(socket, "snapshot", envelope(socket, snapshot))
-          {:noreply, socket}
-
-        {:error, error} ->
-          stop(socket, error)
-      end
-    end
-  end
-
-  def handle_info({:ack_timeout, sequence}, socket) do
-    if sequence == socket.assigns.awaiting do
-      stop(socket, Error.new("LIMIT_EXCEEDED", "The snapshot was not acknowledged in time"))
-    else
-      {:noreply, socket}
+      true ->
+        {:noreply, arm_ack_timer(socket)}
     end
   end
 
   def handle_info(:expired, socket), do: stop(socket, Error.unauthorized())
+
+  def handle_info(message, socket) when message in [:invalidated, :reconcile] do
+    Observer.invalidate(socket.assigns.observer, message)
+    {:noreply, socket}
+  end
+
+  def handle_info({:invalidated, _identifier} = message, socket) do
+    Observer.invalidate(socket.assigns.observer, message)
+    {:noreply, socket}
+  end
+
+  def handle_info({:invalidated, _identifier, _change} = message, socket) do
+    Observer.invalidate(socket.assigns.observer, message)
+    {:noreply, socket}
+  end
+
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
   def terminate(_reason, socket) do
-    for key <- [:ack_timer, :reconcile_timer, :expiry_timer],
+    for key <- [:ack_timer, :expiry_timer],
         reference = socket.assigns[key],
-        is_reference(reference) do
-      Process.cancel_timer(reference)
-    end
+        is_reference(reference),
+        do: Process.cancel_timer(reference)
 
     :ok
   end
 
-  defp bounded_schedule(socket) do
-    {:message_queue_len, length} = Process.info(self(), :message_queue_len)
+  defp awaiting(socket, sequence) do
+    socket =
+      assign(socket,
+        awaiting: sequence,
+        ack_deadline:
+          System.monotonic_time(:millisecond) +
+            Application.fetch_env!(:fyrlet, :snapshot_ack_timeout)
+      )
 
-    if length > Application.fetch_env!(:fyrlet, :max_channel_queue) do
-      stop(socket, Error.new("LIMIT_EXCEEDED", "The subscription is overloaded; subscribe again"))
-    else
-      {:noreply, schedule(socket)}
-    end
+    if socket.assigns.ack_timer, do: socket, else: arm_ack_timer(socket)
   end
 
-  defp schedule(socket) do
-    cond do
-      socket.assigns.awaiting ->
-        assign(socket, pending: true)
-
-      socket.assigns.scheduled ->
-        socket
-
-      true ->
-        send(self(), :refresh)
-        assign(socket, scheduled: true)
-    end
+  defp arm_ack_timer(socket) do
+    remaining = max(socket.assigns.ack_deadline - System.monotonic_time(:millisecond), 1)
+    assign(socket, ack_timer: Process.send_after(self(), :ack_timeout, remaining))
   end
 
   defp stop(socket, error) do
@@ -190,12 +199,10 @@ defmodule FyrletWeb.SubscriptionChannel do
     {:stop, :normal, socket}
   end
 
-  defp envelope(socket, snapshot) do
-    :telemetry.execute(
-      [:fyrlet, :subscription, :snapshot],
-      %{bytes: snapshot.bytes},
-      %{name: socket.assigns.subscription.name}
-    )
+  defp envelope(socket, encoded) do
+    :telemetry.execute([:fyrlet, :subscription, :snapshot], %{bytes: byte_size(encoded)}, %{
+      name: socket.assigns.subscription.name
+    })
 
     %{
       "protocol_version" => 1,
@@ -204,23 +211,14 @@ defmodule FyrletWeb.SubscriptionChannel do
       "seq" => socket.assigns.seq,
       "project_id" => socket.assigns.actor.project_id,
       "subject_id" => socket.assigns.actor.subject_id,
-      "data" => snapshot.data
+      "delivery" => socket.assigns.delivery,
+      "data" => fragment(socket, encoded)
     }
   end
 
-  defp ack_timer(sequence),
-    do:
-      Process.send_after(
-        self(),
-        {:ack_timeout, sequence},
-        Application.fetch_env!(:fyrlet, :snapshot_ack_timeout)
-      )
-
-  defp reconcile_timer,
-    do:
-      Process.send_after(
-        self(),
-        :reconcile,
-        Application.fetch_env!(:fyrlet, :reconciliation_interval)
-      )
+  defp fragment(socket, encoded) do
+    if socket.serializer == Phoenix.Socket.V2.JSONSerializer and Phoenix.json_library() == Jason,
+      do: Jason.Fragment.new(encoded),
+      else: Jason.decode!(encoded)
+  end
 end

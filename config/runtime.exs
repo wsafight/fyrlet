@@ -1,5 +1,23 @@
 import Config
 
+if interval = System.get_env("FYRLET_OBSERVER_HIBERNATE_AFTER_MS") do
+  config :fyrlet,
+         :observer_hibernate_after,
+         if(interval == "infinity", do: :infinity, else: String.to_integer(interval))
+end
+
+if delay = System.get_env("FYRLET_INVALIDATION_FALLBACK_DELAY_S") do
+  config :fyrlet, :invalidation_fallback_delay, String.to_integer(delay)
+end
+
+if ttl = System.get_env("FYRLET_IDEMPOTENCY_TTL_SECONDS") do
+  config :fyrlet, :idempotency_ttl, String.to_integer(ttl)
+end
+
+if pool_size = System.get_env("POOL_SIZE") do
+  config :fyrlet, Fyrlet.Repo, pool_size: String.to_integer(pool_size)
+end
+
 if database_url = System.get_env("DATABASE_URL") do
   config :fyrlet, Fyrlet.Repo, url: database_url
 end

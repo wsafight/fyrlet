@@ -23,6 +23,7 @@ export function trafficMeter() {
             this.queue.length = 0;
           }
           const forwarded = new Event(name);
+          if (name === "error") Object.defineProperty(forwarded, "error", { value: event.error });
           if (name === "close") Object.defineProperties(forwarded, {
             code: { value: event.code }, reason: { value: event.reason }, wasClean: { value: event.wasClean },
           });

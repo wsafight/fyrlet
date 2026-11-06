@@ -1,7 +1,8 @@
 defmodule Fyrlet.Example.Inbox do
   @behaviour Fyrlet.Definition
   import Ecto.Query
-  alias Fyrlet.{Error, InboxItem, Repo, Schema}
+  alias Fyrlet.{Error, InboxItem, Repo, Schema, View}
+  @reserve_size 8
 
   @impl true
   def contract do
@@ -100,13 +101,137 @@ defmodule Fyrlet.Example.Inbox do
         }
       },
       "subscriptions" => %{
-        "inbox.recent" => %{"input" => Schema.object(list_input), "output" => list}
+        "inbox.recent" => %{
+          "input" => Schema.object(list_input),
+          "output" => list,
+          "shared" => true
+        }
       }
     }
   end
 
   @impl true
   def authorize(_name, _actor, _input), do: :ok
+
+  @impl true
+  def change(name, actor, input, record)
+      when name in ["inbox.add", "inbox.update", "inbox.archive", "inbox.delete"] do
+    %{
+      "kind" => name,
+      "project_id" => actor.project_id,
+      "subject_id" => actor.subject_id,
+      "record" => record,
+      "previous_version" => Map.get(input, "expected_version", 0)
+    }
+  end
+
+  def change(_name, _actor, _input, _record), do: nil
+
+  @impl true
+  def load_subscription("inbox.recent", actor, parameters) do
+    count = parameters["limit"] + @reserve_size
+
+    records =
+      actor |> visible(parameters) |> limit(^count) |> Repo.all() |> Enum.map(&serialize/1)
+
+    {data, reserve} = Enum.split(records, parameters["limit"])
+    {:ok, data, %{reserve: Map.new(reserve, &{&1["id"], &1}), complete: length(records) < count}}
+  end
+
+  @impl true
+  def update_subscription(
+        "inbox.recent",
+        actor,
+        parameters,
+        %View{} = view,
+        %{
+          "project_id" => project,
+          "subject_id" => subject,
+          "record" => record,
+          "previous_version" => previous
+        } = change
+      )
+      when project == actor.project_id and subject == actor.subject_id do
+    old = Map.get(view.records, record["id"])
+    reserved = get_in(view.context, [:reserve, record["id"]])
+
+    cond do
+      change["kind"] == "inbox.update" and is_map(old) and old["version"] == previous and
+        old["inserted_at"] == record["inserted_at"] and old["archived"] == record["archived"] ->
+        {:replace, record["id"], record}
+
+      change["kind"] == "inbox.update" and is_map(reserved) and reserved["version"] == previous and
+        reserved["inserted_at"] == record["inserted_at"] and
+          reserved["archived"] == record["archived"] ->
+        {:context, put_in(view.context, [:reserve, record["id"]], record)}
+
+      change["kind"] == "inbox.update" and old == nil and reserved == nil and
+          below_window?(view, record, parameters) ->
+        :unchanged
+
+      true ->
+        update_membership(actor, parameters, view, change, old || reserved)
+    end
+  end
+
+  def update_subscription(_name, _actor, _parameters, _records, _change), do: :reload
+
+  defp below_window?(view, record, parameters) do
+    if length(view.order) == parameters["limit"] and is_binary(record["inserted_at"]) do
+      reserve = Map.get(view.context, :reserve, %{})
+
+      tail =
+        if map_size(reserve) > 0,
+          do: reserve |> Map.values() |> Enum.min_by(&{&1["inserted_at"], &1["id"]}),
+          else: Map.fetch!(view.records, List.last(view.order))
+
+      {record["inserted_at"], record["id"]} < {tail["inserted_at"], tail["id"]}
+    else
+      false
+    end
+  end
+
+  defp update_membership(actor, parameters, view, change, old) do
+    record = change["record"]
+    identifier = record["id"]
+    current = Repo.one(from(item in owned(actor), where: item.id == ^identifier))
+    current = if current, do: serialize(current)
+
+    valid =
+      if change["kind"] == "inbox.delete",
+        do: current == nil,
+        else: current == record
+
+    version_matches =
+      if old,
+        do: old["version"] == change["previous_version"],
+        else: change["kind"] in ["inbox.add", "inbox.delete"]
+
+    if valid and version_matches and Map.has_key?(view.context, :reserve) do
+      records = view.records |> Map.merge(view.context.reserve) |> Map.delete(identifier)
+
+      records =
+        if current && (parameters["include_archived"] or not current["archived"]),
+          do: Map.put(records, identifier, current),
+          else: records
+
+      ordered = records |> Map.values() |> Enum.sort_by(&{&1["inserted_at"], &1["id"]}, :desc)
+      {data, reserve} = Enum.split(ordered, parameters["limit"])
+
+      if not view.context.complete and length(reserve) == 0 do
+        :reload
+      else
+        context = %{
+          reserve: reserve |> Enum.take(@reserve_size) |> Map.new(&{&1["id"], &1}),
+          complete: view.context.complete and length(reserve) <= @reserve_size
+        }
+
+        {:reset, data, context}
+      end
+    else
+      :reload
+    end
+  end
 
   @impl true
   def scope(_name, actor, _parameters),

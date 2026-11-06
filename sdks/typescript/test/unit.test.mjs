@@ -5,9 +5,114 @@ import { createSessionService } from "../dist/server.js";
 import { generate } from "../scripts/generate.mjs";
 import { readFile } from "node:fs/promises";
 import { TestWebSocket, until, response } from "./helpers.mjs";
+import { applyDelta, immutable } from "../dist/delta.js";
+import { decodeFrames } from "../dist/transport.js";
 
 const identity = { project_id: "project", subject_id: "alice" };
 const unauthorized = { code: "UNAUTHENTICATED", message: "Expired", retryable: false };
+
+test("transport batches validate every frame before dispatch and preserve order", () => {
+  const first = ["1", null, "subscription:a", "delta", { s: 2 }];
+  const second = ["2", null, "subscription:b", "snapshot", { seq: 2 }];
+  const messages = [];
+  decodeFrames(JSON.stringify({ batch: [first, second] }), (message) => messages.push(message));
+  assert.deepEqual(messages.map((message) => message.topic), ["subscription:a", "subscription:b"]);
+  decodeFrames(JSON.stringify(first), (message) => assert.equal(message.payload.s, 2));
+  for (const invalid of [{ batch: [] }, { batch: Array(65).fill(first) }, { batch: [first, []] },
+    { batch: [first], extra: true }, [null, null, "topic", "event", null]]) {
+    let dispatched = false;
+    assert.throws(() => decodeFrames(JSON.stringify(invalid), () => { dispatched = true; }), TypeError);
+    assert.equal(dispatched, false);
+  }
+});
+
+test("retryable observer failures reconnect and malformed batches fail explicitly", async (context) => {
+  const instance = client(context);
+  const subscription = instance.subscribe("inbox.recent", {});
+  await until(() => subscription.getState().status === "ready");
+  const old = subscription.getState().generation;
+  const socket = TestWebSocket.instances.at(-1);
+  const [topic, { joinRef }] = [...socket.joins][0];
+  socket.emit([joinRef, null, topic, "status", { error: { code: "INTERNAL_ERROR", message: "Observer failed", retryable: true } }]);
+  await until(() => subscription.getState().status === "ready" && subscription.getState().generation !== old);
+  TestWebSocket.instances.at(-1).emit({ batch: [[]] });
+  assert.equal(subscription.getState().status, "error");
+  assert.equal(subscription.getState().error.code, "PROTOCOL_ERROR");
+});
+
+test("deltas apply field changes, nulls, removals and ordering without mutating earlier views", () => {
+  const initial = immutable([{ id: "a", text: "old", optional: true }, { id: "b" }]);
+  const updated = applyDelta(initial, { c: [["a", { text: null }, ["optional"]]],
+    r: ["b"], a: [{ id: "c", text: "new" }], o: ["c", "a"] });
+  assert.deepEqual(updated, [{ id: "c", text: "new" }, { id: "a", text: null }]);
+  assert.equal(initial[0].text, "old");
+  assert.ok(Object.isFrozen(updated) && Object.isFrozen(updated[1]));
+  const malicious = JSON.parse('{"c":[["a",{"__proto__":{"polluted":true}}]]}');
+  const safe = applyDelta(initial, malicious);
+  assert.equal(Object.getPrototypeOf(safe[0]), Object.prototype);
+  assert.equal({}.polluted, undefined);
+  assert.ok(Object.hasOwn(safe[0], "__proto__"));
+});
+
+test("malformed deltas reject ambiguous IDs, missing bases and incomplete orderings", () => {
+  for (const patch of [{ c: [["missing", {}]] }, { c: [["a", { id: "other" }]] },
+    { a: [{ id: "a" }] }, { r: ["missing"] }, { o: [] }, { o: ["a", "a"] },
+    { c: [["a", { text: "x" }, ["text"]]] }, { r: "a" }, { unknown: [] }]) {
+    assert.throws(() => applyDelta([{ id: "a" }], patch), TypeError);
+  }
+});
+
+test("indexed replacements share unchanged records without mutating earlier immutable views", () => {
+  const initial = immutable([{ id: "a", text: "before", optional: true }, { id: "b", text: "same" }]);
+  const first = applyDelta(initial, { c: [["a", { text: null }, ["optional"]]] });
+  const second = applyDelta(first, { c: [["a", { text: "after" }], ["b", { text: "changed" }]] });
+  assert.equal(first[1], initial[1]);
+  assert.equal(initial[0].text, "before");
+  assert.equal(first[0].text, null);
+  assert.equal(second[0].text, "after");
+  assert.ok(Object.isFrozen(second) && second.every(Object.isFrozen));
+  for (const patch of [{ c: [["a", {}], ["a", {}]] }, { c: [["missing", {}]] },
+    { c: [["a", {}, ["id"]]] }, { c: [["a", {}, ["text", "text"]]] }]) {
+    assert.throws(() => applyDelta(second, patch), TypeError);
+  }
+  const reordered = applyDelta(second, { o: ["b", "a"] });
+  assert.equal(applyDelta(reordered, { c: [["b", { text: "indexed after reorder" }]] })[0].text, "indexed after reorder");
+});
+
+test("mutable records and accessor IDs never reuse immutable view indexes", () => {
+  const mutable = { id: "a", text: "before" };
+  const previous = applyDelta(Object.freeze([mutable]), {});
+  mutable.id = "b";
+  assert.throws(() => applyDelta(previous, { c: [["a", {}]] }), TypeError);
+  assert.equal(applyDelta(previous, { c: [["b", { text: "after" }]] })[0].text, "after");
+  let identifier = "a";
+  const accessor = Object.freeze({ get id() { return identifier; } });
+  const accessorView = applyDelta(Object.freeze([accessor]), {});
+  identifier = "b";
+  assert.throws(() => applyDelta(accessorView, { c: [["a", {}]] }), TypeError);
+  assert.throws(() => applyDelta(immutable([{ id: "a" }, { id: "a" }]), {}), TypeError);
+});
+
+test("negotiated deltas are acknowledged, stale generations ignored and gaps recover by rejoining", async (context) => {
+  const instance = client(context);
+  const subscription = instance.subscribe("inbox.recent", {});
+  await until(() => subscription.getState().status === "ready");
+  const socket = TestWebSocket.instances.at(-1);
+  socket.snapshot([{ id: "a", text: "old" }], { seq: 2 });
+  const [topic, joined] = [...socket.joins][0];
+  const send = (payload) => socket.emit([joined.joinRef, null, topic, "delta", { g: joined.snapshot.generation, ...payload }]);
+  send({ s: 3, b: 2, p: { c: [["a", { text: "new" }]] } });
+  assert.deepEqual(subscription.getState().data, [{ id: "a", text: "new" }]);
+  send({ s: 3, b: 2, p: { c: [["a", { text: "stale" }]] } });
+  send({ g: "old", s: 4, b: 3, p: {} });
+  assert.equal(subscription.getState().seq, 3);
+  assert.equal(socket.messages.at(-1).event, "ack");
+  await Promise.resolve();
+  send({ s: 5, b: 4, p: {} });
+  assert.equal(subscription.getState().status, "recovering");
+  await until(() => subscription.getState().status === "ready" && subscription.getState().generation !== joined.snapshot.generation);
+  assert.deepEqual(subscription.getState().data, ["initial"]);
+});
 
 function client(context, options = {}) {
   const instance = createClient({
@@ -17,6 +122,83 @@ function client(context, options = {}) {
   context.after(() => instance.close());
   return instance;
 }
+
+test("acknowledgements are unreferenced notifications without reply timers", async (context) => {
+  const instance = client(context);
+  const subscription = instance.subscribe("inbox.recent", {});
+  await until(() => subscription.getState().status === "ready");
+  const socket = TestWebSocket.instances.at(-1);
+  const originalTimeout = globalThis.setTimeout;
+  let timers = 0;
+  context.mock.method(globalThis, "setTimeout", (...parameters) => {
+    timers += 1;
+    return originalTimeout(...parameters);
+  });
+  for (let sequence = 2; sequence <= 51; sequence += 1) socket.snapshot([sequence], { seq: sequence });
+  const acknowledgements = socket.messages.filter((message) => message.event === "ack");
+  assert.equal(acknowledgements.length, 51);
+  assert.ok(acknowledgements.every((message) => message.ref === null && message.joinRef === null));
+  assert.deepEqual(acknowledgements.at(-1).payload, { g: subscription.getState().generation, s: 51 });
+  assert.equal(timers, 0);
+  assert.equal(subscription.getState().seq, 51);
+});
+
+test("compact patches preserve nulls, clearing, membership and ordering and reject malformed tuples", () => {
+  const initial = [{ id: "a", text: "before", optional: true }, { id: "b" }];
+  const patch = { c: [["a", { text: null }, ["optional"]]], r: ["b"],
+    a: [{ id: "c", text: "更新\n\"\\" }], o: ["c", "a"] };
+  assert.deepEqual(applyDelta(initial, patch), [{ id: "c", text: "更新\n\"\\" }, { id: "a", text: null }]);
+  for (const invalid of [null, [], { unknown: [] }, { c: [["a"]] }, { c: [["a", {}, null]] },
+    { c: [["a", {}, [], "extra"]] }, { c: [null] }, { c: {} }, { r: "a" }]) {
+    assert.throws(() => applyDelta(initial, invalid), TypeError);
+  }
+});
+
+test("socket operations share one connection and preserve generated idempotency keys", async (context) => {
+  const urls = [];
+  const instance = client(context, { operationTransport: "socket", fetch: async (url) => { urls.push(url); return response(identity); } });
+  const results = await Promise.all(Array.from({ length: 4 }, (_, index) => instance.call("inbox.add", { text: `item ${index}` })));
+  assert.equal(new Set(results.map((result) => result.idempotency_key)).size, 4);
+  assert.deepEqual(results.map((result) => result.input.text), ["item 0", "item 1", "item 2", "item 3"]);
+  const socket = TestWebSocket.instances.at(-1);
+  assert.equal(socket.messages.filter((entry) => entry.event === "phx_join" && entry.topic === "operations").length, 1);
+  assert.equal(urls.length, 1);
+  assert.ok(urls[0].endsWith("/identity"));
+});
+
+test("socket authentication refresh retries once with the same idempotency key", async (context) => {
+  const calls = [];
+  class RefreshSocket extends TestWebSocket {
+    send(raw) {
+      const [joinRef, ref, topic, event, payload] = JSON.parse(raw);
+      if (event !== "call") return super.send(raw);
+      calls.push(payload);
+      queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", calls.length === 1
+        ? { status: "error", response: { error: unauthorized, status: 401 } }
+        : { status: "ok", response: { data: "saved" } }]));
+    }
+  }
+  const instance = client(context, { operationTransport: "socket", WebSocket: RefreshSocket,
+    getToken: ({ forceRefresh }) => forceRefresh ? "rts_new" : "rts_old" });
+  assert.equal(await instance.call("inbox.add", { text: "value" }), "saved");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].idempotency_key, calls[1].idempotency_key);
+});
+
+test("interrupted socket writes reject promptly and are never automatically replayed", async (context) => {
+  let calls = 0;
+  class InterruptedSocket extends TestWebSocket {
+    send(raw) { if (JSON.parse(raw)[3] === "call") { calls++; return; } super.send(raw); }
+  }
+  const instance = client(context, { operationTransport: "socket", WebSocket: InterruptedSocket, timeoutMs: 50 });
+  const pending = instance.call("inbox.add", { text: "unknown result" });
+  const rejected = assert.rejects(pending, { code: "NETWORK_ERROR" });
+  await until(() => calls === 1);
+  TestWebSocket.instances.at(-1).interrupt();
+  await rejected;
+  await until(() => TestWebSocket.instances.at(-1).readyState === 1);
+  assert.equal(calls, 1);
+});
 
 test("HTTP refresh retries once and preserves the generated idempotency key", async (context) => {
   const calls = [];

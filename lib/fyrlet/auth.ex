@@ -113,19 +113,35 @@ defmodule Fyrlet.Auth do
   end
 
   def revalidate(%Actor{} = actor, locked \\ false) do
+    if not locked and not Repo.in_transaction?() and
+         Application.fetch_env!(:fyrlet, :batch_session_checks) do
+      Fyrlet.SessionChecks.revalidate(actor)
+    else
+      revalidate_direct(actor, locked)
+    end
+  end
+
+  defp revalidate_direct(actor, locked) do
     query =
       from(session in Session,
         where:
           session.id == ^actor.session_id and session.project_id == ^actor.project_id and
-            session.subject_id == ^actor.subject_id
+            session.subject_id == ^actor.subject_id,
+        select: {session.expires_at, session.revoked_at}
       )
 
     query = if locked, do: from(session in query, lock: "FOR SHARE"), else: query
 
     case Repo.one(query) do
       nil -> {:error, Error.unauthorized()}
-      session -> actor_from_session(session)
+      {expires_at, revoked_at} -> validate_session(actor, expires_at, revoked_at)
     end
+  end
+
+  def validate_session(%Actor{} = actor, expires_at, revoked_at) do
+    if is_nil(revoked_at) and DateTime.compare(expires_at, now()) == :gt,
+      do: {:ok, %{actor | expires_at: expires_at}},
+      else: {:error, Error.unauthorized()}
   end
 
   def revoke_session(service_token, session_id) do

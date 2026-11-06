@@ -9,3 +9,5 @@ config :fyrlet, Oban, testing: :manual, plugins: false, queues: false
 config :fyrlet, reconciliation_interval: 100
 config :fyrlet, definitions: [Fyrlet.Example.Inbox, Fyrlet.TestDefinition]
 config :logger, level: :warning
+config :fyrlet, batch_session_checks: false
+config :fyrlet, invalidation_fallback_delay: 0

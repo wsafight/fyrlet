@@ -7,7 +7,13 @@ defmodule Fyrlet.Application do
 
     children = [
       Fyrlet.Repo,
+      Fyrlet.SessionChecks,
       {Phoenix.PubSub, name: Fyrlet.PubSub},
+      {Registry, keys: :unique, name: Fyrlet.ObserverRegistry},
+      {DynamicSupervisor,
+       strategy: :one_for_one,
+       name: Fyrlet.ObserverSupervisor,
+       max_children: Application.fetch_env!(:fyrlet, :max_observers)},
       Fyrlet.SubscriptionTracker,
       {Oban, Application.fetch_env!(:fyrlet, Oban)},
       FyrletWeb.Endpoint

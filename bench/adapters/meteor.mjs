@@ -5,7 +5,7 @@ export const capabilities = {
   transport: "DDP v1 raw WebSocket", database: "MongoDB replica set",
   synchronization: "Meteor cursor publication + added/changed/removed deltas",
   idempotency: "MongoDB transaction; success result retained 24h", notification: "Meteor Mongo observer driver; record configuration separately",
-  client: "benchmark-only Node DDP materializer; no Minimongo, optimistic stubs or automatic reconnect",
+  client: "benchmark-only Node DDP materializer with explicit reconnect/session resumption; no Minimongo, optimistic stubs or automatic reconnect",
   authorization: "session checked at methods/publication join; expiry timer stops publications; no per-change database reauthorization or revocation/write serialization",
 };
 
@@ -25,6 +25,7 @@ export class DDPConnection {
     this.records = new Map();
     this.listeners = new Set();
     this.state = { status: "connecting", data: undefined };
+    this.receivedCount = 0;
   }
   emit(status) {
     this.state = {
@@ -37,21 +38,26 @@ export class DDPConnection {
   async open() {
     this.connected = false;
     this.failure = undefined;
-    this.records.clear();
     const url = new URL("websocket", `${this.endpoint.replace(/\/$/, "")}/`);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     this.socket = new this.network.WebSocket(url);
     const socket = this.socket;
-    this.socket.onopen = () => { if (this.socket === socket) this.send({ msg: "connect", version: "1", support: ["1"] }); };
+    this.socket.onopen = () => {
+      if (this.socket === socket) this.send({ msg: "connect", version: "1", support: ["1"],
+        ...(this.sessionId ? { session: this.sessionId, receivedCount: this.receivedCount } : {}) });
+    };
     this.socket.onmessage = (event) => {
       if (this.socket !== socket) return;
       try { this.receive(JSON.parse(event.data)); }
       catch (error) { this.failure = error; this.emit("error"); }
     };
-    this.socket.onerror = () => { if (this.socket === socket) this.failure = new Error("DDP transport error"); };
-    this.socket.onclose = () => {
+    this.socket.onerror = (event) => {
+      if (this.socket === socket) this.failure = new Error(`DDP transport error: ${event.error?.message ?? "unknown"}`);
+    };
+    this.socket.onclose = (event) => {
       if (this.socket !== socket) return;
       this.connected = false;
+      this.failure ??= new Error(`DDP disconnected (${event.code}: ${event.reason || "no reason"})`);
       for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(new Error("DDP disconnected")); }
       this.pending.clear();
       if (!this.closed) this.emit(this.intentionalOffline ? "recovering" : "error");
@@ -60,7 +66,17 @@ export class DDPConnection {
   }
   send(message) { this.socket.send(JSON.stringify(message)); }
   receive(message) {
-    if (message.msg === "connected") this.connected = true;
+    if (!["ping", "pong"].includes(message.msg)) this.receivedCount++;
+    if (message.msg === "connected") {
+      this.resumed = Boolean(this.sessionId) && this.sessionId === message.session;
+      if (!this.resumed) {
+        this.records.clear();
+        this.receivedCount = 1;
+      }
+      this.sessionId = message.session;
+      this.connected = true;
+      if (this.resumed && this.subscriptionId) this.emit("ready");
+    }
     else if (message.msg === "ping") this.send({ msg: "pong", ...(message.id ? { id: message.id } : {}) });
     else if (message.msg === "failed" || message.msg === "error" || message.msg === "nosub") {
       this.failure = new Error(`DDP ${message.msg}: ${message.error?.error ?? message.reason ?? "protocol error"}`);
@@ -120,6 +136,7 @@ export class DDPConnection {
     for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(new Error("DDP client closed")); }
     this.pending.clear();
     this.listeners.clear();
+    if (this.connected && this.socket?.readyState === 1) this.send({ msg: "disconnect" });
     this.socket?.close();
   }
 }
@@ -128,8 +145,10 @@ export async function connect({ endpoint, fixture, user, network, timeoutMs, obs
   const connection = new DDPConnection(endpoint, network, timeoutMs);
   const start = async () => {
     await connection.open();
-    await connection.call("bench.login", [user.token]);
-    if (observe) connection.subscribe(fixture.rows);
+    if (!connection.resumed) {
+      await connection.call("bench.login", [user.token]);
+      if (observe) connection.subscribe(fixture.rows);
+    }
   };
   try { await start(); } catch (error) { connection.close(); throw error; }
   return {
@@ -142,9 +161,9 @@ export async function connect({ endpoint, fixture, user, network, timeoutMs, obs
   };
 }
 
-export async function seed({ endpoint, secret, runId, users, rows, payloadBytes, timeoutMs }) {
+export async function seed({ endpoint, secret, runId, users, rows, payloadBytes, devices, sessions, timeoutMs }) {
   const connection = new DDPConnection(endpoint, trafficMeter(), timeoutMs);
-  try { await connection.open(); return await connection.call("bench.seed", [secret, runId, users, rows, payloadBytes]); }
+  try { await connection.open(); return await connection.call("bench.seed", [secret, runId, users, rows, payloadBytes, devices, sessions]); }
   finally { connection.close(); }
 }
 
@@ -152,4 +171,10 @@ export async function cleanup({ endpoint, secret, runId, network, timeoutMs }) {
   const connection = new DDPConnection(endpoint, network, timeoutMs);
   try { await connection.open(); await connection.call("bench.cleanup", [secret, runId]); }
   finally { connection.close(); }
+}
+
+export async function runtimeStats({ endpoint, timeoutMs }) {
+  const response = await fetch(`${endpoint}/__bench/health`, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!response.ok) throw new Error("Meteor diagnostics are unavailable");
+  return response.json();
 }

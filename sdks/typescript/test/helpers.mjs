@@ -34,12 +34,20 @@ export class TestWebSocket {
     const [joinRef, ref, topic, event, payload] = JSON.parse(raw);
     this.messages.push({ joinRef, ref, topic, event, payload });
     if (event === "phx_join") {
+      if (topic === "operations") {
+        queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: { protocol_version: 1 } }]));
+        return;
+      }
       const snapshot = {
         protocol_version: 1, subscription_id: topic.slice("subscription:".length),
-        generation: crypto.randomUUID(), seq: 1, project_id: "project", subject_id: "alice", data: ["initial"],
+        generation: crypto.randomUUID(), seq: 1, project_id: "project", subject_id: "alice", data: ["initial"], delivery: payload.delivery,
       };
       this.joins.set(topic, { joinRef, snapshot });
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: snapshot }]));
+    } else if (event === "ack") {
+      return;
+    } else if (event === "call") {
+      queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: { data: payload } }]));
     } else {
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]));
     }

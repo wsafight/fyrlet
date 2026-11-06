@@ -425,7 +425,8 @@
         },
         "maxItems": 100,
         "type": "array"
-      }
+      },
+      "shared": true
     }
   }
 }

@@ -69,6 +69,43 @@ test("two SDK devices receive committed snapshots, replay and concurrent duplica
   assert.equal(mutations.filter((result) => result.status === "rejected" && result.reason.code === "CONFLICT").length, 1);
 });
 
+test("socket RPC writes produce ordered field deltas and preserve immutable earlier views", async (context) => {
+  const frames = [];
+  const sent = [];
+  class RecordingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => { try { frames.push(JSON.parse(String(event.data))); } catch {} });
+    }
+    send(data) { sent.push(JSON.parse(String(data))); super.send(data); }
+  }
+  const writer = await user(context, 0, crypto.randomUUID(), { operationTransport: "socket" });
+  const reader = await user(context, 0, writer.subject, { WebSocket: RecordingSocket });
+  const items = [];
+  for (let index = 0; index < 8; index++) items.push(await writer.client.call("inbox.add", { text: `seed ${index}`.padEnd(128, "x") }));
+  const subscription = reader.client.subscribe("inbox.recent", {});
+  await until(() => subscription.getState().status === "ready");
+  const earlier = subscription.getState().data;
+  const item = items[0];
+  for (let version = 1; version <= 6; version++) {
+    const updated = await writer.client.call("inbox.update", { id: item.id, expected_version: version, text: `version ${version + 1}` });
+    await until(() => subscription.getState().data?.some((entry) => entry.id === item.id && entry.version === updated.version));
+  }
+  assert.equal(earlier.find((entry) => entry.id === item.id).version, 1);
+  assert.ok(frames.filter((frame) => frame[3] === "delta").length >= 6);
+  assert.ok(frames.filter((frame) => frame[3] === "delta").every((frame) =>
+    Object.keys(frame[4]).sort().join(",") === "b,g,p,s" && typeof frame[4].g === "string"));
+  const acknowledgements = sent.filter((frame) => frame[3] === "ack");
+  assert.ok(acknowledgements.length >= 7);
+  assert.ok(acknowledgements.every((frame) => frame[0] === null && frame[1] === null &&
+    Object.keys(frame[4]).sort().join(",") === "g,s"));
+  assert.equal(frames.filter((frame) => frame[3] === "phx_reply" && frame[1] === null).length, 0);
+  const key = crypto.randomUUID();
+  const saved = await writer.client.call("inbox.add", { text: "idempotent socket" }, { idempotencyKey: key });
+  assert.deepEqual(await writer.client.call("inbox.add", { text: "idempotent socket" }, { idempotencyKey: key }), saved);
+  await assert.rejects(writer.client.call("inbox.add", { text: "changed" }, { idempotencyKey: key }), { code: "CONFLICT", status: 409 });
+});
+
 test("projects and subjects cannot read or mutate each other's inboxes", async (context) => {
   const first = await user(context);
   const otherUser = await user(context);
@@ -85,6 +122,40 @@ test("projects and subjects cannot read or mutate each other's inboxes", async (
   const spoofed = await fetch(`${endpoint}/api/v1/identity`, { headers: { authorization: `Bearer ${first.session.token}`, "x-project-id": projects[1].project_id } });
   assert.equal(spoofed.status, 401);
   await assert.rejects(services[1].revokeSession(first.session.session_id), { code: "NOT_FOUND" });
+});
+
+test("one connection multiplexes bounded views and applies batched membership changes", async (context) => {
+  const frames = [];
+  class RecordingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    }
+  }
+  const reader = await user(context, 0, crypto.randomUUID(), { WebSocket: RecordingSocket });
+  const writer = await user(context, 0, reader.subject, { operationTransport: "socket" });
+  for (let index = 0; index < 12; index++) await writer.client.call("inbox.add", { text: `seed ${index}` });
+  const subscriptions = Array.from({ length: 12 }, () => reader.client.subscribe("inbox.recent", { limit: 3 }));
+  await until(() => subscriptions.every((subscription) => subscription.getState().status === "ready"));
+  const original = subscriptions[0].getState().data;
+  const item = await writer.client.call("inbox.add", { text: "new visible item" });
+  const converge = async () => {
+    const expected = (await writer.client.call("inbox.history", { limit: 3 })).items;
+    await until(() => subscriptions.every((subscription) => JSON.stringify(subscription.getState().data) === JSON.stringify(expected)));
+  };
+  await converge();
+  await writer.client.call("inbox.archive", { id: item.id, expected_version: 1 });
+  await converge();
+  await writer.client.call("inbox.archive", { id: item.id, expected_version: 2, archived: false });
+  await converge();
+  await writer.client.call("inbox.delete", { id: item.id, expected_version: 3 });
+  await converge();
+  assert.equal(original.length, 3);
+  assert.ok(!original.some((record) => record.id === item.id));
+  const batches = frames.filter((frame) => frame.batch);
+  assert.ok(batches.some((frame) => frame.batch.length > 1));
+  assert.ok(batches.every((frame) => frame.batch.length <= 64));
+  console.log(`multiplex: ${batches.length} batches carry ${batches.reduce((sum, frame) => sum + frame.batch.length, 0)} channel messages`);
 });
 
 test("disconnect, changes while offline and rejoin restore the current full snapshot", async (context) => {

@@ -1,8 +1,8 @@
 # Fyrlet
 
-一个可运行的服务端与 TypeScript SDK 原型：在 Elixir 中定义命名业务操作和订阅，客户端通过类型化调用与实时快照使用数据。参考业务是按项目、用户隔离的个人收件箱。
+一个可运行的服务端与 TypeScript SDK 原型：在 Elixir 中定义命名业务操作和订阅，客户端通过类型化调用与实时视图使用数据，支持完整快照和协商式 `delta-v1`。参考业务是按项目、用户隔离的个人收件箱。
 
-本期实现项目服务密钥、短期用户会话、事务幂等、Oban 持久化失效通知、确认式快照订阅、断线恢复和契约类型生成。源码尚未作为 Hex 或 npm 包发布；SDK 包标记为 private。
+本期实现项目服务密钥、短期用户会话、事务幂等、Oban 持久化失效通知、规范化 View、显式启用的共享 Observer、独立 ACK、Socket 传输批处理、断线恢复和契约类型生成。源码尚未作为 Hex 或 npm 包发布；SDK 包标记为 private。
 
 ## 项目结构
 
@@ -85,6 +85,10 @@ npm --prefix sdks/typescript run typecheck
 
 扩展方式见 [服务端开发](docs/SERVER.md)。私有查询必须在 SQL 层约束 Actor 的 project 与 subject。框架不接受客户端提交任意 SQL、任意表查询或任意 Elixir 代码。
 
+订阅只有在服务端契约显式设置 `"shared": true` 时才共享 Observer；当前 `inbox.recent` 已启用。共享只在本节点、完整 Actor（含 session / project / subject / expires_at）与完整规范化订阅描述一致时发生：同 session 的多设备可共享，不同 session 即使同用户也不共享。每次计算前重新验证会话并执行业务授权，计算后再次验证会话；每次 attach 独立检查，不使用授权 TTL 缓存。可选 `load_subscription/3` 与 `update_subscription/5` 支持有界私有上下文和安全的局部更新，不能确定时重新加载。
+
+TypeScript SDK 默认请求 `delta-v1`，对外仍提供完整不可变视图；`delta: false` 使用全量模式。单帧保持标准 Phoenix 五元素数组，多帧使用 `{"batch":[...]}`，最多 64 帧；只聚合同轮 mailbox 中已有消息，不等待定时凑批，不表示跨订阅事务。
+
 ## 验证
 
 ```sh
@@ -105,15 +109,15 @@ bash scripts/bench.sh --profile smoke
 bash scripts/bench.sh --scenario fanout --devices 50 --repeats 3
 ```
 
-`bench/` 提供多设备、多用户、高频更新、离线恢复、慢客户端和空闲订阅场景。执行器验证最终数据，输出原始延迟样本、负载、应用与数据库资源及 Markdown 报告。Meteor 对照应用与安装、代理配置、测量口径见 [基准测试说明](bench/README.md)。本地 smoke 用于验证测试工具，不代表容量上限或相对其他产品的性能结论。
+`bench/` 提供多设备、多用户、高频更新、离线恢复、慢客户端、空闲订阅与固定速率持续负载。容量阶梯按延迟、交付、目标时隙和执行器有效性判定，并分别验证共用会话与独立设备会话。执行器验证最终数据，输出原始样本、应用 / 数据库 / 执行器资源及 Markdown 报告。Meteor 对照、代理配置与测量口径见 [基准测试说明](bench/README.md)，最新的同资源对照与优化记录见 [性能对比与优化记录](docs/PERFORMANCE.md)。本地验证不能外推生产容量上限。
 
 ## 运行边界
 
-- PostgreSQL 是事实来源；订阅发送有界完整快照。默认每 30 秒复核，支持显式刷新；没有增量游标、离线写入或多订阅原子视图。
-- 默认每连接 20 个订阅、每页 100 条、每快照 256 KiB；快照最多一份待确认，默认 15 秒确认超时。请求体及 Socket 帧限 64 KiB，数据库语句超时 10 秒。
+- PostgreSQL 是事实来源；订阅以有界完整快照建立视图，后续可协商增量。每个 Observer 默认每 30 秒全量复核，支持显式刷新；没有持久化增量游标、离线写入或多订阅原子视图。
+- 默认每连接 20 个订阅、每页 100 条、每快照 256 KiB；每客户端最多一份待确认更新，默认 15 秒确认超时。慢端 ACK 不阻塞其他设备，落后时重新授权并以全量追平。请求体及入站 Socket 帧限 64 KiB，出站聚合预算默认 256 KiB（不是单条推送的硬上限），数据库语句超时 10 秒。
 - 写入幂等窗口 24 小时。部署者可定时执行 `mix fyrlet.prune` 清理过期幂等结果及过期一天以上的会话。外部服务副作用不纳入数据库幂等保证。
 - 生产需配置 DATABASE_URL、SECRET_KEY_BASE、ALLOWED_ORIGINS、CORS_ORIGINS，并通过 PHX_SERVER=true 启动 release。TLS、网关限流、项目配额、备份和控制台仍由部署方补齐。
 - 本期验证单节点服务与 Node SDK。浏览器示例经过类型检查，尚未做浏览器自动化及移动端真机验收；支持注入 fetch、WebSocket 和随机 ID。
-- 已提供操作耗时、订阅查询、快照字节和活跃订阅数 telemetry；完整监控面板和容量压测基线仍待建设，未宣称相对其他框架的性能优势。
+- 已提供操作耗时、订阅查询、快照 / 增量字节、会话检查批处理、传输批处理和活跃订阅数 telemetry，以及本机容量与稳定性基线；生产多机容量和完整监控面板仍待建设。每节点默认最多 10,000 个 Observer，这是资源保护配置，不是已验证的用户容量。
 
 产品范围见 [PRD](docs/PRD.md)，凭证边界见 [鉴权设计](docs/AUTH.md)，接口字段见 [协议](docs/PROTOCOL.md)。
