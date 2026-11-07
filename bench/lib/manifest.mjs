@@ -23,8 +23,8 @@ export async function sourceFingerprint(root) {
       else if (entry.isFile()) files.push(nested);
     }
   };
-  for (const directory of ["lib", "config", "priv/repo/migrations", "sdks/typescript/src", "bench"]) await collect(resolve(root, directory));
-  files.push(resolve(root, "mix.exs"), resolve(root, "mix.lock"), resolve(root, "sdks/typescript/package-lock.json"));
+  for (const directory of ["lib", "config", "priv/repo/migrations", "sdks/typescript/src", "bench", "examples/inbox/lib", "examples/inbox/config", "examples/inbox/priv/repo/migrations"]) await collect(resolve(root, directory));
+  files.push(resolve(root, "mix.exs"), resolve(root, "examples/inbox/mix.exs"), resolve(root, "mix.lock"), resolve(root, "sdks/typescript/package-lock.json"));
   const hash = createHash("sha256");
   for (const path of files.sort()) {
     const bytes = await readFile(path);

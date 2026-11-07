@@ -84,7 +84,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
     input = %{"id" => item["id"], "text" => "changed", "expected_version" => 1}
     {:ok, updated} = Runtime.call(alice.actor, "inbox.update", input, Ecto.UUID.generate())
-    change = Fyrlet.Example.Inbox.change("inbox.update", alice.actor, input, updated)
+    change = InboxExample.Inbox.change("inbox.update", alice.actor, input, updated)
     handler = "change-query-#{Ecto.UUID.generate()}"
 
     :telemetry.attach(
@@ -150,7 +150,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
     input = %{"id" => item["id"], "text" => String.duplicate("更新", 40), "expected_version" => 1}
     {:ok, updated} = Runtime.call(alice.actor, "inbox.update", input, Ecto.UUID.generate())
-    change = Fyrlet.Example.Inbox.change("inbox.update", alice.actor, input, updated)
+    change = InboxExample.Inbox.change("inbox.update", alice.actor, input, updated)
     expected_bytes = byte_size(Jason.encode!([updated]))
     limit = Application.fetch_env!(:fyrlet, :max_snapshot_bytes)
     on_exit(fn -> Application.put_env(:fyrlet, :max_snapshot_bytes, limit) end)
@@ -238,7 +238,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
 
     change =
-      Fyrlet.Example.Inbox.change("inbox.update", alice.actor, %{"expected_version" => 1}, item)
+      InboxExample.Inbox.change("inbox.update", alice.actor, %{"expected_version" => 1}, item)
 
     assert {:ok, %{data: data, unchanged: true, record_index: indexed, bytes: bytes}} =
              Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription, previous, change)

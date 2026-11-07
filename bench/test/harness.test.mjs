@@ -235,15 +235,20 @@ test("matching workloads and host metadata cannot establish an equal-resource co
 test("source verification rejects changes between benchmark targets", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "fyrlet-bench-source-"));
   context.after(() => rm(root, { recursive: true, force: true }));
-  for (const directory of ["lib", "config", "priv/repo/migrations", "sdks/typescript/src", "bench"]) {
+  for (const directory of ["lib", "config", "priv/repo/migrations", "sdks/typescript/src", "bench", "examples/inbox/lib", "examples/inbox/config", "examples/inbox/priv/repo/migrations"]) {
     await mkdir(join(root, directory), { recursive: true });
   }
-  for (const file of ["mix.exs", "mix.lock", "sdks/typescript/package-lock.json", "lib/example.ex"]) {
+  for (const file of ["mix.exs", "examples/inbox/mix.exs", "mix.lock", "sdks/typescript/package-lock.json", "lib/example.ex", "examples/inbox/lib/inbox.ex"]) {
     await writeFile(join(root, file), "initial");
   }
   const fingerprint = await sourceFingerprint(root);
   await verifySourceFingerprint(root, fingerprint);
   await writeFile(join(root, "lib/example.ex"), "changed");
+  await assert.rejects(verifySourceFingerprint(root, fingerprint), /source changed/);
+  // The example application is part of the benchmarked system and must be frozen too.
+  await writeFile(join(root, "lib/example.ex"), "initial");
+  await verifySourceFingerprint(root, fingerprint);
+  await writeFile(join(root, "examples/inbox/lib/inbox.ex"), "changed");
   await assert.rejects(verifySourceFingerprint(root, fingerprint), /source changed/);
 });
 

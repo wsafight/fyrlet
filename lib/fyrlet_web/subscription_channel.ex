@@ -4,7 +4,9 @@ defmodule FyrletWeb.SubscriptionChannel do
     log_handle_in: false,
     hibernate_after: Application.compile_env(:fyrlet, :channel_hibernate_after, 15_000)
 
-  alias Fyrlet.{Auth, Error, Observer, Runtime, SubscriptionTracker}
+  alias Fyrlet.{Auth, Capabilities, Error, Runtime}
+  alias Fyrlet.Subscriptions.Observer
+  alias Fyrlet.Subscriptions.Tracker
 
   @impl true
   def join(
@@ -15,9 +17,19 @@ defmodule FyrletWeb.SubscriptionChannel do
     delivery = if options["delivery"] == "delta-v1", do: "delta-v1", else: "snapshot"
 
     with {:ok, _uuid} <- Ecto.UUID.cast(identifier),
+         {:ok, capabilities} <- Capabilities.negotiate(options["capabilities"]),
+         :ok <- anonymous_entry(socket.assigns.actor, capabilities),
          {:ok, subscription} <-
            Runtime.prepare_subscription(socket.assigns.actor, name, parameters),
-         :ok <- SubscriptionTracker.claim(socket.transport_pid, self()),
+         :ok <- require_capability(subscription, capabilities),
+         :ok <- not_append(subscription),
+         :ok <-
+           Tracker.claim(
+             socket.transport_pid,
+             self(),
+             subscription_limit(socket.assigns.actor),
+             socket.assigns.actor.project_id
+           ),
          {:ok, observer, revision, encoded} <-
            Observer.attach(socket.assigns.actor, subscription, delivery) do
       remaining = max(DateTime.diff(socket.assigns.actor.expires_at, Auth.now(), :millisecond), 1)
@@ -27,6 +39,7 @@ defmodule FyrletWeb.SubscriptionChannel do
         |> assign(
           subscription: subscription,
           subscription_id: identifier,
+          capabilities: capabilities,
           delivery: delivery,
           generation: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
           observer: observer,
@@ -62,6 +75,33 @@ defmodule FyrletWeb.SubscriptionChannel do
          )
      }}
   end
+
+  # An anonymous principal connects only after negotiating `anonymous_read`, so a client that did
+  # not ask for it can never be handed public-only data by accident.
+  defp anonymous_entry(actor, capabilities) do
+    if Fyrlet.Features.Anonymous.anonymous?(actor),
+      do: Capabilities.require(capabilities, Fyrlet.Features.Anonymous.capability()),
+      else: :ok
+  end
+
+  defp subscription_limit(actor),
+    do:
+      if(Fyrlet.Features.Anonymous.anonymous?(actor),
+        do: Fyrlet.Features.Anonymous.max_subscriptions()
+      )
+
+  defp require_capability(%{specification: %{"capability" => name}}, capabilities),
+    do: Capabilities.require(capabilities, name)
+
+  defp require_capability(_subscription, _capabilities), do: :ok
+
+  # Append-mode subscriptions have their own channel (`append:<id>`) and protocol events.
+  defp not_append(%{specification: %{"mode" => "append"}}),
+    do:
+      {:error,
+       Error.new("VALIDATION_FAILED", "This is an append subscription; join append:<id> instead")}
+
+  defp not_append(_subscription), do: :ok
 
   @impl true
   def handle_in("ack", %{"g" => generation, "s" => sequence}, socket) do
@@ -204,8 +244,9 @@ defmodule FyrletWeb.SubscriptionChannel do
       name: socket.assigns.subscription.name
     })
 
-    %{
-      "protocol_version" => 1,
+    envelope = %{
+      "protocol_version" => Capabilities.protocol_version(),
+      "capabilities" => socket.assigns.capabilities,
       "subscription_id" => socket.assigns.subscription_id,
       "generation" => socket.assigns.generation,
       "seq" => socket.assigns.seq,
@@ -214,6 +255,8 @@ defmodule FyrletWeb.SubscriptionChannel do
       "delivery" => socket.assigns.delivery,
       "data" => fragment(socket, encoded)
     }
+
+    envelope
   end
 
   defp fragment(socket, encoded) do

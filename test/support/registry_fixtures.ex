@@ -12,6 +12,12 @@ defmodule Fyrlet.RegistryFixtures.Dynamic do
 
   @impl true
   def scope(_name, _actor, _input), do: "test:dynamic"
+
+  @impl true
+  def run(_name, _actor, _input), do: {:ok, steps: [%{type: :step, name: "only", input: %{}}]}
+
+  @impl true
+  def step(_name, _input, _context), do: {:ok, %{}}
 end
 
 defmodule Fyrlet.RegistryFixtures.MissingCallback do

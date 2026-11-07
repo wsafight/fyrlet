@@ -1,4 +1,5 @@
-alias Fyrlet.{Auth, InboxItem, Repo}
+alias Fyrlet.{Auth, Repo}
+alias InboxExample.Item, as: InboxItem
 
 {:ok, project} = Auth.create_project("bench:" <> System.fetch_env!("BENCH_RUN_ID"))
 rows = String.to_integer(System.fetch_env!("BENCH_ROWS"))

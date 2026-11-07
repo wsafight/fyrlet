@@ -15,6 +15,9 @@ import { sourceFingerprint, verifySourceFingerprint } from "./lib/manifest.mjs";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
+// Fyrlet itself carries no business definition; the benchmark target is the Inbox
+// application that depends on it.
+const application = resolve(root, "examples/inbox");
 const children = new Set();
 const cancellation = new AbortController();
 let interrupted = false;
@@ -90,10 +93,9 @@ async function main() {
     try {
       const versions = {};
       if (target === "fyrlet") {
-        await command("mix", ["compile", "--warnings-as-errors"], environment);
-        await command("mix", ["ecto.create", "--quiet"], environment);
-        await command("mix", ["ecto.migrate", "--quiet"], environment);
-        await command("mix", ["run", "bench/fixtures/seed.exs"], environment);
+        await command("mix", ["compile", "--warnings-as-errors"], environment, application);
+        await command("mix", ["fyrlet.migrate", "--create", "--quiet"], environment, application);
+        await command("mix", ["run", resolve(root, "bench/fixtures/seed.exs")], environment, application);
         fixtureCreated = true;
         const { stdout } = await execute("elixir", ["--version"], { cwd: root });
         versions.elixir = stdout.trim();
@@ -105,7 +107,7 @@ async function main() {
         if (!databasePid && !process.env.BENCH_DATABASE_URL) {
           try { databasePid = Number((await readFile(resolve(root, ".local/postgres/postmaster.pid"), "utf8")).split("\n")[0]); } catch {}
         }
-        server = launch("mix", diagnostics ? ["run", "--no-halt", "bench/diagnostics.exs"] : ["phx.server"], { cwd: root, env: { ...environment, PHX_SERVER: "true" }, stdio: ["ignore", log.fd, log.fd] });
+        server = launch("mix", diagnostics ? ["run", "--no-halt", resolve(root, "bench/diagnostics.exs")] : ["phx.server"], { cwd: application, env: { ...environment, PHX_SERVER: "true" }, stdio: ["ignore", log.fd, log.fd] });
       } else {
         let binary = process.env.METEOR_BIN;
         if (!binary) {
@@ -180,7 +182,7 @@ async function main() {
         }
         try {
           if (fixtureCreated && !config.keepData && target === "fyrlet") {
-            await command("mix", ["run", "bench/fixtures/cleanup.exs"], environment, root, true);
+            await command("mix", ["run", resolve(root, "bench/fixtures/cleanup.exs")], environment, application, true);
           }
         } finally { await log.close(); }
       }

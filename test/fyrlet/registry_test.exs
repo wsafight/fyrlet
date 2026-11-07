@@ -81,20 +81,29 @@ defmodule Fyrlet.RegistryTest do
 
   test "validate! rejects malformed operation and subscription entries" do
     cases = [
-      {%{"operations" => %{"demo.op" => %{"kind" => "read", "input" => %{}}},
-         "subscriptions" => %{}}, RuntimeError, ~r/Missing schemas/},
-      {%{"operations" => %{"demo.op" => Map.put(valid_operation(), "kind", "sideEffect")},
-         "subscriptions" => %{}}, RuntimeError, ~r/Invalid operation kind/},
-      {%{"operations" => %{
+      {%{
+         "operations" => %{"demo.op" => %{"kind" => "read", "input" => %{}}},
+         "subscriptions" => %{}
+       }, RuntimeError, ~r/Missing schemas/},
+      {%{
+         "operations" => %{"demo.op" => Map.put(valid_operation(), "kind", "sideEffect")},
+         "subscriptions" => %{}
+       }, RuntimeError, ~r/Invalid operation kind/},
+      {%{
+         "operations" => %{
            "demo.op" => Map.put(valid_operation(), "input", %{"type" => "number"})
-         }, "subscriptions" => %{}}, ArgumentError, ~r/Unsupported contract schema/},
-      {%{"operations" => %{},
+         },
+         "subscriptions" => %{}
+       }, ArgumentError, ~r/Unsupported contract schema/},
+      {%{
+         "operations" => %{},
          "subscriptions" => %{
            "demo.watch" => %{
              "input" => %{"type" => "number"},
              "output" => %{"type" => "string"}
            }
-         }}, ArgumentError, ~r/Unsupported contract schema/}
+         }
+       }, ArgumentError, ~r/Unsupported contract schema/}
     ]
 
     for {contract, exception, message} <- cases do
@@ -106,10 +115,10 @@ defmodule Fyrlet.RegistryTest do
   end
 
   test "fetch/2 returns the owning module and specification" do
-    assert {:ok, Fyrlet.Example.Inbox, specification} = Registry.fetch("operations", "inbox.add")
+    assert {:ok, InboxExample.Inbox, specification} = Registry.fetch("operations", "inbox.add")
     assert specification["kind"] == "write"
 
-    assert {:ok, Fyrlet.Example.Inbox, subscription} =
+    assert {:ok, InboxExample.Inbox, subscription} =
              Registry.fetch("subscriptions", "inbox.recent")
 
     assert subscription["output"]["type"] == "array"
@@ -128,7 +137,7 @@ defmodule Fyrlet.RegistryTest do
 
     assert exported["protocol_version"] == 1
     assert exported["contract_version"] == "0.1.0"
-    assert exported["schema_dialect"] == "realtime-subset-v1"
+    assert exported["schema_dialect"] == "fyrlet-subset"
     assert Map.has_key?(exported["operations"], "inbox.add")
     assert Map.has_key?(exported["operations"], "test.echo")
     assert Map.has_key?(exported["subscriptions"], "inbox.recent")

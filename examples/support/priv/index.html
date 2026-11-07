@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Fyrlet · __DOMAIN__</title>
+  <style>
+    :root{font:16px/1.6 system-ui,sans-serif;color:#182824;background:#f2f5f0}*{box-sizing:border-box}body{max-width:1120px;margin:auto;padding:40px 24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:36px;margin:0}h2{font-size:20px;margin:0 0 18px}.eyebrow{color:#487363;letter-spacing:.12em;font-size:12px}main{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px}section{background:white;border:1px solid #dce4da;border-radius:16px;padding:24px;min-width:0}.wide{grid-column:1/-1}label{display:block;font-size:14px;margin:12px 0}input,textarea,select{width:100%;border:1px solid #c9d6cb;border-radius:8px;padding:10px 12px;font:inherit;background:#fbfcfa}textarea{min-height:108px;resize:vertical}button{border:0;border-radius:8px;background:#225d47;color:white;padding:10px 18px;font:inherit;cursor:pointer;margin:8px 8px 0 0}button.secondary{background:#e8eee5;color:#244b3e}button:disabled{opacity:.5;cursor:wait}small,.muted{color:#62776b}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f7f2;border-radius:8px;padding:14px;font:13px/1.6 ui-monospace,monospace;max-height:480px;overflow:auto}.entry{padding:14px 0;border-bottom:1px solid #e6ebe1}.entry:last-child{border-bottom:0}.entry p{white-space:pre-wrap;margin:4px 0}.status{border-radius:20px;padding:5px 12px;background:#e6eee0;font-size:13px}#error{color:#963c29;white-space:pre-wrap}#connection{display:grid;grid-template-columns:1fr 2fr auto;gap:12px;align-items:end}#connection label{margin:0}#connection button{margin:0}#workspace[hidden]{display:none}@media(max-width:760px){body{padding:24px 16px}main{grid-template-columns:1fr}#connection{grid-template-columns:1fr}header{align-items:start}h1{font-size:28px}}
+    section{overflow-wrap:anywhere}.status{flex-shrink:0}
+  </style>
+  <script type="importmap">{"imports":{"phoenix":"/sdk/phoenix.mjs"}}</script>
+</head>
+<body data-domain="__DOMAIN__">
+  <header><div><div class="eyebrow">FYRLET / APPLICATIONS</div><h1 id="title">__DOMAIN__</h1><p class="muted" id="intro"></p></div><span class="status" id="status">未连接</span></header>
+  <section><form id="connection"><label>项目 ID<input id="project" required autocomplete="off"></label><label>用户会话令牌<input id="token" type="password" required autocomplete="off" placeholder="rts_…"></label><button>连接工作区</button></form><small>使用宿主登录签发的用户会话。会话仅保存在当前页面内存中。</small><p id="error" role="alert" aria-live="polite"></p></section>
+  <main id="workspace" hidden>
+    <section><h2 id="action-title"></h2><form id="action"></form><div id="extra"></div></section>
+    <section><h2 id="list-title">最新记录</h2><div id="list" aria-live="polite"></div></section>
+    <section class="wide"><h2 id="detail-title">运行详情</h2><div id="controls"></div><pre id="detail">选择一条记录，查看进度与详情。</pre></section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

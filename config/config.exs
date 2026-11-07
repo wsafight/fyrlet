@@ -2,7 +2,9 @@ import Config
 
 config :fyrlet,
   ecto_repos: [Fyrlet.Repo],
-  definitions: [Fyrlet.Example.Inbox],
+  # The host application lists its Fyrlet.Definition modules here.
+  definitions: [],
+  migration_paths: [],
   session_ttl: 600,
   reconciliation_interval: 30_000,
   max_subscriptions: 20,
@@ -10,11 +12,17 @@ config :fyrlet,
   max_channel_queue: 200,
   snapshot_ack_timeout: 15_000,
   max_observers: 10_000,
+  # Presence rooms (capability "presence"): members per room, bytes of one member's meta, and
+  # how many meta updates one channel may send per second.
+  presence_max_members: 500,
+  presence_max_meta_bytes: 1024,
+  presence_updates_per_second: 10,
   observer_hibernate_after: 1_000,
   socket_batch_max_messages: 64,
   socket_batch_max_bytes: 262_144,
   idempotency_ttl: 86_400,
-  invalidation_fallback_delay: 0
+  # Optional modules, as %{name => version}. Empty keeps v0.1 behaviour.
+  capabilities: %{}
 
 config :fyrlet, batch_session_checks: true
 
@@ -25,7 +33,7 @@ config :fyrlet,
        String.to_integer(System.get_env("FYRLET_CHANNEL_HIBERNATE_MS", "15000"))
 
 config :fyrlet, Fyrlet.Repo,
-  url: "ecto://postgres:postgres@127.0.0.1:55432/realtime_#{config_env()}",
+  url: "ecto://postgres:postgres@127.0.0.1:55432/fyrlet_#{config_env()}",
   pool_size: 10,
   parameters: [statement_timeout: "10000"]
 

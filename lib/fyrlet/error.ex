@@ -17,9 +17,13 @@ defmodule Fyrlet.Error do
       "FORBIDDEN" -> 403
       "NOT_FOUND" -> 404
       "CONFLICT" -> 409
+      "EFFECT_UNKNOWN" -> 409
+      "LEASE_LOST" -> 409
+      "EFFECT_CONFLICT" -> 409
       "VALIDATION_FAILED" -> 422
       "LIMIT_EXCEEDED" -> 429
       "UNSUPPORTED_VERSION" -> 400
+      "UNSUPPORTED_CAPABILITY" -> 400
       _other -> 500
     end
   end

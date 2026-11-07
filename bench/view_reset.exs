@@ -1,7 +1,7 @@
 # Micro-benchmark of View.reset for membership changes (add / remove inside a window).
 # Pure function only: no database, network or JSON transport. Verifies equal output.
 #   MIX_ENV=prod mix run --no-start bench/view_reset.exs
-alias Fyrlet.View
+alias Fyrlet.Subscriptions.View
 
 rows = String.to_integer(System.get_env("BENCH_ROWS", "50"))
 bytes = String.to_integer(System.get_env("BENCH_PAYLOAD_BYTES", "128"))

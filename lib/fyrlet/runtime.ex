@@ -1,26 +1,28 @@
 defmodule Fyrlet.Runtime do
   import Ecto.Query
   require Logger
-  alias Fyrlet.{Auth, CommittedChange, Error, Idempotency, Registry, Repo, Schema, View}
+  alias Fyrlet.{Auth, CommittedChange, Error, Idempotency, Registry, Repo, Schema}
+  alias Fyrlet.Subscriptions.View
 
-  def call(actor, name, input, idempotency_key \\ nil) do
+  def call(actor, name, input, idempotency_key \\ nil, options \\ []) do
     started = System.monotonic_time()
 
     result =
       safely(fn ->
         with {:ok, module, specification} <- Registry.fetch("operations", name),
-             {:ok, normalized} <- Schema.validate(specification["input"], input) do
-          if specification["kind"] == "write" do
-            write(actor, module, name, normalized, specification, idempotency_key)
-          else
-            with {:ok, current_actor} <- Auth.revalidate(actor),
-                 :ok <- module.authorize(name, current_actor, normalized),
-                 {:ok, data, _scopes} <- module.execute(name, current_actor, normalized),
-                 {:ok, checked} <- validate_output(specification["output"], data),
-                 {:ok, _actor} <- Auth.revalidate(current_actor) do
-              {:ok, checked}
-            end
-          end
+             :ok <- anonymous_operation(actor, specification),
+             :ok <- Fyrlet.Quota.check(actor.project_id, quota_class(specification)),
+             {:ok, normalized} <- validate_input(specification, input) do
+          dispatch(
+            specification["kind"],
+            actor,
+            module,
+            name,
+            normalized,
+            specification,
+            idempotency_key,
+            options
+          )
         end
       end)
 
@@ -33,9 +35,73 @@ defmodule Fyrlet.Runtime do
     result
   end
 
+  defp quota_class(%{"kind" => "read"}), do: :read
+  defp quota_class(_write_run_or_ingest), do: :write
+
+  # An ingest batch is validated item by item inside `Fyrlet.Features.Ingest`, so one bad item is reported
+  # on its own instead of rejecting the whole request here.
+  defp validate_input(%{"kind" => "ingest"}, input), do: {:ok, input}
+
+  defp validate_input(specification, input),
+    do: Schema.validate(specification["input"], input)
+
+  # One clause per operation kind.
+  defp dispatch(kind, actor, module, name, input, specification, key, options)
+       when kind in ["write", "run"] do
+    with :ok <- require_capability(specification, options) do
+      write(actor, module, name, input, specification, key)
+    end
+  end
+
+  defp dispatch("ingest", actor, module, name, input, specification, _key, options) do
+    with :ok <- require_capability(specification, options),
+         {:ok, current_actor} <- Auth.revalidate(actor),
+         :ok <- module.authorize(name, current_actor, input) do
+      Fyrlet.Features.Ingest.submit(current_actor, name, input, specification, module)
+    end
+  end
+
+  defp dispatch(_read, actor, module, name, input, specification, _key, _options) do
+    with {:ok, current_actor} <- Auth.revalidate(actor),
+         :ok <- module.authorize(name, current_actor, input),
+         {:ok, data, _scopes} <- module.execute(name, current_actor, input),
+         {:ok, checked} <- validate_output(specification["output"], data),
+         {:ok, _actor} <- Auth.revalidate(current_actor) do
+      {:ok, checked}
+    end
+  end
+
+  # An anonymous caller reaches only what the contract marks public. Everything else is refused
+  # before any input is even looked at.
+  defp anonymous_operation(actor, specification) do
+    if not Fyrlet.Features.Anonymous.anonymous?(actor) or
+         Fyrlet.Features.Anonymous.operation_allowed?(specification),
+       do: :ok,
+       else: {:error, Error.forbidden()}
+  end
+
+  defp anonymous_subscription(actor, specification) do
+    if not Fyrlet.Features.Anonymous.anonymous?(actor) or
+         Fyrlet.Features.Anonymous.subscription_allowed?(specification),
+       do: :ok,
+       else: {:error, Error.forbidden()}
+  end
+
+  # `run` operations exist only for connections that negotiated the capability.
+  defp require_capability(%{"kind" => "run"}, options) do
+    Fyrlet.Capabilities.require(Keyword.get(options, :capabilities, %{}), "runs")
+  end
+
+  defp require_capability(%{"kind" => "ingest"}, options) do
+    Fyrlet.Capabilities.require(Keyword.get(options, :capabilities, %{}), "ingest")
+  end
+
+  defp require_capability(_specification, _options), do: :ok
+
   def prepare_subscription(actor, name, parameters) do
     safely(fn ->
       with {:ok, module, specification} <- Registry.fetch("subscriptions", name),
+           :ok <- anonymous_subscription(actor, specification),
            {:ok, normalized} <- Schema.validate(specification["input"], parameters),
            {:ok, current_actor} <- Auth.revalidate(actor),
            :ok <- module.authorize(name, current_actor, normalized) do
@@ -57,6 +123,16 @@ defmodule Fyrlet.Runtime do
     with {:ok, view} <- view(actor, subscription), do: {:ok, View.data(view)}
   end
 
+  @doc """
+  The data of a subscription with no session or authorization checks of its own. Only for a
+  caller that has just done both for this actor and repeats the session check before anything
+  is sent (`Observer.attach/3` does: it checks, loads, checks again). Everything else uses
+  `view/4`, which checks the session and authorizes before the query and checks the session
+  again after it.
+  """
+  def load_view(actor, subscription, previous \\ nil, change \\ nil),
+    do: safely(fn -> subscription_view(actor, subscription, previous, change) end)
+
   def view(actor, subscription, previous \\ nil, change \\ nil) do
     safely(fn ->
       started = System.monotonic_time()
@@ -77,6 +153,42 @@ defmodule Fyrlet.Runtime do
           else
             {:error, Error.new("LIMIT_EXCEEDED", "The snapshot exceeds the response size limit")}
           end
+        end
+
+      :telemetry.execute(
+        [:fyrlet, :subscription, :query],
+        %{duration: System.monotonic_time() - started},
+        %{name: subscription.name, result: elem(result, 0)}
+      )
+
+      result
+    end)
+  end
+
+  @doc """
+  The result of an `identical` shared subscription. The query receives only the trusted
+  project and scope - never a person - so every member gets exactly the same bytes; who may
+  read it is decided separately, per member, by the Observer.
+  """
+  def shared_view(subscription, context, previous \\ nil) do
+    safely(fn ->
+      started = System.monotonic_time()
+
+      result =
+        case subscription.module.shared_query(subscription.name, context, subscription.parameters) do
+          {:ok, data, view_context} ->
+            with {:ok, checked} <- validate_output(subscription.specification["output"], data) do
+              view = View.reset(previous, checked, view_context)
+
+              if view.bytes <= Application.fetch_env!(:fyrlet, :max_snapshot_bytes),
+                do: {:ok, view},
+                else:
+                  {:error,
+                   Error.new("LIMIT_EXCEEDED", "The snapshot exceeds the response size limit")}
+            end
+
+          {:error, %Error{} = error} ->
+            {:error, error}
         end
 
       :telemetry.execute(
@@ -123,8 +235,7 @@ defmodule Fyrlet.Runtime do
                   input,
                   specification,
                   key,
-                  input_hash,
-                  nested
+                  input_hash
                 )
               else
                 if cached.input_hash == input_hash,
@@ -143,8 +254,7 @@ defmodule Fyrlet.Runtime do
                 input,
                 specification,
                 key,
-                input_hash,
-                nested
+                input_hash
               )
           end
         end)
@@ -160,11 +270,15 @@ defmodule Fyrlet.Runtime do
     end
   end
 
-  defp execute_write(module, name, actor, input, specification, key, input_hash, nested) do
+  defp execute_write(module, name, actor, input, specification, key, input_hash) do
     {data, scopes} =
-      case module.execute(name, actor, input) do
-        {:ok, data, scopes} -> {data, scopes}
-        {:error, error} -> Repo.rollback(error)
+      if specification["kind"] == "run" do
+        Fyrlet.Runs.create(module, name, actor, input, specification)
+      else
+        case module.execute(name, actor, input) do
+          {:ok, data, scopes} -> {data, scopes}
+          {:error, error} -> Repo.rollback(error)
+        end
       end
 
     checked = unwrap!(validate_output(specification["output"], data))
@@ -183,13 +297,13 @@ defmodule Fyrlet.Runtime do
     job =
       if scopes != [] do
         %{"scopes" => Enum.uniq(scopes), "project_id" => actor.project_id}
-        |> Fyrlet.InvalidationWorker.new(fallback_options(nested))
+        |> Fyrlet.InvalidationWorker.new()
         |> Oban.insert()
         |> unwrap!()
       end
 
     change =
-      if function_exported?(module, :change, 4),
+      if specification["kind"] != "run" and function_exported?(module, :change, 4),
         do: module.change(name, actor, input, checked)
 
     change =
@@ -203,18 +317,6 @@ defmodule Fyrlet.Runtime do
       end
 
     {checked, if(job, do: {job, change})}
-  end
-
-  # Outside a caller transaction the immediate broadcast is the primary path, so the
-  # durable job only needs to run if it failed. Delaying it lets Oban stage jobs in
-  # batches instead of fetching one per write; nested writes keep it immediate.
-  defp fallback_options(true), do: []
-
-  defp fallback_options(false) do
-    case Application.fetch_env!(:fyrlet, :invalidation_fallback_delay) do
-      seconds when is_integer(seconds) and seconds > 0 -> [schedule_in: seconds]
-      _immediate -> []
-    end
   end
 
   defp notify_after_commit({job, change}) do

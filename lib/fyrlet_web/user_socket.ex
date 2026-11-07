@@ -1,6 +1,8 @@
 defmodule FyrletWeb.UserSocket do
   use Phoenix.Socket, log: false
   channel "subscription:*", FyrletWeb.SubscriptionChannel
+  channel "append:*", FyrletWeb.AppendChannel
+  channel "presence:*", FyrletWeb.PresenceChannel
   channel "operations", FyrletWeb.OperationChannel
 
   @impl true

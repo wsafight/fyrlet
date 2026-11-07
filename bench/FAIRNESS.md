@@ -8,7 +8,7 @@
 
 当前 `local.mjs` / `capacity.mjs` 不落实 CPU 或内存硬限制，生成器和数据库也与应用共用主机。`report.mjs` 将跨实现结果标记为 `observational-only`，核对完整负载、源码指纹和主机信息，并列出资源与保障差异。相同的 `+S`、容器声明参数或平均 CPU 占用不作为资源限制已生效的证据。
 
-`local.mjs` / `capacity.mjs` 仍是上述无限额的本机启动器。单核组已另用 Colima 虚拟机中的 Docker 容器完成一次限额对照（结果与边界见 [性能对比与优化记录](../docs/PERFORMANCE.md)），运行脚本尚未整理进仓库。
+`local.mjs` / `capacity.mjs` 仍是上述无限额的本机启动器。单核组已另用 Colima 虚拟机中的 Docker 容器完成一次限额对照（结果与边界见 [性能对比](../docs/PERFORMANCE.md)），运行脚本尚未整理进仓库。
 
 ## 资源与部署
 

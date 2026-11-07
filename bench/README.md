@@ -1,6 +1,6 @@
 # Fyrlet benchmarks
 
-最新的同资源对照与优化记录见 [性能对比与优化记录](../docs/PERFORMANCE.md)。
+最新的同资源对照见 [性能对比](../docs/PERFORMANCE.md)，优化记录见 [优化记录](../docs/OPTIMIZATIONS.md)。
 
 本目录提供可重复的 Fyrlet 基线、Meteor 收件箱参考应用、共享场景和结果报告。先验证业务正确性，再解释性能数字；本地 smoke 不用于宣称容量或产品排名。
 

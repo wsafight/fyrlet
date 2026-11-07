@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { readFile, open } from "node:fs/promises";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { createClient, ApiError } from "../dist/index.js";
 import { createSessionService } from "../dist/server.js";
 import { until } from "./helpers.mjs";
@@ -17,7 +18,7 @@ const log = await open(new URL("../../../.local/integration/server.log", import.
 let server;
 
 async function startServer() {
-  server = spawn("mix", ["phx.server"], { cwd: root, env: process.env, stdio: ["ignore", log.fd, log.fd] });
+  server = spawn("mix", ["phx.server"], { cwd: process.env.INTEGRATION_APP ?? resolve(root, "examples/inbox"), env: process.env, stdio: ["ignore", log.fd, log.fd] });
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (server.exitCode !== null) throw new Error("Integration server exited; inspect .local/integration/server.log");
@@ -241,4 +242,94 @@ test("an application restart preserves PostgreSQL data and SDK subscriptions rec
   await startServer();
   await until(() => subscription.getState().status === "ready" && subscription.getState().generation !== generation, 10_000);
   assert.ok(subscription.getState().data.some((entry) => entry.id === item.id));
+});
+
+test("Run SDK starts idempotently, observes waits, signals once and completes on the server", async (context) => {
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const idempotencyKey = crypto.randomUUID();
+  const started = await owner.client.startRun("work.start", { text: "approve this task" }, { idempotencyKey });
+  const replay = await owner.client.startRun("work.start", { text: "approve this task" }, { idempotencyKey });
+  assert.equal(replay.run_id, started.run_id);
+  const detail = owner.client.subscribeRun(started.run_id);
+  const recent = owner.client.subscribeRecentRuns();
+  await until(() => detail.getState().data?.status === "waiting", 10_000);
+  await until(() => recent.getState().data?.some((run) => run.id === started.run_id));
+  const persisted = await owner.client.getRun(started.run_id);
+  assert.equal(persisted.status, "waiting");
+  const wait = persisted.steps.find((step) => step.type === "wait");
+  const signal = { wait_id: wait.id, name: "approve", payload: { approved: true }, idempotency_key: crypto.randomUUID() };
+  const receipt = await owner.client.signalRun(started.run_id, signal);
+  const duplicate = await owner.client.signalRun(started.run_id, signal);
+  assert.ok(["accepted", "consumed"].includes(receipt.status));
+  assert.equal(duplicate.signal_id, receipt.signal_id);
+  assert.ok(["accepted", "consumed"].includes(duplicate.status));
+  await until(() => detail.getState().data?.status === "completed", 10_000);
+  assert.equal((await owner.client.getRun(started.run_id)).status, "completed");
+});
+
+test("Run SDK enforces project and subject isolation and persists cancellation across restart", async (context) => {
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const stranger = await user(context, 0, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const outsider = await user(context, 1, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const started = await owner.client.startRun("work.start", { text: "cancel this task" });
+  const detail = owner.client.subscribeRun(started.run_id);
+  await until(() => detail.getState().data?.status === "waiting", 10_000);
+  for (const denied of [stranger, outsider]) {
+    await assert.rejects(denied.client.getRun(started.run_id), (error) => ["FORBIDDEN", "NOT_FOUND"].includes(error.code));
+    await assert.rejects(denied.client.cancelRun(started.run_id), (error) => ["FORBIDDEN", "NOT_FOUND"].includes(error.code));
+    const subscription = denied.client.subscribeRun(started.run_id);
+    await until(() => subscription.getState().status === "error");
+    assert.equal(subscription.getState().data, undefined);
+  }
+  await owner.client.cancelRun(started.run_id);
+  await until(() => detail.getState().data?.status === "cancelled", 10_000);
+  const generation = detail.getState().generation;
+  await stopServer();
+  await until(() => detail.getState().status === "recovering");
+  await startServer();
+  await until(() => detail.getState().status === "ready" && detail.getState().generation !== generation, 10_000);
+  assert.equal(detail.getState().data.status, "cancelled");
+});
+
+test("append SDK receives actual batches, bounds its window and isolates each subject", async (context) => {
+  const frames = [];
+  class RecordingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    }
+  }
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { append: 1 }, WebSocket: RecordingSocket });
+  const stranger = await user(context, 0, crypto.randomUUID(), { capabilities: { append: 1 } });
+  const subscription = owner.client.subscribeAppend("work.feed", {});
+  const privateFeed = stranger.client.subscribeAppend("work.feed", {});
+  await until(() => subscription.getState().status === "ready" && privateFeed.getState().status === "ready");
+  for (let index = 0; index < 6; index++) {
+    await owner.client.call("work.post", { text: `message ${index}` });
+    await until(() => subscription.getState().data?.at(-1)?.text === `message ${index}`);
+  }
+  assert.deepEqual(subscription.getState().data.map((item) => item.text), ["message 3", "message 4", "message 5"]);
+  assert.deepEqual(privateFeed.getState().data, []);
+  assert.ok(frames.some((frame) => frame[3] === "append"));
+  const seq = subscription.getState().seq;
+  await subscription.refresh();
+  await until(() => subscription.getState().seq > seq);
+  assert.equal(subscription.getState().data.length, 3);
+});
+
+test("append SDK restores the current window after restart and clears revoked sessions", async (context) => {
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { append: 1 } });
+  const subscription = owner.client.subscribeAppend("work.feed", {});
+  await until(() => subscription.getState().status === "ready");
+  await owner.client.call("work.post", { text: "persisted append" });
+  await until(() => subscription.getState().data?.length === 1);
+  const generation = subscription.getState().generation;
+  await stopServer();
+  await until(() => subscription.getState().status === "recovering");
+  await startServer();
+  await until(() => subscription.getState().status === "ready" && subscription.getState().generation !== generation, 10_000);
+  assert.deepEqual(subscription.getState().data, [{ text: "persisted append" }]);
+  await services[0].revokeSession(owner.session.session_id);
+  await until(() => subscription.getState().status === "error");
+  assert.equal(subscription.getState().data, undefined);
 });

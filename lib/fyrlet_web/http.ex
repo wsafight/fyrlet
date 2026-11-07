@@ -6,6 +6,7 @@ defmodule FyrletWeb.HTTP do
     parsers: [:json],
     pass: ["application/json"],
     json_decoder: Jason,
+    body_reader: {FyrletWeb.CacheBodyReader, :read_body, []},
     length: 65_536
 
   plug FyrletWeb.Router

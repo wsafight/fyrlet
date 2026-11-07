@@ -9,11 +9,19 @@ defmodule FyrletWeb.Response do
   end
 
   def error(conn, error, status \\ nil) do
-    send_json(conn, status || Fyrlet.Error.status(error), %{
+    conn
+    |> retry_after(error)
+    |> send_json(status || Fyrlet.Error.status(error), %{
       "request_id" => request_id(conn),
       "error" => Fyrlet.Error.to_map(error)
     })
   end
+
+  # Whole seconds, rounded up, as the Retry-After header requires.
+  defp retry_after(conn, %{details: %{"retry_after_ms" => ms}}) when is_integer(ms),
+    do: put_resp_header(conn, "retry-after", Integer.to_string(max(div(ms + 999, 1000), 1)))
+
+  defp retry_after(conn, _error), do: conn
 
   defp request_id(conn),
     do: List.first(get_resp_header(conn, "x-request-id")) || Ecto.UUID.generate()

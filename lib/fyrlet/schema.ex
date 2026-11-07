@@ -1,8 +1,17 @@
 defmodule Fyrlet.Schema do
   alias Fyrlet.Error
 
+  @doc """
+  Validates `value` against `schema` and returns it with defaults applied.
+
+  This runs on every operation call and every subscription refresh, so the success path is the
+  one that matters: it allocates nothing that only an error needs. Paths are kept as a reversed
+  list of segments (a cons per level) and rendered to "$.a[0].b" only when a problem is
+  reported; strings are not grapheme-counted unless a bound could actually be violated; maps
+  are rebuilt only for the entries that changed.
+  """
   def validate(schema, value) do
-    case check(schema, value, "$", %{}) do
+    case check(schema, value, [], %{}) do
       {normalized, errors} when map_size(errors) == 0 ->
         {:ok, normalized}
 
@@ -121,74 +130,48 @@ defmodule Fyrlet.Schema do
     :ok
   end
 
+  # ---- checking -------------------------------------------------------------------------
+
   defp check(%{"type" => "object"} = schema, value, path, errors) when is_map(value) do
     properties = Map.get(schema, "properties", %{})
-
-    normalized =
-      Enum.reduce(properties, value, fn {name, property}, result ->
-        if not Map.has_key?(result, name) and Map.has_key?(property, "default") do
-          Map.put(result, name, property["default"])
-        else
-          result
-        end
-      end)
+    normalized = with_defaults(properties, value)
 
     errors =
-      Enum.reduce(Map.get(schema, "required", []), errors, fn name, result ->
-        if Map.has_key?(normalized, name),
-          do: result,
-          else: Map.put(result, path <> "." <> name, "is required")
-      end)
+      case schema do
+        %{"required" => required} -> missing(required, normalized, path, errors)
+        _no_required -> errors
+      end
 
-    Enum.reduce(normalized, {normalized, errors}, fn {name, entry}, {result, problems} ->
-      case Map.fetch(properties, name) do
-        {:ok, property} ->
-          {checked, next_errors} = check(property, entry, path <> "." <> name, problems)
-          {Map.put(result, name, checked), next_errors}
+    forbid? = Map.get(schema, "additionalProperties") == false
 
-        :error ->
-          if schema["additionalProperties"] == false do
-            {result, Map.put(problems, path <> "." <> to_string(name), "is not allowed")}
-          else
+    :maps.fold(
+      fn name, entry, {result, problems} ->
+        case properties do
+          %{^name => property} ->
+            {checked, next} = check(property, entry, [name | path], problems)
+            # Nested defaults are the only thing that can change an entry.
+            {if(checked === entry, do: result, else: Map.put(result, name, checked)), next}
+
+          _unknown when forbid? ->
+            {result, Map.put(problems, render([name | path]), "is not allowed")}
+
+          _unknown ->
             {result, problems}
-          end
-      end
-    end)
+        end
+      end,
+      {normalized, errors},
+      normalized
+    )
   end
 
-  defp check(%{"type" => "string"} = schema, value, path, errors) when is_binary(value) do
-    length = String.length(value)
-
-    errors =
-      cond do
-        length < Map.get(schema, "minLength", 0) ->
-          Map.put(errors, path, "is too short")
-
-        length > Map.get(schema, "maxLength", 1_000_000) ->
-          Map.put(errors, path, "is too long")
-
-        schema["format"] == "uuid" and not valid_uuid?(value) ->
-          Map.put(errors, path, "must be a UUID")
-
-        schema["format"] == "date-time" and not valid_datetime?(value) ->
-          Map.put(errors, path, "must be an ISO 8601 timestamp")
-
-        is_list(schema["enum"]) and value not in schema["enum"] ->
-          Map.put(errors, path, "is not an allowed value")
-
-        true ->
-          errors
-      end
-
-    {value, errors}
-  end
+  defp check(%{"type" => "string"} = schema, value, path, errors) when is_binary(value),
+    do: {value, check_string(schema, value, path, errors)}
 
   defp check(%{"type" => "integer"} = schema, value, path, errors) when is_integer(value) do
-    valid =
-      value >= Map.get(schema, "minimum", -9_007_199_254_740_991) and
-        value <= Map.get(schema, "maximum", 9_007_199_254_740_991)
-
-    {value, if(valid, do: errors, else: Map.put(errors, path, "is outside the allowed range"))}
+    if value >= Map.get(schema, "minimum", -9_007_199_254_740_991) and
+         value <= Map.get(schema, "maximum", 9_007_199_254_740_991),
+       do: {value, errors},
+       else: {value, Map.put(errors, render(path), "is outside the allowed range")}
   end
 
   defp check(%{"type" => "boolean"}, value, _path, errors) when is_boolean(value),
@@ -199,14 +182,10 @@ defmodule Fyrlet.Schema do
   defp check(%{"type" => "array"} = schema, value, path, errors) when is_list(value) do
     errors =
       if length(value) > Map.get(schema, "maxItems", 100),
-        do: Map.put(errors, path, "contains too many entries"),
+        do: Map.put(errors, render(path), "contains too many entries"),
         else: errors
 
-    value
-    |> Enum.with_index()
-    |> Enum.map_reduce(errors, fn {entry, index}, problems ->
-      check(schema["items"], entry, "#{path}[#{index}]", problems)
-    end)
+    check_items(value, Map.get(schema, "items"), 0, path, errors, [])
   end
 
   defp check(%{"anyOf" => options}, value, path, errors) do
@@ -220,13 +199,129 @@ defmodule Fyrlet.Schema do
 
     case result do
       {:ok, normalized} -> {normalized, errors}
-      nil -> {value, Map.put(errors, path, "does not match an allowed type")}
+      nil -> {value, Map.put(errors, render(path), "does not match an allowed type")}
     end
   end
 
   defp check(_schema, value, path, errors),
-    do: {value, Map.put(errors, path, "has an invalid type")}
+    do: {value, Map.put(errors, render(path), "has an invalid type")}
+
+  # Properties that declare a default and are absent from the value.
+  defp with_defaults(properties, value) do
+    :maps.fold(
+      fn name, property, acc ->
+        case property do
+          %{"default" => default} when not is_map_key(acc, name) -> Map.put(acc, name, default)
+          _no_default_or_present -> acc
+        end
+      end,
+      value,
+      properties
+    )
+  end
+
+  defp missing([], _value, _path, errors), do: errors
+
+  defp missing([name | rest], value, path, errors) do
+    if is_map_key(value, name),
+      do: missing(rest, value, path, errors),
+      else: missing(rest, value, path, Map.put(errors, render([name | path]), "is required"))
+  end
+
+  defp check_items([], _items, _index, _path, errors, acc), do: {:lists.reverse(acc), errors}
+
+  defp check_items([entry | rest], items, index, path, errors, acc) do
+    {checked, errors} = check(items, entry, [index | path], errors)
+    check_items(rest, items, index + 1, path, errors, [checked | acc])
+  end
+
+  # A string of N bytes has at most N graphemes. So it can only be too long if it has more
+  # bytes than the maximum, and counting is only needed when a minimum is set. Counting is
+  # what String.length/1 spends its time on, and most strings never need it.
+  defp check_string(schema, value, path, errors) do
+    size = byte_size(value)
+    min = Map.get(schema, "minLength", 0)
+    max = Map.get(schema, "maxLength", 1_000_000)
+
+    # `schema["x"]` on a map is Access.get/2 -> Access.get/3: two remote calls per read, and a
+    # string is checked for several keys. One Map.get each is a single call.
+    format = Map.get(schema, "format")
+    enum = Map.get(schema, "enum")
+
+    cond do
+      min > 0 and String.length(value) < min ->
+        Map.put(errors, render(path), "is too short")
+
+      size > max and String.length(value) > max ->
+        Map.put(errors, render(path), "is too long")
+
+      format == "uuid" and not valid_uuid?(value) ->
+        Map.put(errors, render(path), "must be a UUID")
+
+      format == "date-time" and not valid_datetime?(value) ->
+        Map.put(errors, render(path), "must be an ISO 8601 timestamp")
+
+      is_list(enum) and value not in enum ->
+        Map.put(errors, render(path), "is not an allowed value")
+
+      true ->
+        errors
+    end
+  end
 
   defp valid_uuid?(value), do: match?({:ok, _uuid}, Ecto.UUID.cast(value))
-  defp valid_datetime?(value), do: match?({:ok, _time, _offset}, DateTime.from_iso8601(value))
+
+  # The canonical form every Fyrlet timestamp has is checked by pattern matching. Anything
+  # else (offsets, odd precisions, a year 0, ...) goes to DateTime.from_iso8601/1, which stays
+  # the authority: the fast path only answers "yes" when that parser would too.
+  defp valid_datetime?(
+         <<year::binary-size(4), ?-, month::binary-size(2), ?-, day::binary-size(2), ?T,
+           hour::binary-size(2), ?:, minute::binary-size(2), ?:, second::binary-size(2),
+           rest::binary>> = value
+       ) do
+    with y when is_integer(y) and y >= 1 <- four(year),
+         m when m in 1..12 <- two(month),
+         d when is_integer(d) and d >= 1 <- two(day),
+         true <- d <= :calendar.last_day_of_the_month(y, m),
+         h when is_integer(h) and h <= 23 <- two(hour),
+         mi when is_integer(mi) and mi <= 59 <- two(minute),
+         s when is_integer(s) and s <= 59 <- two(second),
+         true <- zone?(rest) do
+      true
+    else
+      _not_canonical -> slow_datetime?(value)
+    end
+  end
+
+  defp valid_datetime?(value), do: slow_datetime?(value)
+
+  defp slow_datetime?(value), do: match?({:ok, _time, _offset}, DateTime.from_iso8601(value))
+
+  defp zone?("Z"), do: true
+  defp zone?(<<".", fraction::binary>>), do: fraction?(fraction, 0)
+  defp zone?(_other), do: false
+
+  # 1 to 6 digits, then Z.
+  defp fraction?("Z", digits), do: digits in 1..6
+  defp fraction?(<<c, rest::binary>>, digits) when c in ?0..?9, do: fraction?(rest, digits + 1)
+  defp fraction?(_other, _digits), do: false
+
+  # Fixed-width decimal fields; nil if any byte is not a digit.
+  defp two(<<a, b>>) when a in ?0..?9 and b in ?0..?9, do: (a - ?0) * 10 + (b - ?0)
+  defp two(_other), do: nil
+
+  defp four(<<a, b, c, d>>) when a in ?0..?9 and b in ?0..?9 and c in ?0..?9 and d in ?0..?9,
+    do: (a - ?0) * 1000 + (b - ?0) * 100 + (c - ?0) * 10 + (d - ?0)
+
+  defp four(_other), do: nil
+
+  # "$", "$.a.b", "$[0].c": only built for a problem that is actually reported.
+  defp render([]), do: "$"
+
+  defp render(path) do
+    path |> :lists.reverse() |> Enum.map(&segment/1) |> then(&IO.iodata_to_binary(["$" | &1]))
+  end
+
+  defp segment(index) when is_integer(index), do: ["[", Integer.to_string(index), "]"]
+  defp segment(name), do: [".", to_string(name)]
 end

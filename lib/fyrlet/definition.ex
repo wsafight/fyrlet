@@ -7,11 +7,70 @@ defmodule Fyrlet.Definition do
   @callback change(String.t(), Fyrlet.Actor.t(), map(), term()) :: map() | nil
   @callback load_subscription(String.t(), Fyrlet.Actor.t(), map()) ::
               {:ok, term(), map()} | {:error, Fyrlet.Error.t()}
-  @callback update_subscription(String.t(), Fyrlet.Actor.t(), map(), Fyrlet.View.t(), map()) ::
+  @callback update_subscription(
+              String.t(),
+              Fyrlet.Actor.t(),
+              map(),
+              Fyrlet.Subscriptions.View.t(),
+              map()
+            ) ::
               {:replace, String.t(), term()}
               | {:reset, term(), map()}
               | {:context, map()}
               | :unchanged
               | :reload
-  @optional_callbacks change: 4, update_subscription: 5, load_subscription: 3
+
+  # Durable runs (capability "runs").
+  @doc "Plans a run: `{:ok, steps: [...], business_key: ..., ttl_seconds: ...}` or an error."
+  @callback run(String.t(), Fyrlet.Actor.t(), map()) ::
+              {:ok, keyword()} | {:error, Fyrlet.Error.t()}
+  @doc "Dynamic planning: decides the next node from persisted state and the event that just happened. No I/O."
+  @callback advance(String.t(), map(), term()) ::
+              {:step, String.t(), map()}
+              | {:wait, map()}
+              | {:done, map()}
+              | {:error, Fyrlet.Error.t()}
+  @doc "Business key and lifetime for a dynamically planned run."
+  @callback plan_options(String.t(), Fyrlet.Actor.t(), map()) :: keyword()
+  @doc "Processes one ingested item inside the transaction that completes it."
+  @callback ingest(String.t(), Fyrlet.Actor.t(), map()) :: :ok | {:error, Fyrlet.Error.t()}
+  @doc "Shared (`sharing: \"identical\"`) subscriptions: the result for a scope. Receives no actor."
+  @callback shared_query(String.t(), map(), map()) ::
+              {:ok, term(), map()} | {:error, Fyrlet.Error.t()}
+  @doc "Whether an actor may receive an identical shared subscription. Checked before every delivery."
+  @callback membership(String.t(), Fyrlet.Actor.t(), map()) :: :member | :not_member
+  @doc "Bumped when who may see what changes in a way the scope alone does not show."
+  @callback policy_version(String.t()) :: String.t() | integer()
+  @doc "Append-mode subscriptions (`mode: \"append\"`): the `Fyrlet.Features.Stream` name that backs it. Checked after `authorize/3`."
+  @callback stream(String.t(), Fyrlet.Actor.t(), map()) ::
+              {:ok, String.t()} | {:error, Fyrlet.Error.t()}
+  @doc "Executes one step of a run. Returns the step's output map or an error."
+  @callback step(String.t(), map(), map()) :: {:ok, map()} | {:error, Fyrlet.Error.t()}
+  @doc "Authorizes `:start`, `:view`, `:signal` or `:cancel`. Without it only the starter may act."
+  @callback run_authorize(String.t(), atom(), Fyrlet.Actor.t(), map()) ::
+              :ok | {:error, Fyrlet.Error.t()}
+  @doc "The version a run is pinned to when accepted. Defaults to \"1\"."
+  @callback definition_version(String.t()) :: String.t()
+  @doc "The module implementing `version` of an operation, or nil when it is gone."
+  @callback implementation(String.t(), String.t()) :: module() | nil
+
+  @doc "Row-level policy for managed access: `{:ok, project: field, subject: field}` or `:unsupported`."
+  @callback data_scope(:read | :write, Fyrlet.Actor.t(), map()) :: {:ok, keyword()} | :unsupported
+
+  @optional_callbacks change: 4,
+                      data_scope: 3,
+                      update_subscription: 5,
+                      load_subscription: 3,
+                      ingest: 3,
+                      shared_query: 3,
+                      membership: 3,
+                      policy_version: 1,
+                      stream: 3,
+                      run: 3,
+                      advance: 3,
+                      plan_options: 3,
+                      step: 3,
+                      run_authorize: 4,
+                      definition_version: 1,
+                      implementation: 2
 end

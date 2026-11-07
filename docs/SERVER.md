@@ -1,6 +1,6 @@
 # 服务端业务开发
 
-当前应用是可运行的参考实现，核心在 lib/fyrlet，传输在 lib/fyrlet_web，示例在 Fyrlet.Example.Inbox。首版通过配置注册受信任的业务模块，不提供动态加载租户代码。
+当前应用是可运行的参考实现，核心在 lib/fyrlet，传输在 lib/fyrlet_web，参考业务（收件箱）是独立的示例应用 examples/inbox，安装方式与公共接口见 [INSTALL.md](INSTALL.md)。通过配置注册受信任的业务模块，不提供动态加载租户代码。
 
 ## 注册定义
 
@@ -14,9 +14,9 @@
 | scope/3 | 返回该订阅依赖的内部通知主题 |
 | change/4（可选） | 根据本次操作、Actor、规范化输入与已验证输出，生成即时变更信息 |
 | load_subscription/3（可选） | 根据订阅名称、Actor、规范化参数，返回 `{:ok, data, context}` 或 `{:error, %Fyrlet.Error{}}` |
-| update_subscription/5（可选） | 根据订阅名称、Actor、规范化参数、上一份 `%Fyrlet.View{}` 和变更，返回局部替换、重置、上下文更新、不变或重载 |
+| update_subscription/5（可选） | 根据订阅名称、Actor、规范化参数、上一份 `%Fyrlet.Subscriptions.View{}` 和变更，返回局部替换、重置、上下文更新、不变或重载 |
 
-在 config/config.exs 的 definitions 列表中注册模块。启动时验证回调、名称、操作类型和 schema。完整示例为 lib/fyrlet/example/inbox.ex。
+在 config/config.exs 的 definitions 列表中注册模块。启动时验证回调、名称、操作类型和 schema。完整示例为 examples/inbox/lib/inbox_example/inbox.ex。
 
 schema 支持封闭对象、字符串及字符串 enum、boolean、JavaScript 安全整数、array、null、anyOf，以及 uuid / date-time 字符串格式。它不是完整 JSON Schema；不支持浮点数、任意属性对象、引用或递归类型。高精度业务值应使用明确的字符串编码。
 
@@ -25,11 +25,13 @@ schema 支持封闭对象、字符串及字符串 enum、boolean、JavaScript �
 Actor 的 project_id / subject_id / session_id 来自已验证会话，不来自业务输入。以收件箱为例：
 
 ```elixir
-from item in Fyrlet.InboxItem,
+from item in InboxExample.Item,
   where: item.project_id == ^actor.project_id and item.subject_id == ^actor.subject_id
 ```
 
-上述数据库过滤负责行级数据范围。authorize 的 :ok 只表示允许执行这个业务，不能替代查询过滤。拥有记录 UUID 或命中 Scope 都不授予权限。角色和团队关系可以加入应用自己的表与 authorize 逻辑；本期参考应用只实现个人所有权。
+上述数据库过滤负责行级数据范围。authorize 的 :ok 只表示允许执行这个业务，不能替代查询过滤。拥有记录 UUID 或命中 Scope 都不授予权限。角色和团队关系可以加入应用自己的表与 authorize 逻辑；参考应用只实现个人所有权。
+
+结果范围必须有界。参考订阅只包含最近一页，历史记录通过 inbox.history 的 keyset 游标读取。快照超限关闭订阅并返回 LIMIT_EXCEEDED，不截断成看似完整的数据。
 
 ## Observer 与共享边界
 
@@ -59,7 +61,7 @@ ACK 按客户端独立维护，每个客户端最多一条待确认更新；等�
 
 ### 规范化 View 与回调
 
-`%Fyrlet.View{}` 对唯一字符串 id 的记录数组维护 records（ID → 记录）、order（ID 顺序）、sizes（逐记录 JSON 字节数）、bytes（完整可见数据 JSON 字节数），并保存私有 context、patch、unchanged。其他数据保存在 value，走完整加载路径。`View.data/1` 还原对外数据；context 不进入快照、delta 或对外字节数，但业务必须自行限制其大小，不能把它当作无界缓存。
+`%Fyrlet.Subscriptions.View{}` 对唯一字符串 id 的记录数组维护 records（ID → 记录）、order（ID 顺序）、sizes（逐记录 JSON 字节数）、bytes（完整可见数据 JSON 字节数），并保存私有 context、patch、unchanged。其他数据保存在 value，走完整加载路径。`View.data/1` 还原对外数据；context 不进入快照、delta 或对外字节数，但业务必须自行限制其大小，不能把它当作无界缓存。
 
 `load_subscription/3` 返回 `{:ok, data, context}`，框架校验完整输出并构造 View；未实现时回退到 `execute/3` 并使用空 context。`update_subscription/5` 仅在已有规范化记录数组且有即时变更时调用，第四个参数是 View，不是数组下标索引或旧版 metadata map。返回形式为：
 
@@ -81,51 +83,78 @@ batch_session_checks 默认开启。8 个节点内分片按 session_id 接收检
 
 写入的 FOR SHARE 会话锁及调用方事务中的检查直接使用当前数据库连接，保持事务可见性与撤销串行化。可通过应用配置将 batch_session_checks 设为 false 恢复逐次查询。分片异常或等待超时返回可重试的内部错误，不放行未经确认的会话。
 
-结果范围必须有界。参考订阅只包含最近一页，历史记录通过 inbox.history 的 keyset 游标读取。快照超限关闭订阅并返回 LIMIT_EXCEEDED，不截断成看似完整的数据。
+## 可选能力的开发要点
 
-## 运维入口
+各能力的语义见 [RUNS.md](RUNS.md)、[EFFECTS.md](EFFECTS.md)、[STREAMS.md](STREAMS.md)、[SHARING.md](SHARING.md)、[PLUGINS.md](PLUGINS.md)，线上协议见 [PROTOCOL.md](PROTOCOL.md)。以下是业务开发要点。
 
-```sh
-mix fyrlet.project --output .local/project.json "My App"
-mix fyrlet.contract priv/contract.json
-mix fyrlet.revoke_key KEY_ID
-mix fyrlet.prune
+### 可选的 Definition 回调
+
+| 回调 | 用途 |
+| --- | --- |
+| `run/3`、`step/3` | 静态规划的 Run：`run/3` 返回 `{:ok, steps: […], business_key: …, ttl_seconds: …}`，`step/3` 执行一步 |
+| `advance/3`、`plan_options/3` | 动态规划（操作声明 `planning: :dynamic`），与 `run/3` 二选一 |
+| `run_authorize/4` | 授权 `:start`、`:view`、`:signal`、`:cancel`；缺省只有发起者可以 |
+| `definition_version/1`、`implementation/2` | 固定运行所用的定义版本；版本缺失时运行暂停为 `definition_unavailable` |
+| `data_scope/3` | 受管数据访问的行级策略 |
+| `shared_query/3`、`membership/3`、`policy_version/1` | `sharing: "identical"` 的共享订阅 |
+| `ingest/3` | 批量摄取的单条处理，在完成该条的同一事务内执行 |
+| `stream/3` | 追加订阅（`mode: "append"`）：返回 `Fyrlet.Features.Stream` 的流名，在 `authorize/3` 之后调用 |
+
+操作种类：`read`、`write`、`run`（`Fyrlet.Runs.operation/2`）、`ingest`（`Fyrlet.Features.Ingest.operation/2`）。
+
+### 步骤的返回
+
+`{:ok, 输出}`、`{:ok, 输出, commit: fn -> … end}`（受管提交，与步骤结果同事务）、`{:error, %Fyrlet.Error{}}`（`retryable: true` 且未超过 `max_attempts` 时按退避重试）、`{:effect, %{adapter:, key:, payload:}}`（交给 Effect 派发）。步骤输出必须是对象，上限默认 64 KiB。
+
+### Effect 的重试规则
+
+按适配器声明的能力：有幂等键则在去重窗口内用同一个 `operation_id` 重发；只能查询则只对账，查不到也不重发；都没有则结果不确定时暂停等待人工，除非步骤显式 `retry_allow_duplicates: true`。**结果不确定的副作用不会被自动判成失败。** 人工处置用 `Fyrlet.Effects.resolve/5`，需要操作者与证据，只追加记录；重发需 `acknowledge_duplicates: true`（接收方仍能去重时除外）。
+
+### 追加订阅与 `Fyrlet.Features.Stream`
+
+订阅声明 `"mode" => "append"`、`"max_items" => n`、`"capability" => "append"`，输出为数组，并实现 `stream/3`；服务端需开启 `capabilities: %{"append" => 1}`。写操作在 `execute/3`（已在事务内）里追加：
+
+```elixir
+{:ok, _cursor} = Fyrlet.Features.Stream.append(actor.project_id, "room.#{room}", [%{"text" => text}])
+{:ok, result, [scope]}   # 照常返回受影响 Scope，订阅者据此读取新条目
 ```
 
-project 输出文件权限为 0600，已有文件会拒绝覆盖。prune 可由部署环境定时执行。密钥管理命令属于受信任控制面，本期不开放 HTTP 管理项目或密钥接口。
+要点：`append/3` 必须在事务内调用（否则抛 `ArgumentError`），事务持有该流的位置锁直到提交，因此同一流的追加按提交顺序编号、不会出现空洞；条目必须是 JSON 对象（至多 16 KiB，一次至多 100 条）。**更正或删除已发布条目时调用 `Fyrlet.Features.Stream.reset/2`**（新 epoch），不要直接改表，否则客户端会把旧条目当作不可变事实。保留由清理任务按 `config :fyrlet, :streams, retention_items:`（默认 10 000）裁剪。所有成员看到相同条目；需要按成员过滤的数据请用私有快照订阅。
 
-当前配置中的关键限制包括 max_subscriptions、max_snapshot_bytes、max_channel_queue（当前检查 Observer 邮箱）、snapshot_ack_timeout、reconciliation_interval、socket_batch_max_messages、socket_batch_max_bytes、idempotency_ttl。单个数据库语句超时由 Repo 的 PostgreSQL statement_timeout 控制；任意 Elixir CPU 任务没有通用强制隔离超时，业务回调应保持短小。
+### 邮件副作用（`packages/fyrlet_effect_email`）
 
-## 数据保留与容量
+`config :fyrlet, effect_adapters: %{"email" => FyrletEffectEmail}` 与 `config :fyrlet_effect_email, provider: MyApp.Mailer, allowed_senders: [...]`。`MyApp.Mailer` 实现 `FyrletEffectEmail.Provider`（`capabilities/0`、`deliver/2`，可选 `status/2`）。适配器负责校验地址与正文、拒绝头注入（不接受自定义头）、限制发件人与收件域；供应商只负责与服务通信，且必须如实声明幂等窗口和可查询性。供应商“受理”是 `accepted`，不是送达；送达与退信经回执接口（退信为 `failed`）或 `status/2` 对账进入。HTTP 适配器同理：`{:fyrlet_effect_http, …}`，`config :fyrlet_effect_http, allowed_hosts: [...]`。
 
-每次写入都会产生一行幂等结果（含完整返回值）和一条 Oban 兜底作业。按 500 writes/s 粗估（在小表上实测每行约 1 KB，含索引，实际会有出入）：幂等结果保留 24 小时时稳态约 4300 万行、约 40 GB；Oban 作业保留 1 小时约 180 万行。请按业务的重试窗口选择保留期：
+### Webhooks（插件 `FyrletWebhooks`）
 
-- `idempotency_ttl`（秒，默认 86400）或环境变量 `FYRLET_IDEMPOTENCY_TTL_SECONDS`：幂等结果保留时长，等于客户端可安全重试同一个 Idempotency-Key 的窗口。缩短它会缩小表，但超过窗口的重试会被当成新请求重新执行。
-- 过期幂等结果和过期超过 24 小时的会话由 `Fyrlet.PruneWorker` 每 10 分钟分批清理（每批 5000 行）；`mix fyrlet.prune` 仍可手动执行。
-- Oban 已完成作业由 `pruner` 清理：保留 1 小时、每 10 秒最多删 50000 条。Oban 默认每 30 秒最多删 10000 条，持续写入超过约 333 次/秒时清理会跟不上，所以这里调高了。
-- `POOL_SIZE` 设置数据库连接池大小（默认 10）。写入事务会在整个事务期间占用连接；这个值是否限制吞吐尚未实测。
+`config :fyrlet, plugins: [FyrletWebhooks]`，`config :fyrlet_webhooks, sources: %{"billing" => %{project_id:, secret:, handler:}}`；`POST /api/v1/plugins/webhooks/<source>`。事件 ID 记在插件自己的表 `webhooks_events`，由插件内的定时任务按 `retention_seconds` 清理。
 
-Telemetry 事件包括 fyrlet.operation.stop、fyrlet.subscription.query、fyrlet.subscription.snapshot、fyrlet.subscription.delta 和 fyrlet.subscription.count，另有 Ecto / Oban 自身事件。duration 为 monotonic native 单位，snapshot 的 bytes 为完整数据 JSON 字节，delta 的 bytes 为 patch JSON 字节（不含事件外壳），active 为当前本节点订阅数。默认关闭 Phoenix 连接参数及 channel 参数日志，业务异常只记录异常类型，客户端得到统一错误。
+### Ops（插件 `FyrletOps`）
 
-fyrlet.auth.batch 事件包含 duration、requests（本批请求数）与 sessions（去重后会话数），metadata.result 表示查询成功或失败。fyrlet.transport.batch 包含 messages 与 bytes（被聚合的 Phoenix 帧字节之和，不含 batch 外壳）。默认 Phoenix JSON serializer 配合 Jason 时，快照和 delta 可复用 Observer 已编码的 JSON；其他 serializer 或 JSON 库保留普通数据推送路径。
+`config :fyrlet, plugins: [FyrletOps]`。`FyrletOps.Status.status/1` 与 `alerts/1` 提供有界状态与告警；`config :fyrlet_ops, thresholds: %{...}, alert_handlers: [Mod], interval_ms: 30_000`，处理器实现 `FyrletOps.AlertHandler.handle_alert(:firing | :resolved, alert)`，只在状态转换时调用，崩溃会被记录并跳过。`mix fyrlet.ops [--fail-on-alert]` 可作定时检查；项目级状态在 `GET /api/v1/plugins/ops/status`。
 
-### 传输批处理与故障恢复
+### 写自己的插件的测试
 
-SocketTransport 保持单帧为标准 Phoenix 五元素数组；多帧出站消息包装为 `{"batch":[...]}`，保留帧顺序。只聚合同轮 transport mailbox 已有的推送，通过自发送 flush 消息提交，不设置等待凑批定时器。socket_batch_max_messages 默认 64 且硬上限为 64；socket_batch_max_bytes 默认 256 KiB，是聚合预算，单条超预算消息单独发送，不截断。入站 Socket 帧 64 KiB 限制与出站批处理预算不同。批处理可混合不同 topic，不提供跨订阅事务或原子可见性；自写客户端必须支持此包装，不能假定原生 Phoenix decoder 即可处理。
+`Fyrlet.Testing` 提供 `project/0`、`user/2`、`drive/1` 等辅助，不依赖测试框架；用 `Fyrlet.Conformance.Plugin.failures/1` 检查插件。可参考 `packages/fyrlet_ops/test`。
 
-channel 监控 Observer，运行中的 Observer 退出时发送 retryable 的 INTERNAL_ERROR；会话检查 worker 故障或超时也返回 retryable 内部错误，不绕过认证。SDK 收到 retryable status 后重建连接和订阅，以新 generation 的完整快照恢复，不重放未确认的业务写入。attach 遇到 Observer 调用退出会内部重试一次，仍失败则返回 retryable 错误；当前 SDK 的 join error 分支只有 UNAUTHENTICATED 自动恢复，其他 join 错误需显式 reconnect，不能把它等同于运行中 retryable status 的自动恢复。
+### 插件
 
-### 运行时调优
+接口与规则见 [PLUGINS.md](PLUGINS.md#插件-api)。`config :fyrlet, plugins: […]`；必需插件失败阻止启动，可选插件失败被隔离；用 `Fyrlet.Conformance.Plugin.failures/1` 在自己的测试里检查插件。
 
-早期在本机 M3 Pro 的低负载实时推送测试中，下面的可选配置降低过累计 CPU 消耗。该历史对照报告已移除，**没有在同限额环境中复测**，请把它当作待验证的可选项：
+## 代码组织
 
-```sh
-ERL_FLAGS='+S 4:4 +sbwt none +sbwtdcpu none +sbwtdio none' \
-MIX_ENV=prod mix phx.server
-```
+`lib/` 的目录与模块名一一对应，测试目录镜像 `lib/`；可选能力放在 `packages/`，各是独立的 Mix 项目。
 
-此配置需要已有的生产数据库、密钥与其他环境变量。它没有写入全局默认值；调度器数量应结合部署 CPU 预算和实际负载重新测试。当前结果不能证明最大吞吐提升，低负载延迟也没有随 CPU 消耗同比下降。最新的同资源测试使用容器 cgroup 限额，BEAM 自动只启用 1 个调度器，没有使用上述手动配置。
+| 位置 / 命名空间 | 内容 |
+| --- | --- |
+| `lib/fyrlet/`（根） | 契约与运行时：`Runtime`、`Registry`、`Schema`、`Definition`、`Capabilities`、`Scope`、`Auth`、`Error`；测试辅助 `Testing` |
+| `lib/fyrlet/subscriptions/` | 订阅管线：`Observer`、`View`、`Delta`、`RecordIndex`、`SessionChecks`、`Tracker` |
+| `lib/fyrlet/runs/` | 持久 Run：状态机、引擎、恢复、执行器协议、限额 |
+| `lib/fyrlet/effects/` | Outbox：`Effects`（创建、派发、对账）、`Receipt`、`Resolution`、`Recovery`、`Store`、`Worker`、适配器行为 `Adapter` |
+| `lib/fyrlet/features/` | 核心可选特性（按能力开关）：`Anonymous`、`Ingest`、`Stream`（追加订阅）、`Executors`。它们改变主体类型、操作种类、通道或协议，只能由核心定义，**不是插件** |
+| `lib/fyrlet/plugin*.ex`、`conformance/` | 插件接口、加载与一致性套件 |
+| `lib/fyrlet_web/` | HTTP、Socket 与频道 |
+| `packages/fyrlet_webhooks`、`packages/fyrlet_ops` | **插件**（`Fyrlet.Plugin`）：自带迁移、进程、路由 `/api/v1/plugins/<name>/…` |
+| `packages/fyrlet_effect_http`、`packages/fyrlet_effect_email` | **副作用适配器包**（`Fyrlet.Effects.Adapter`），经 `effect_adapters` 注册 |
 
-## 当前发布边界
-
-当前完成单节点参考应用及本地 SDK；尚未发布独立 Hex 包、npm 包或商业托管平台。完整容量基线、跨节点部署、全局配额、管理 UI、OIDC 验证器与密钥轮换界面后续实现。
+接入一个包：在宿主 `mix.exs` 加路径依赖（如 `{:fyrlet_ops, path: "packages/fyrlet_ops"}`），插件再写进 `config :fyrlet, plugins: [FyrletOps]`，然后 `mix fyrlet.migrate`（插件迁移随之执行）。包有各自的测试：`cd packages/fyrlet_ops && mix test`；`scripts/test_all.sh` 一次跑完所有套件。

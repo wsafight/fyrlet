@@ -19,7 +19,9 @@ defmodule Fyrlet.Fixtures do
   # Test-only reference that also reports a content fingerprint and record index for a
   # view, optionally recomputed incrementally from a previous result and a change.
   def snapshot_with_metadata(actor, subscription, previous \\ nil, change \\ nil) do
-    alias Fyrlet.{RecordIndex, Runtime, View}
+    alias Fyrlet.Runtime
+    alias Fyrlet.Subscriptions.RecordIndex
+    alias Fyrlet.Subscriptions.View
 
     previous_view =
       case previous do
