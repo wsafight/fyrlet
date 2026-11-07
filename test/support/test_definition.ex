@@ -17,10 +17,31 @@ defmodule Fyrlet.TestDefinition do
         "test.denied" => operation.("write"),
         "test.raise" => operation.("write"),
         "test.revoke" => operation.("read"),
-        "test.echo" => operation.("read")
+        "test.echo" => operation.("read"),
+        "test.public_read" => Map.put(operation.("read"), "public", true),
+        "test.public_write" => Map.put(operation.("write"), "public", true)
       },
       "subscriptions" => %{
+        "test.public_feed" => %{
+          "public" => true,
+          "input" => Fyrlet.Schema.object(%{}),
+          "output" => %{"type" => "string"}
+        },
+        "test.private_feed" => %{
+          "input" => Fyrlet.Schema.object(%{}),
+          "output" => %{"type" => "string"}
+        },
         "test.denied_sub" => %{
+          "input" => Fyrlet.Schema.object(%{}),
+          "output" => %{"type" => "string"}
+        },
+        # Loading it revokes the viewer's own session: the data must never be sent.
+        "test.revoking_feed" => %{
+          "input" => Fyrlet.Schema.object(%{}),
+          "output" => %{"type" => "string"}
+        },
+        # Counts how often its data is loaded.
+        "test.counting_feed" => %{
           "input" => Fyrlet.Schema.object(%{}),
           "output" => %{"type" => "string"}
         }
@@ -38,7 +59,7 @@ defmodule Fyrlet.TestDefinition do
 
   @impl true
   def execute("test.bad_output", actor, _input) do
-    Fyrlet.Repo.insert!(%Fyrlet.InboxItem{
+    Fyrlet.Repo.insert!(%InboxExample.Item{
       project_id: actor.project_id,
       subject_id: actor.subject_id,
       text: "rolled back",
@@ -56,6 +77,23 @@ defmodule Fyrlet.TestDefinition do
   end
 
   def execute("test.echo", _actor, _input), do: {:ok, "ok", []}
+  def execute("test.public_read", actor, _input), do: {:ok, "public:" <> actor.kind, []}
+  def execute("test.public_write", _actor, _input), do: {:ok, "written", []}
+  def execute("test.public_feed", _actor, _input), do: {:ok, "feed", []}
+  def execute("test.private_feed", _actor, _input), do: {:ok, "secret", []}
 
-  def execute("test.denied_sub", _actor, _input), do: {:ok, "ok", []}
+  def execute("test.denied_sub", _actor, _input) do
+    send(Application.get_env(:fyrlet, :load_probe, self()), :loaded)
+    {:ok, "ok", []}
+  end
+
+  def execute("test.revoking_feed", actor, _input) do
+    {:ok, _revoked} = Fyrlet.Auth.revoke_own_session(actor)
+    {:ok, "secret", []}
+  end
+
+  def execute("test.counting_feed", _actor, _input) do
+    send(Application.get_env(:fyrlet, :load_probe, self()), :loaded)
+    {:ok, "counted", []}
+  end
 end

@@ -11,3 +11,9 @@
 /bench/apps/meteor/node_modules/
 *.log
 .DS_Store
+/examples/*/_build/
+# mix test --cover output
+/cover/
+/examples/*/cover/
+/packages/_build/
+/packages/*/cover/

@@ -209,7 +209,9 @@ defmodule Fyrlet.AuthTest do
 
     assert {:ok, %{"revoked" => true}} = Auth.revoke_own_session(alice.actor)
     assert {:error, %Error{code: "UNAUTHENTICATED"}} = Auth.revalidate(alice.actor)
-    assert {:error, %Error{code: "UNAUTHENTICATED"}} = Auth.authenticate(alice.token, first.project.id)
+
+    assert {:error, %Error{code: "UNAUTHENTICATED"}} =
+             Auth.authenticate(alice.token, first.project.id)
 
     assert Repo.get_by!(Fyrlet.Session, id: alice.actor.session_id).revoked_at
   end

@@ -40,6 +40,7 @@ defmodule Fyrlet.Session do
     belongs_to(:subject, Fyrlet.Subject)
     belongs_to(:service_key, Fyrlet.ServiceKey)
     field(:token_hash, :binary)
+    field(:kind, :string, default: "user")
     field(:expires_at, :utc_datetime_usec)
     field(:revoked_at, :utc_datetime_usec)
     timestamps(type: :utc_datetime_usec)
@@ -58,21 +59,6 @@ defmodule Fyrlet.Idempotency do
     field(:input_hash, :binary)
     field(:result, :map)
     field(:expires_at, :utc_datetime_usec)
-    timestamps(type: :utc_datetime_usec)
-  end
-end
-
-defmodule Fyrlet.InboxItem do
-  use Ecto.Schema
-  @primary_key {:id, :binary_id, autogenerate: true}
-  @foreign_key_type :binary_id
-  schema "inbox_items" do
-    belongs_to(:project, Fyrlet.Project)
-    belongs_to(:subject, Fyrlet.Subject)
-    field(:text, :string)
-    field(:content_type, :string, default: "text")
-    field(:archived, :boolean, default: false)
-    field(:version, :integer, default: 1)
     timestamps(type: :utc_datetime_usec)
   end
 end

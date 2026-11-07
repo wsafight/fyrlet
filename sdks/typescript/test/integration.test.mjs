@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { readFile, open } from "node:fs/promises";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { createClient, ApiError } from "../dist/index.js";
 import { createSessionService } from "../dist/server.js";
 import { until } from "./helpers.mjs";
@@ -17,7 +18,7 @@ const log = await open(new URL("../../../.local/integration/server.log", import.
 let server;
 
 async function startServer() {
-  server = spawn("mix", ["phx.server"], { cwd: root, env: process.env, stdio: ["ignore", log.fd, log.fd] });
+  server = spawn("mix", ["phx.server"], { cwd: process.env.INTEGRATION_APP ?? resolve(root, "examples/inbox"), env: process.env, stdio: ["ignore", log.fd, log.fd] });
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (server.exitCode !== null) throw new Error("Integration server exited; inspect .local/integration/server.log");
@@ -69,6 +70,43 @@ test("two SDK devices receive committed snapshots, replay and concurrent duplica
   assert.equal(mutations.filter((result) => result.status === "rejected" && result.reason.code === "CONFLICT").length, 1);
 });
 
+test("socket RPC writes produce ordered field deltas and preserve immutable earlier views", async (context) => {
+  const frames = [];
+  const sent = [];
+  class RecordingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => { try { frames.push(JSON.parse(String(event.data))); } catch {} });
+    }
+    send(data) { sent.push(JSON.parse(String(data))); super.send(data); }
+  }
+  const writer = await user(context, 0, crypto.randomUUID(), { operationTransport: "socket" });
+  const reader = await user(context, 0, writer.subject, { WebSocket: RecordingSocket });
+  const items = [];
+  for (let index = 0; index < 8; index++) items.push(await writer.client.call("inbox.add", { text: `seed ${index}`.padEnd(128, "x") }));
+  const subscription = reader.client.subscribe("inbox.recent", {});
+  await until(() => subscription.getState().status === "ready");
+  const earlier = subscription.getState().data;
+  const item = items[0];
+  for (let version = 1; version <= 6; version++) {
+    const updated = await writer.client.call("inbox.update", { id: item.id, expected_version: version, text: `version ${version + 1}` });
+    await until(() => subscription.getState().data?.some((entry) => entry.id === item.id && entry.version === updated.version));
+  }
+  assert.equal(earlier.find((entry) => entry.id === item.id).version, 1);
+  assert.ok(frames.filter((frame) => frame[3] === "delta").length >= 6);
+  assert.ok(frames.filter((frame) => frame[3] === "delta").every((frame) =>
+    Object.keys(frame[4]).sort().join(",") === "b,g,p,s" && typeof frame[4].g === "string"));
+  const acknowledgements = sent.filter((frame) => frame[3] === "ack");
+  assert.ok(acknowledgements.length >= 7);
+  assert.ok(acknowledgements.every((frame) => frame[0] === null && frame[1] === null &&
+    Object.keys(frame[4]).sort().join(",") === "g,s"));
+  assert.equal(frames.filter((frame) => frame[3] === "phx_reply" && frame[1] === null).length, 0);
+  const key = crypto.randomUUID();
+  const saved = await writer.client.call("inbox.add", { text: "idempotent socket" }, { idempotencyKey: key });
+  assert.deepEqual(await writer.client.call("inbox.add", { text: "idempotent socket" }, { idempotencyKey: key }), saved);
+  await assert.rejects(writer.client.call("inbox.add", { text: "changed" }, { idempotencyKey: key }), { code: "CONFLICT", status: 409 });
+});
+
 test("projects and subjects cannot read or mutate each other's inboxes", async (context) => {
   const first = await user(context);
   const otherUser = await user(context);
@@ -85,6 +123,40 @@ test("projects and subjects cannot read or mutate each other's inboxes", async (
   const spoofed = await fetch(`${endpoint}/api/v1/identity`, { headers: { authorization: `Bearer ${first.session.token}`, "x-project-id": projects[1].project_id } });
   assert.equal(spoofed.status, 401);
   await assert.rejects(services[1].revokeSession(first.session.session_id), { code: "NOT_FOUND" });
+});
+
+test("one connection multiplexes bounded views and applies batched membership changes", async (context) => {
+  const frames = [];
+  class RecordingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    }
+  }
+  const reader = await user(context, 0, crypto.randomUUID(), { WebSocket: RecordingSocket });
+  const writer = await user(context, 0, reader.subject, { operationTransport: "socket" });
+  for (let index = 0; index < 12; index++) await writer.client.call("inbox.add", { text: `seed ${index}` });
+  const subscriptions = Array.from({ length: 12 }, () => reader.client.subscribe("inbox.recent", { limit: 3 }));
+  await until(() => subscriptions.every((subscription) => subscription.getState().status === "ready"));
+  const original = subscriptions[0].getState().data;
+  const item = await writer.client.call("inbox.add", { text: "new visible item" });
+  const converge = async () => {
+    const expected = (await writer.client.call("inbox.history", { limit: 3 })).items;
+    await until(() => subscriptions.every((subscription) => JSON.stringify(subscription.getState().data) === JSON.stringify(expected)));
+  };
+  await converge();
+  await writer.client.call("inbox.archive", { id: item.id, expected_version: 1 });
+  await converge();
+  await writer.client.call("inbox.archive", { id: item.id, expected_version: 2, archived: false });
+  await converge();
+  await writer.client.call("inbox.delete", { id: item.id, expected_version: 3 });
+  await converge();
+  assert.equal(original.length, 3);
+  assert.ok(!original.some((record) => record.id === item.id));
+  const batches = frames.filter((frame) => frame.batch);
+  assert.ok(batches.some((frame) => frame.batch.length > 1));
+  assert.ok(batches.every((frame) => frame.batch.length <= 64));
+  console.log(`multiplex: ${batches.length} batches carry ${batches.reduce((sum, frame) => sum + frame.batch.length, 0)} channel messages`);
 });
 
 test("disconnect, changes while offline and rejoin restore the current full snapshot", async (context) => {
@@ -170,4 +242,94 @@ test("an application restart preserves PostgreSQL data and SDK subscriptions rec
   await startServer();
   await until(() => subscription.getState().status === "ready" && subscription.getState().generation !== generation, 10_000);
   assert.ok(subscription.getState().data.some((entry) => entry.id === item.id));
+});
+
+test("Run SDK starts idempotently, observes waits, signals once and completes on the server", async (context) => {
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const idempotencyKey = crypto.randomUUID();
+  const started = await owner.client.startRun("work.start", { text: "approve this task" }, { idempotencyKey });
+  const replay = await owner.client.startRun("work.start", { text: "approve this task" }, { idempotencyKey });
+  assert.equal(replay.run_id, started.run_id);
+  const detail = owner.client.subscribeRun(started.run_id);
+  const recent = owner.client.subscribeRecentRuns();
+  await until(() => detail.getState().data?.status === "waiting", 10_000);
+  await until(() => recent.getState().data?.some((run) => run.id === started.run_id));
+  const persisted = await owner.client.getRun(started.run_id);
+  assert.equal(persisted.status, "waiting");
+  const wait = persisted.steps.find((step) => step.type === "wait");
+  const signal = { wait_id: wait.id, name: "approve", payload: { approved: true }, idempotency_key: crypto.randomUUID() };
+  const receipt = await owner.client.signalRun(started.run_id, signal);
+  const duplicate = await owner.client.signalRun(started.run_id, signal);
+  assert.ok(["accepted", "consumed"].includes(receipt.status));
+  assert.equal(duplicate.signal_id, receipt.signal_id);
+  assert.ok(["accepted", "consumed"].includes(duplicate.status));
+  await until(() => detail.getState().data?.status === "completed", 10_000);
+  assert.equal((await owner.client.getRun(started.run_id)).status, "completed");
+});
+
+test("Run SDK enforces project and subject isolation and persists cancellation across restart", async (context) => {
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const stranger = await user(context, 0, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const outsider = await user(context, 1, crypto.randomUUID(), { capabilities: { runs: 1 } });
+  const started = await owner.client.startRun("work.start", { text: "cancel this task" });
+  const detail = owner.client.subscribeRun(started.run_id);
+  await until(() => detail.getState().data?.status === "waiting", 10_000);
+  for (const denied of [stranger, outsider]) {
+    await assert.rejects(denied.client.getRun(started.run_id), (error) => ["FORBIDDEN", "NOT_FOUND"].includes(error.code));
+    await assert.rejects(denied.client.cancelRun(started.run_id), (error) => ["FORBIDDEN", "NOT_FOUND"].includes(error.code));
+    const subscription = denied.client.subscribeRun(started.run_id);
+    await until(() => subscription.getState().status === "error");
+    assert.equal(subscription.getState().data, undefined);
+  }
+  await owner.client.cancelRun(started.run_id);
+  await until(() => detail.getState().data?.status === "cancelled", 10_000);
+  const generation = detail.getState().generation;
+  await stopServer();
+  await until(() => detail.getState().status === "recovering");
+  await startServer();
+  await until(() => detail.getState().status === "ready" && detail.getState().generation !== generation, 10_000);
+  assert.equal(detail.getState().data.status, "cancelled");
+});
+
+test("append SDK receives actual batches, bounds its window and isolates each subject", async (context) => {
+  const frames = [];
+  class RecordingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    }
+  }
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { append: 1 }, WebSocket: RecordingSocket });
+  const stranger = await user(context, 0, crypto.randomUUID(), { capabilities: { append: 1 } });
+  const subscription = owner.client.subscribeAppend("work.feed", {});
+  const privateFeed = stranger.client.subscribeAppend("work.feed", {});
+  await until(() => subscription.getState().status === "ready" && privateFeed.getState().status === "ready");
+  for (let index = 0; index < 6; index++) {
+    await owner.client.call("work.post", { text: `message ${index}` });
+    await until(() => subscription.getState().data?.at(-1)?.text === `message ${index}`);
+  }
+  assert.deepEqual(subscription.getState().data.map((item) => item.text), ["message 3", "message 4", "message 5"]);
+  assert.deepEqual(privateFeed.getState().data, []);
+  assert.ok(frames.some((frame) => frame[3] === "append"));
+  const seq = subscription.getState().seq;
+  await subscription.refresh();
+  await until(() => subscription.getState().seq > seq);
+  assert.equal(subscription.getState().data.length, 3);
+});
+
+test("append SDK restores the current window after restart and clears revoked sessions", async (context) => {
+  const owner = await user(context, 0, crypto.randomUUID(), { capabilities: { append: 1 } });
+  const subscription = owner.client.subscribeAppend("work.feed", {});
+  await until(() => subscription.getState().status === "ready");
+  await owner.client.call("work.post", { text: "persisted append" });
+  await until(() => subscription.getState().data?.length === 1);
+  const generation = subscription.getState().generation;
+  await stopServer();
+  await until(() => subscription.getState().status === "recovering");
+  await startServer();
+  await until(() => subscription.getState().status === "ready" && subscription.getState().generation !== generation, 10_000);
+  assert.deepEqual(subscription.getState().data, [{ text: "persisted append" }]);
+  await services[0].revokeSession(owner.session.session_id);
+  await until(() => subscription.getState().status === "error");
+  assert.equal(subscription.getState().data, undefined);
 });

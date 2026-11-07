@@ -23,7 +23,7 @@ export function schemaType(schema, mode = "input") {
 }
 
 export function generate(contract) {
-  if (contract.protocol_version !== 1 || contract.schema_dialect !== "realtime-subset-v1") throw new Error("Unsupported contract protocol or dialect");
+  if (contract.protocol_version !== 1 || contract.schema_dialect !== "fyrlet-subset") throw new Error("Unsupported contract protocol or dialect");
   const sections = ["operations", "subscriptions"].map((kind) => {
     const entries = Object.entries(contract[kind]).sort(([left], [right]) => left.localeCompare(right)).map(([name, specification]) =>
       `    ${JSON.stringify(name)}: { input: ${schemaType(specification.input)}; output: ${schemaType(specification.output, "output")} };`,

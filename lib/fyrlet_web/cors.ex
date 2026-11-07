@@ -13,7 +13,7 @@ defmodule FyrletWeb.CORS do
         conn
 
       [origin] ->
-        if origin in Application.get_env(:fyrlet, :cors_origins, []) do
+        if same_origin?(conn, origin) or origin in Application.get_env(:fyrlet, :cors_origins, []) do
           conn =
             conn
             |> put_resp_header("access-control-allow-origin", origin)
@@ -21,7 +21,7 @@ defmodule FyrletWeb.CORS do
             |> put_resp_header("access-control-allow-methods", "GET, POST, DELETE, OPTIONS")
             |> put_resp_header(
               "access-control-allow-headers",
-              "authorization, content-type, x-project-id, idempotency-key, x-request-id"
+              "authorization, content-type, x-project-id, idempotency-key, x-request-id, x-fyrlet-capabilities"
             )
             |> put_resp_header("access-control-expose-headers", "x-request-id")
 
@@ -32,6 +32,16 @@ defmodule FyrletWeb.CORS do
 
       _invalid ->
         conn |> FyrletWeb.Response.error(Fyrlet.Error.forbidden()) |> halt()
+    end
+  end
+
+  defp same_origin?(conn, origin) do
+    case URI.new(origin) do
+      {:ok, %URI{userinfo: nil, path: nil, query: nil, fragment: nil} = uri} ->
+        uri.scheme == to_string(conn.scheme) and uri.host == conn.host and uri.port == conn.port
+
+      _invalid ->
+        false
     end
   end
 end

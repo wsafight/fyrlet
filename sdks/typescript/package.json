@@ -4,11 +4,23 @@
   "private": true,
   "description": "Fyrlet client for typed operations and recoverable Phoenix subscriptions",
   "type": "module",
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "exports": {
-    ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
-    "./server": {"types": "./dist/server.d.ts", "import": "./dist/server.js"},
-    "./example-contract": {"types": "./dist/generated/app.d.ts", "import": "./dist/generated/app.js"}
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./example-contract": {
+      "types": "./dist/generated/app.d.ts",
+      "import": "./dist/generated/app.js"
+    }
   },
   "scripts": {
     "generate": "node scripts/generate.mjs ../../priv/contract.json src/generated/app.ts",
@@ -17,7 +29,15 @@
     "test": "npm run build && node --test test/unit.test.mjs",
     "test:integration": "npm run build && node --test test/integration.test.mjs"
   },
-  "dependencies": {"phoenix": "1.8.16"},
-  "devDependencies": {"@types/phoenix": "1.6.8", "typescript": "7.0.2"},
-  "engines": {"node": ">=22"}
+  "dependencies": {
+    "phoenix": "1.8.16"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/phoenix": "1.6.8",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }

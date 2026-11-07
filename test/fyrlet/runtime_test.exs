@@ -35,6 +35,34 @@ defmodule Fyrlet.RuntimeTest do
              Runtime.call(alice.actor, "inbox.add", %{"text" => "different"}, key)
   end
 
+  test "the prune worker removes only expired idempotency results", %{alice: alice} do
+    assert {:ok, _item} =
+             Runtime.call(
+               alice.actor,
+               "inbox.add",
+               %{"content_type" => "text", "text" => "keep"},
+               "prune-keep"
+             )
+
+    assert {:ok, _item} =
+             Runtime.call(
+               alice.actor,
+               "inbox.add",
+               %{"content_type" => "text", "text" => "old"},
+               "prune-old"
+             )
+
+    import Ecto.Query
+    past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    Repo.update_all(from(entry in Fyrlet.Idempotency, where: entry.key == "prune-old"),
+      set: [expires_at: past]
+    )
+
+    assert :ok = Fyrlet.PruneWorker.perform(%Oban.Job{})
+    assert [%{key: "prune-keep"}] = Repo.all(Fyrlet.Idempotency)
+  end
+
   test "missing keys, schema violations, unknown operations and denied operations have no writes",
        %{alice: alice} do
     assert {:error, %Error{code: "VALIDATION_FAILED"}} =
@@ -80,7 +108,7 @@ defmodule Fyrlet.RuntimeTest do
     assert result["items"] == [item]
     {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
     assert {:ok, [^item]} = Runtime.snapshot(alice.actor, subscription)
-    refute subscription.scope == Fyrlet.Example.Inbox.scope("inbox.recent", bob.actor, %{})
+    refute subscription.scope == InboxExample.Inbox.scope("inbox.recent", bob.actor, %{})
     assert project.project.id == alice.actor.project_id
 
     assert {:error, %Error{code: "NOT_FOUND"}} =
@@ -224,8 +252,8 @@ defmodule Fyrlet.RuntimeTest do
 
     assert subscription.name == "inbox.recent"
     assert subscription.parameters == %{"limit" => 50, "include_archived" => false}
-    assert subscription.module == Fyrlet.Example.Inbox
-    assert subscription.scope == Fyrlet.Example.Inbox.scope("inbox.recent", alice.actor, %{})
+    assert subscription.module == InboxExample.Inbox
+    assert subscription.scope == InboxExample.Inbox.scope("inbox.recent", alice.actor, %{})
 
     assert {:error, %Error{code: "NOT_FOUND"}} =
              Runtime.prepare_subscription(alice.actor, "inbox.unknown", %{})
@@ -254,7 +282,10 @@ defmodule Fyrlet.RuntimeTest do
     alice: alice
   } do
     assert {:ok, "ok"} = Runtime.call(alice.actor, "test.echo", %{})
-    assert {:error, %Error{code: "UNAUTHENTICATED"}} = Runtime.call(alice.actor, "test.revoke", %{})
+
+    assert {:error, %Error{code: "UNAUTHENTICATED"}} =
+             Runtime.call(alice.actor, "test.revoke", %{})
+
     assert {:error, %Error{code: "UNAUTHENTICATED"}} = Runtime.call(alice.actor, "test.echo", %{})
   end
 

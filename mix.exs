@@ -14,10 +14,14 @@ defmodule Fyrlet.MixProject do
   end
 
   def application do
-    [mod: {Fyrlet.Application, []}, extra_applications: [:logger, :crypto, :runtime_tools]]
+    [
+      mod: {Fyrlet.Application, []},
+      extra_applications: [:logger, :crypto, :runtime_tools, :inets, :ssl, :public_key]
+    ]
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # The reference Inbox application lives in examples/inbox; core tests compile its source.
+  defp elixirc_paths(:test), do: ["lib", "test/support", "examples/inbox/lib"]
   defp elixirc_paths(_environment), do: ["lib"]
 
   defp deps do
@@ -34,7 +38,7 @@ defmodule Fyrlet.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+      test: ["fyrlet.migrate --create --quiet", "test"]
     ]
   end
 end

@@ -27,7 +27,7 @@ export function channelError(payload: unknown): ApiError {
   if (payload && typeof payload === "object" && "error" in payload) {
     const error = payload.error;
     if (error && typeof error === "object" && "code" in error && "message" in error) {
-      return new ApiError(error as ErrorDetails);
+      return new ApiError(error as ErrorDetails, "status" in payload && typeof payload.status === "number" ? payload.status : 0);
     }
   }
   return new ApiError({ code: "PROTOCOL_ERROR", message: "The server returned an invalid channel response" });

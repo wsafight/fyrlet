@@ -4,11 +4,12 @@ defmodule Fyrlet.InvalidationWorker do
   @impl true
   def perform(job), do: broadcast(job)
 
-  def broadcast(%Oban.Job{id: identifier, args: %{"scopes" => scopes}}) do
-    message = if is_integer(identifier), do: {:invalidated, identifier}, else: :invalidated
+  def broadcast(%Oban.Job{id: identifier, args: %{"scopes" => scopes}}, change \\ nil) do
+    message =
+      if is_nil(change), do: {:invalidated, identifier}, else: {:invalidated, identifier, change}
 
     Enum.each(scopes, fn scope ->
-      Phoenix.PubSub.broadcast(Fyrlet.PubSub, scope, message)
+      :ok = Phoenix.PubSub.broadcast(Fyrlet.PubSub, scope, message)
     end)
 
     :ok

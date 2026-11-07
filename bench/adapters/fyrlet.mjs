@@ -1,9 +1,9 @@
 import { createClient } from "../../sdks/typescript/dist/index.js";
 
 export const capabilities = {
-  transport: "Phoenix Channels v2 + HTTP", database: "PostgreSQL", synchronization: "bounded full snapshots",
+  transport: "Phoenix Channels v2 + bounded same-turn frame batches + unreferenced ACK + operation RPC", database: "PostgreSQL", synchronization: "session-isolated shared observers; normalized ID views; incremental windows + bounded reserve; compact deltas + immutable SDK view indexes",
   idempotency: "transactional, retained 24h", notification: "post-commit broadcast + deduplicated transactional Oban fallback + reconciliation",
-  client: "Fyrlet TypeScript SDK", authorization: "session revalidated on operations and snapshots",
+  client: "Fyrlet TypeScript SDK", authorization: "operations revalidated; shared refresh checks session before and after computation, with independent join checks and expiry enforcement",
 };
 
 export async function connect({ endpoint, fixture, user, network, timeoutMs, observe = true }) {
@@ -13,6 +13,7 @@ export async function connect({ endpoint, fixture, user, network, timeoutMs, obs
     endpoint, projectId: fixture.project_id, WebSocket: network.WebSocket, fetch: network.fetch, timeoutMs,
     getToken: async () => { if (offline) await offline; return user.token; },
     retryDelayMs: () => 50,
+    operationTransport: "socket",
   });
   const subscription = observe ? client.subscribe("inbox.recent", { limit: fixture.rows }) : undefined;
   if (!observe) {

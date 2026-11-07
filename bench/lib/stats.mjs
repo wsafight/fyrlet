@@ -8,6 +8,34 @@ export function summary(samples) {
   };
 }
 
+export function series(capacity = 100000, random = Math.random) {
+  const samples = [];
+  let count = 0;
+  let total = 0;
+  let minimum = Infinity;
+  let maximum = -Infinity;
+  return {
+    samples,
+    get count() { return count; },
+    record(value) {
+      count++;
+      total += value;
+      minimum = Math.min(minimum, value);
+      maximum = Math.max(maximum, value);
+      if (samples.length < capacity) samples.push(value);
+      else {
+        const index = Math.floor(random() * count);
+        if (index < capacity) samples[index] = value;
+      }
+    },
+    summary() {
+      return { ...summary(samples), count, min: count ? minimum : null, max: count ? maximum : null,
+        mean: count ? total / count : null, sampleCount: samples.length,
+        percentiles: count > capacity ? "uniform reservoir sample" : "exact" };
+    },
+  };
+}
+
 export function view(records) {
   return records.map(({ id, text, version }) => ({ id, text, version }))
     .sort((left, right) => left.id.localeCompare(right.id));
@@ -19,7 +47,13 @@ export function assertView(actual, expected) {
   }
 }
 
+export function assertCompleteView(actual, expected) {
+  const ordered = (records) => [...records].sort((left, right) => left.id.localeCompare(right.id));
+  if (!isDeepStrictEqual(ordered(actual), ordered(expected))) throw new Error("Final complete records differ from committed records");
+}
+
 export function payload(marker, bytes) {
   if (Buffer.byteLength(marker) > bytes) throw new Error("Marker exceeds payload size");
   return marker + "x".repeat(bytes - Buffer.byteLength(marker));
 }
+import { isDeepStrictEqual } from "node:util";

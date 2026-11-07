@@ -1,0 +1,152 @@
+{
+  "reports": [
+    {
+      "domain": "notify",
+      "measured_at": "2026-11-07T04:58:15.183Z",
+      "cases": [
+        {
+          "profile": "desktop-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "passed": true
+        },
+        {
+          "profile": "android-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 393,
+            "height": 727
+          },
+          "passed": true
+        },
+        {
+          "profile": "iphone-webkit",
+          "engine": "webkit",
+          "browser_version": "26.6",
+          "viewport": {
+            "width": 390,
+            "height": 664
+          },
+          "passed": true
+        }
+      ],
+      "limits": "Headless browsers and emulated mobile viewports; not physical-device testing or pixel-diff regression testing"
+    },
+    {
+      "domain": "flow",
+      "measured_at": "2026-11-07T04:58:22.548Z",
+      "cases": [
+        {
+          "profile": "desktop-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "passed": true
+        },
+        {
+          "profile": "android-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 393,
+            "height": 727
+          },
+          "passed": true
+        },
+        {
+          "profile": "iphone-webkit",
+          "engine": "webkit",
+          "browser_version": "26.6",
+          "viewport": {
+            "width": 390,
+            "height": 664
+          },
+          "passed": true
+        }
+      ],
+      "limits": "Headless browsers and emulated mobile viewports; not physical-device testing or pixel-diff regression testing"
+    },
+    {
+      "domain": "agent",
+      "measured_at": "2026-11-07T04:58:27.302Z",
+      "cases": [
+        {
+          "profile": "desktop-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "passed": true
+        },
+        {
+          "profile": "android-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 393,
+            "height": 727
+          },
+          "passed": true
+        },
+        {
+          "profile": "iphone-webkit",
+          "engine": "webkit",
+          "browser_version": "26.6",
+          "viewport": {
+            "width": 390,
+            "height": 664
+          },
+          "passed": true
+        }
+      ],
+      "limits": "Headless browsers and emulated mobile viewports; not physical-device testing or pixel-diff regression testing"
+    },
+    {
+      "domain": "chat",
+      "measured_at": "2026-11-07T04:58:33.062Z",
+      "cases": [
+        {
+          "profile": "desktop-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 1280,
+            "height": 900
+          },
+          "passed": true
+        },
+        {
+          "profile": "android-chromium",
+          "engine": "chromium",
+          "browser_version": "153.0.8010.12",
+          "viewport": {
+            "width": 393,
+            "height": 727
+          },
+          "passed": true
+        },
+        {
+          "profile": "iphone-webkit",
+          "engine": "webkit",
+          "browser_version": "26.6",
+          "viewport": {
+            "width": 390,
+            "height": 664
+          },
+          "passed": true
+        }
+      ],
+      "limits": "Headless browsers and emulated mobile viewports; not physical-device testing or pixel-diff regression testing"
+    }
+  ]
+}

@@ -2,7 +2,17 @@ defmodule Mix.Tasks.Fyrlet.Contract do
   use Mix.Task
   @shortdoc "Exports the registered contract without starting the HTTP server"
 
+  @moduledoc """
+  Exports the registered contract.
+
+      mix fyrlet.contract [OUTPUT_JSON]
+
+  Without an output path the JSON is printed.
+  """
+
   def run(arguments) do
+    {_options, arguments} = OptionParser.parse!(arguments, strict: [])
+
     Mix.Task.run("compile")
     Fyrlet.Registry.validate!()
     json = Jason.encode!(Fyrlet.Registry.export(), pretty: true) <> "\n"

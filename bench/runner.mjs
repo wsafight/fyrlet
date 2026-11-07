@@ -5,7 +5,7 @@ import { cpus, totalmem, platform, release, arch, hostname } from "node:os";
 import { configuration, help } from "./lib/config.mjs";
 import { runScenario } from "./lib/scenario.mjs";
 import { markdown } from "./report.mjs";
-import { sourceFingerprint } from "./lib/manifest.mjs";
+import { schedulerOptions, sourceFingerprint } from "./lib/manifest.mjs";
 
 export async function run(config) {
   if (config.target === "all") throw new Error("Use the local launcher for --target all");
@@ -17,6 +17,10 @@ export async function run(config) {
   const fixture = JSON.parse(await readFile(config.fixtures, "utf8"));
   if (fixture.target !== config.target || fixture.rows !== config.rows || fixture.payload_bytes !== config.payloadBytes ||
       fixture.users.length < Math.max(...config.scenarios.map((scenario) => scenario.users))) throw new Error("Fixtures do not match the selected workload");
+  if ((fixture.session_model ?? "shared") !== config.sessions ||
+      config.sessions === "device" && fixture.users.some((user) => !Array.isArray(user.observer_tokens) ||
+        user.observer_tokens.length < Math.max(...config.scenarios.map((scenario) => scenario.devices)) ||
+        user.observer_tokens.some((token) => typeof token !== "string"))) throw new Error("Fixture sessions do not match the selected workload");
   const adapter = await import(`./adapters/${config.target}.mjs`);
   const root = fileURLToPath(new URL("../", import.meta.url));
   const sdk = JSON.parse(await readFile(new URL("../sdks/typescript/package.json", import.meta.url), "utf8"));
@@ -32,13 +36,15 @@ export async function run(config) {
       topology: process.env.BENCH_TOPOLOGY ?? "external; record topology separately",
       sourceRevision: process.env.BENCH_REVISION ?? "working-tree-unrecorded",
       sourceFingerprint: await sourceFingerprint(root),
+      schedulerOptions: config.target === "fyrlet" ? schedulerOptions(process.env) : [],
+      observerHibernateAfterMs: config.target === "fyrlet" ? process.env.FYRLET_OBSERVER_HIBERNATE_AFTER_MS ?? "1000" : null,
     },
     capabilities: adapter.capabilities,
     measurement: {
       propagation: "writer request start to another client's applied server view; no local optimistic result",
-      load: "closed-loop per-user versioned writes; bounded parallel users, not a maximum-throughput claim",
+      load: "closed-loop by default; soak offers paced global writes with one converging write per user and bounded concurrency; skipped offered slots are reported, not queued",
       traffic: "UTF-8 HTTP JSON bodies + WebSocket application payloads; excludes headers, framing, TLS and compression",
-      cpu: "sampled process CPU-time deltas; includes application descendants and separately sampled database tree",
+      cpu: "sampled process CPU-time deltas; application includes descendants, applicationWorker isolates the serving BEAM/Node PID, database is sampled separately; worker is a subset, do not add it to application totals",
       caveats: ["Local generator shares the host with services", "Short smoke runs do not establish capacity", "Burst/slow/reconnect may coalesce intermediate states; final views must match", "First-ready samples include client setup and are collected before warmup"],
     },
     results: [],

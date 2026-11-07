@@ -1,0 +1,426 @@
+{
+  "reports": [
+    {
+      "domain": "chat",
+      "measured_at": "2026-11-07T04:58:22.698Z",
+      "topology": "Two named BEAM nodes on one local host, shared PostgreSQL, real HTTP/WebSocket; not a multi-host production capacity claim",
+      "checks": [
+        "cross_node_shared_and_append",
+        "concurrent_idempotency",
+        "remote_membership_revocation",
+        "sigkill_proxy_failover",
+        "node_rejoin",
+        "subscription_cleanup",
+        "bounded_append_windows",
+        "full_history_no_gaps_or_duplicates",
+        "repeated_reconnects",
+        "session_renewal",
+        "reader_cache_cleanup"
+      ],
+      "after_failover": [
+        {
+          "label": "node-0",
+          "connected_peers": 1,
+          "memory_bytes": 71262144,
+          "observers": 0,
+          "processes": 886,
+          "reader_entries": 0,
+          "subscriptions": 0
+        },
+        {
+          "label": "node-1",
+          "connected_peers": 1,
+          "memory_bytes": 70192873,
+          "observers": 0,
+          "processes": 884,
+          "reader_entries": 22,
+          "subscriptions": 0
+        }
+      ],
+      "soak": {
+        "seconds": 120,
+        "clients": 12,
+        "writes": 2056,
+        "reconnects": 41,
+        "history_reconnects": 0,
+        "session_refreshes": 41,
+        "p50_ms": 32.00679200000013,
+        "p95_ms": 35.85299999999552,
+        "initial": [
+          {
+            "label": "node-0",
+            "connected_peers": 1,
+            "memory_bytes": 72356385,
+            "observers": 0,
+            "processes": 894,
+            "reader_entries": 0,
+            "subscriptions": 6
+          },
+          {
+            "label": "node-1",
+            "connected_peers": 1,
+            "memory_bytes": 71597593,
+            "observers": 0,
+            "processes": 894,
+            "reader_entries": 22,
+            "subscriptions": 6
+          }
+        ],
+        "peak": [
+          {
+            "label": "node-0",
+            "connected_peers": 1,
+            "memory_bytes": 76525261,
+            "observers": 0,
+            "processes": 894,
+            "reader_entries": 29,
+            "subscriptions": 6
+          },
+          {
+            "label": "node-1",
+            "connected_peers": 1,
+            "memory_bytes": 74750649,
+            "observers": 0,
+            "processes": 894,
+            "reader_entries": 34,
+            "subscriptions": 6
+          }
+        ],
+        "released": [
+          {
+            "label": "node-0",
+            "connected_peers": 1,
+            "memory_bytes": 71701589,
+            "observers": 0,
+            "processes": 881,
+            "reader_entries": 0,
+            "subscriptions": 0
+          },
+          {
+            "label": "node-1",
+            "connected_peers": 1,
+            "memory_bytes": 70797425,
+            "observers": 0,
+            "processes": 881,
+            "reader_entries": 0,
+            "subscriptions": 0
+          }
+        ],
+        "samples": [
+          {
+            "seconds": 0,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 72356385,
+                "observers": 0,
+                "processes": 894,
+                "reader_entries": 0,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 71597593,
+                "observers": 0,
+                "processes": 894,
+                "reader_entries": 22,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 10.054639666000002,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 73170717,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 27,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 73062961,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 34,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 20.058999041000003,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 72214613,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 26,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 73037561,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 33,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 30.074263250000005,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 71994960,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 26,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 72609953,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 32,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 40.119265625,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 72864679,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 25,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 72764969,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 31,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 50.168310541,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 72773599,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 26,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 72340193,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 33,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 60.171981625,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 72536055,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 26,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 73473065,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 33,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 70.194753958,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 70882823,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 26,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 73441065,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 32,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 80.204096541,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 74148151,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 25,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 73364825,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 32,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 90.259242583,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 75096415,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 27,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 74357113,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 34,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 100.311074125,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 76525261,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 28,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 74750649,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 17,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 110.31575774999999,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 74092013,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 29,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 74605193,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 18,
+                "subscriptions": 6
+              }
+            ]
+          },
+          {
+            "seconds": 120.156825333,
+            "nodes": [
+              {
+                "label": "node-0",
+                "connected_peers": 1,
+                "memory_bytes": 73610485,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 23,
+                "subscriptions": 6
+              },
+              {
+                "label": "node-1",
+                "connected_peers": 1,
+                "memory_bytes": 74430257,
+                "observers": 0,
+                "processes": 893,
+                "reader_entries": 29,
+                "subscriptions": 6
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "domain": "agent",
+      "measured_at": "2026-11-07T05:00:28.838Z",
+      "topology": "Two named BEAM nodes on one local host, shared PostgreSQL, real HTTP/WebSocket; not a multi-host production capacity claim",
+      "checks": [
+        "concurrent_run_idempotency",
+        "cross_node_run_subscription",
+        "owner_signal_isolation",
+        "durable_wait_after_node_loss",
+        "single_task_commit",
+        "node_rejoin"
+      ]
+    }
+  ]
+}
