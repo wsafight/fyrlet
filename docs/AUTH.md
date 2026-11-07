@@ -1,67 +1,67 @@
-# 鉴权与项目隔离
+# Authentication and project isolation
 
-鉴权分为身份与会话、授权执行点、业务授权规则和新增入口的凭证方案四块，分层边界见 [ARCHITECTURE.md](ARCHITECTURE.md#鉴权的分层边界)。
+Authentication has four parts: identity and sessions, authorization enforcement points, business authorization rules, and the credential scheme for new entry points. The layer boundaries are described in [ARCHITECTURE.md](ARCHITECTURE.md#authentication-boundaries).
 
-## 身份分层
+## Identity layers
 
-| 身份 | 凭证 | 使用位置 | 能力 |
+| Identity | Credential | Where used | Capability |
 | --- | --- | --- | --- |
-| 平台开发者 | 尚未提供平台账号 | 管理控制台 | 创建项目、管理密钥；通过受信 CLI 管理 |
-| 客户业务后端 | `rtk_` 项目服务密钥 | 客户自己的服务端 | 为已验证的外部用户签发会话、撤销本项目会话 |
-| 终端用户 | `rts_` 短期会话令牌 | Web / Node / 移动端 SDK | 调用业务与订阅该身份被授权的数据 |
-| 匿名只读主体 | `rts_` 令牌，会话 `kind = "anonymous"` | 公开页面 | 只读，且只能访问契约标记 `public` 的内容，见[匿名主体](#匿名主体) |
-| 外部执行器 | `rtx_` 执行器凭据（`Fyrlet.Features.Executors.create/3`） | 执行器进程 | 在自己项目、自己被授权的队列里领取步骤，并对自己持有的尝试续租、上报；不能做其他任何事 |
-| 回执发送方 | 项目服务密钥 `rtk_` | 客户业务后端 | 对本项目的副作用提交回执 |
-| Webhook 来源 | 配置的共享密钥 + 请求签名 | 第三方服务 | 给本项目运行的等待节点投递信号，仅此而已 |
+| Platform developer | No platform account is provided yet | Admin console | Create projects and manage keys; managed through a trusted CLI |
+| Customer backend | `rtk_` project service key | The customer's own server | Issue sessions for verified external users; revoke this project's sessions |
+| End user | `rts_` short-lived session token | Web / Node / mobile SDK | Call operations and subscribe to the data this identity is authorized to see |
+| Anonymous read-only principal | `rts_` token, session `kind = "anonymous"` | Public pages | Read-only, and only content the contract marks `public`; see [Anonymous principals](#anonymous-principals) |
+| External executor | `rtx_` executor credential (`Fyrlet.Features.Executors.create/3`) | Executor process | Claim steps from the queues it is authorized for in its own project, and renew leases on and report the attempts it holds; nothing else |
+| Receipt sender | Project service key `rtk_` | Customer backend | Submit receipts for this project's side effects |
+| Webhook source | Configured shared secret + request signature | Third-party service | Deliver signals to wait nodes of this project's runs, and nothing more |
 
-`project_id` 是公开路由标识，不是秘密或权限证明。服务密钥不能直接调用终端用户业务接口。令牌使用 32 字节安全随机数，数据库只保存 SHA-256 哈希。用户令牌不能当作执行器、服务密钥或匿名身份使用，反之亦然；后端签发会话时发行者名 `anonymous` 被保留，防止真实用户被当作匿名主体清理。
+`project_id` is a public routing identifier, not a secret or proof of permission. A service key cannot call end-user business endpoints directly. Tokens use 32 bytes of secure random data, and the database stores only a SHA-256 hash. A user token cannot be used as an executor, service key or anonymous identity, and vice versa; the issuer name `anonymous` is reserved when a backend issues a session, so that real users are not cleaned up as anonymous principals.
 
-## 接入流程
+## Onboarding flow
 
-1. 部署者运行 `mix fyrlet.project "My App"`，将返回的项目 ID 与服务密钥保存在受信后端配置中。
-2. 客户后端使用现有登录体系认证用户，从已验证的登录上下文取得外部用户标识。
-3. 客户后端调用 `POST /api/v1/sessions`，携带服务密钥和 `external_subject`，可指定 `issuer` 与有效期。
-4. 框架以 `(project_id, issuer, external_subject)` 查找或创建 Subject，返回短期用户令牌。
-5. 客户后端只把用户令牌返回给对应用户。SDK 用它进行 HTTP 调用与 Socket 认证。
-6. 令牌过期前后由宿主应用重新向自己的后端获取；框架不向终端用户暴露项目密钥，也不签发长期 refresh token。
+1. The deployer runs `mix fyrlet.project "My App"` and stores the returned project ID and service key in trusted backend configuration.
+2. The customer backend authenticates the user with its existing login system and takes the external user identifier from the verified login context.
+3. The customer backend calls `POST /api/v1/sessions` with the service key and `external_subject`, and may specify `issuer` and a lifetime.
+4. The framework looks up or creates a Subject by `(project_id, issuer, external_subject)` and returns a short-lived user token.
+5. The customer backend returns the user token only to the corresponding user. The SDK uses it for HTTP calls and Socket authentication.
+6. The host application obtains a new token from its own backend before or after expiry; the framework does not expose project keys to end users and does not issue long-lived refresh tokens.
 
-客户自己的令牌交换接口必须从登录会话取得用户 ID，不能直接信任浏览器提交的 `external_subject`。不实现密码体系、OAuth 授权服务器或第三方 JWT 验证器。
+The customer's own token-exchange endpoint must take the user ID from the login session and must not trust an `external_subject` submitted by the browser. No password system, OAuth authorization server or third-party JWT verifier is implemented.
 
-## 授权与隔离
+## Authorization and isolation
 
-- Actor 包含服务端验证得到的 project、subject、session 和有效期；不接受客户端覆盖。
-- 每次操作、订阅建立、重新查询和快照发送前复核会话与授权。
-- 业务查询在 SQL 中同时约束 project 与 subject；示例中的记录 ID 不赋予访问权。
-- Subject 和服务密钥的复合外键保证其 project 与会话所属项目一致。
-- Scope 只路由失效通知，不携带正文、不赋予权限；不同用户不共享私有快照。
-- 写入事务持有会话共享锁，撤销使用更新锁。撤销成功返回后，后续写入不能以旧会话成功提交。
+- An Actor contains the project, subject, session and expiry as verified by the server; client overrides are not accepted.
+- The session and authorization are re-checked before every operation, subscription setup, re-query and snapshot send.
+- Business queries constrain both project and subject in SQL; a record ID in an example does not grant access.
+- Composite foreign keys on Subject and service key guarantee that their project matches the project of the session.
+- A scope only routes invalidation notifications; it carries no body and grants no permission; different users do not share private snapshots.
+- A write transaction holds a shared lock on the session, and revocation takes an update lock. After a revocation returns successfully, later writes cannot commit with the old session.
 
-## 匿名主体
+## Anonymous principals
 
-- 默认拒绝：操作须是 `kind: read` 且 `public: true`，订阅须 `public: true`；`authorize/3` 仍会被调用，并能看到 `actor.kind == "anonymous"`。
-- 标记 `public` 是应用的声明——所有查看者都可以看到它返回的全部内容；框架无法对任意业务代码核实这一点。
-- 每个匿名会话是一个新的空主体，没有任何用户数据；过期的匿名主体由清理任务删除。
+- Deny by default: an operation must be `kind: read` and `public: true`, and a subscription must be `public: true`; `authorize/3` is still called and can see `actor.kind == "anonymous"`.
+- Marking something `public` is a declaration by the application: every viewer can see everything it returns; the framework cannot verify this for arbitrary business code.
+- Each anonymous session is a new, empty principal with no user data; expired anonymous principals are deleted by the cleanup job.
 
-## 执行授权
+## Execution authorization
 
-创建 Run 时记录发起者和一个执行授权（项目、操作、期限），**不保存也不重用用户令牌**。用户会话过期不会终止已受理的运行；领取每个新步骤、认领每个副作用前都复核授权，授权撤销（`Fyrlet.Runs.revoke_grant/2`）或过期则拒绝新工作并使运行失败。查看、信号、取消仍按调用者当前身份通过 `run_authorize/4` 重新授权，默认只有发起者可以操作。
+When a Run is created, the initiator and an execution grant (project, operations, expiry) are recorded; **the user token is neither stored nor reused**. Expiry of the user session does not terminate an accepted run; the grant is re-checked before each new step is claimed and before each side effect is claimed, and if the grant is revoked (`Fyrlet.Runs.revoke_grant/2`) or expired, new work is refused and the run fails. Viewing, signaling and cancellation are re-authorized against the caller's current identity through `run_authorize/4`; by default only the initiator may perform them.
 
-## 受管数据访问
+## Managed data access
 
-`data_scope/3` 与 `Fyrlet.Scope` 在**经由它的**查询和写入上强制注入项目与主体约束，遇到无法验证的查询形态一律拒绝。直接使用 `Fyrlet.Repo` 的代码不受约束；这不是数据库行级安全。 详见 [SHARING.md](SHARING.md#声明式数据范围)。
+`data_scope/3` and `Fyrlet.Scope` enforce project and subject constraints on queries and writes **that go through them**, and reject any query shape they cannot verify. Code that uses `Fyrlet.Repo` directly is not constrained; this is not database row-level security. See [SHARING.md](SHARING.md#declarative-data-scope) for details.
 
-## 数据保护
+## Data protection
 
-`Fyrlet.Vault` 提供可选的静态加密（AES-256-GCM，密钥带 ID，可轮换，密钥缺失时读取失败而不是返回错误数据）；操作可声明 `sensitive` 字段，在运行视图中脱敏；`Fyrlet.Runs.Privacy.purge_subject/2` 清除某人的运行内容，保留标识、状态、哈希和审计事件。见 [OPERATIONS.md](OPERATIONS.md#运行限额与数据保护)。
+`Fyrlet.Vault` provides optional encryption at rest (AES-256-GCM, keys carry an ID and can be rotated; when a key is missing, reads fail instead of returning wrong data); an operation can declare `sensitive` fields, which are redacted in run views; `Fyrlet.Runs.Privacy.purge_subject/2` removes a person's run content while keeping identifiers, status, hashes and audit events. See [OPERATIONS.md](OPERATIONS.md#run-limits-and-data-protection).
 
-## 生命周期
+## Lifecycle
 
-用户令牌默认 600 秒，允许签发 60–900 秒。`DELETE /api/v1/sessions/:id` 仅允许项目服务密钥撤销同项目会话；用户可通过 `DELETE /api/v1/session` 注销自身会话。撤销后广播连接断开，周期复核补偿通知遗漏。已经送达设备的数据无法远程抹除；SDK 在确认认证或权限失效后清除内存订阅数据。
+User tokens last 600 seconds by default, and 60–900 seconds may be issued. `DELETE /api/v1/sessions/:id` lets only a project service key revoke a session in the same project; a user can sign out their own session through `DELETE /api/v1/session`. After revocation, a disconnect is broadcast, and the periodic re-check compensates for missed notifications. Data already delivered to a device cannot be erased remotely; after the SDK confirms that authentication or permission has become invalid, it clears subscription data held in memory.
 
-`mix fyrlet.revoke_key KEY_ID` 撤销服务密钥，阻止它签发新会话。既有会话继续至过期或单独撤销，避免把密钥轮换误当成全量用户退出。需要紧急项目全量退出时，应在受信运维流程中撤销该项目所有会话；目前没有管理 UI。
+`mix fyrlet.revoke_key KEY_ID` revokes a service key and stops it from issuing new sessions. Existing sessions continue until they expire or are revoked individually, so that a key rotation is not mistaken for a full user sign-out. When an emergency project-wide sign-out is needed, revoke all sessions of that project in a trusted operations procedure; there is currently no admin UI.
 
-## 部署边界
+## Deployment boundaries
 
-本地默认只监听 loopback。生产环境要求 DATABASE_URL、SECRET_KEY_BASE、ALLOWED_ORIGINS；跨域 HTTP 使用单独的 CORS_ORIGINS。令牌只通过 HTTPS 请求头或 WSS 子协议传递，不放入 URL。响应不缓存，日志不记录请求正文或认证头。
+By default the server listens only on loopback locally. Production requires DATABASE_URL, SECRET_KEY_BASE and ALLOWED_ORIGINS; cross-origin HTTP uses a separate CORS_ORIGINS. Tokens are passed only in HTTPS request headers or the WSS subprotocol, never in a URL. Responses are not cached, and logs do not record request bodies or authentication headers.
 
-提供对其他开发者开放的服务之前，部署方仍需补齐网关限流、TLS、备份、密钥轮换与配额。项目隔离是已实现的业务边界，并不等价于已交付商业多租户控制台或任意租户代码沙箱。
+Before offering the service to other developers, the deployer still needs to add gateway rate limiting, TLS, backups, key rotation and quotas. Project isolation is an implemented business boundary; it does not mean a commercial multi-tenant console or a sandbox for arbitrary tenant code has been delivered.

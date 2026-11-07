@@ -1,48 +1,62 @@
-# Fyrlet 文档
+# Fyrlet documentation
 
-Fyrlet 是基于 Phoenix 的实时应用框架：在服务端定义业务操作、数据订阅和访问权限，客户端通过统一协议与 SDK 调用业务并获得实时、已授权的数据。项目介绍和快速开始见[根目录 README](../README.md)。
+English | [简体中文](zh/README.md)
 
-## 了解产品
+Fyrlet is a realtime application framework built on Phoenix: you define business operations, data subscriptions and access permissions on the server, and clients call the business logic and receive realtime, authorized data through a unified protocol and SDK. For the project introduction and quick start, see the [root README](../README.md).
 
-| 文档 | 内容 |
+## Understanding the product
+
+| Document | Contents |
 | --- | --- |
-| [PRODUCT.md](PRODUCT.md) | 产品定位、适用场景、范围与非目标、功能需求、一致性承诺、风险与成功判据 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 基础模型、可选模块、三层结构（核心 / 能力包 / 领域包）、鉴权分层与硬规则 |
+| [PRODUCT.md](PRODUCT.md) | Product positioning, use cases, scope and non-goals, functional requirements, consistency commitments, risks and success criteria |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Base model, optional modules, the three layers (core / capability package / domain package), authentication layering and hard rules |
 
-## 接入与使用
+## Integration and usage
 
-| 文档 | 内容 |
+| Document | Contents |
 | --- | --- |
-| [INSTALL.md](INSTALL.md) | 安装步骤、必需配置、环境变量、公共接口清单、协议版本与能力、自动化验证覆盖、打包与示例应用 |
-| [AUTH.md](AUTH.md) | 身份分层、接入流程、授权与隔离、匿名主体、执行授权、数据保护 |
-| [PROTOCOL.md](PROTOCOL.md) | HTTP 与 Socket 协议、订阅与 ACK、增量、能力协商，以及各能力的线上格式 |
-| [SDK 总览](../sdks/README.md)、[TypeScript SDK](../sdks/typescript/README.md) | 多语言 SDK 约定，TypeScript SDK 的调用、订阅、乐观写入、在线状态 |
-| [示例应用](../examples/README.md) | 收件箱、Notify、Flow、Agent、Chat |
+| [TUTORIAL.md](TUTORIAL.md) | Connect the Inbox definition, generated types, a backend session endpoint and a browser subscription |
+| [INSTALL.md](INSTALL.md) | Installation steps, required configuration, environment variables, public interface list, protocol version and capabilities, automated verification coverage, packaging and example applications |
+| [AUTH.md](AUTH.md) | Identity layers, integration flow, authorization and isolation, anonymous principals, execution authorization, data protection |
+| [PROTOCOL.md](PROTOCOL.md) | HTTP and Socket protocol, subscriptions and ACK, deltas, capability negotiation, and the wire format of each capability |
+| [SDK overview](../sdks/README.md), [TypeScript SDK](../sdks/typescript/README.md) | Multi-language SDK conventions; calls, subscriptions, optimistic writes and presence in the TypeScript SDK |
+| [Example applications](../examples/README.md) | Shared preparation, login, verification and boundaries |
 
-## 开发业务
+## Example applications
 
-| 文档 | 内容 |
+| Document | Contents |
 | --- | --- |
-| [SERVER.md](SERVER.md) | 注册定义、查询与授权、Observer、事务与失效通知、可选回调、代码组织 |
-| [RUNS.md](RUNS.md) | 持久 Run：状态机、等待与信号、取消、租约、外部执行器、执行身份 |
-| [EFFECTS.md](EFFECTS.md) | 外部副作用与 Outbox：模型、适配器协议、未知结果的处置 |
-| [STREAMS.md](STREAMS.md) | 追加订阅：位置、衔接、窗口、历史与重置 |
-| [SHARING.md](SHARING.md) | 共享订阅与声明式数据范围 |
-| [PLUGINS.md](PLUGINS.md) | 能力包、插件 API 与一致性套件、领域包 |
+| [Inbox](../examples/inbox/README.md) | Minimal Mix host, private inbox, Node CLI and live updates |
+| [Notify](../examples/notify/README.md) | Notifications, email Effects and delivery reconciliation |
+| [Flow](../examples/flow/README.md) | Sequential HTTP / wait nodes, signals and recovery |
+| [Agent](../examples/agent/README.md) | Bounded tools, owner approval, rejection and cancellation |
+| [Chat](../examples/chat/README.md) | Invitations, shared room state, append messages and history |
 
-## 部署与运维
+## Building your application
 
-| 文档 | 内容 |
+| Document | Contents |
 | --- | --- |
-| [DATABASE.md](DATABASE.md) | 表结构设计：约定、约束与索引的作用、清理与保留、宿主表的约定 |
-| [OPERATIONS.md](OPERATIONS.md) | 运维命令、数据保留与容量、项目配额、遥测与 Prometheus 指标、双节点部署 |
-| [PERFORMANCE.md](PERFORMANCE.md) | 与 Meteor 的同资源对照，单核剖析，共享房间与追加流的端到端对照 |
-| [OPTIMIZATIONS.md](OPTIMIZATIONS.md) | 优化记录：做法、证据、回退的试验与决定不做的方向 |
-| [基准测试](../bench/README.md)、[同等条件规范](../bench/FAIRNESS.md) | 基准工具与对照的公平性规则 |
+| [SERVER.md](SERVER.md) | Registering definitions, queries and authorization, Observers, transactions and invalidation notifications, optional callbacks, code organization |
+| [RUNS.md](RUNS.md) | Durable Runs: state machine, waits and signals, cancellation, leases, external executors, execution identity |
+| [EFFECTS.md](EFFECTS.md) | External side effects and Outbox: model, adapter protocol, handling unknown outcomes |
+| [STREAMS.md](STREAMS.md) | Append subscriptions: positions, joining, windows, history and reset |
+| [SHARING.md](SHARING.md) | Shared subscriptions and declarative data scope |
+| [PLUGINS.md](PLUGINS.md) | Capability packages, the plugin API and conformance suite, domain packages |
 
-## 状态与验收
+## Deployment and operations
 
-| 文档 | 内容 |
+| Document | Contents |
 | --- | --- |
-| [STATUS.md](STATUS.md) | 各能力的实现状态，基础验收与能力验收矩阵 |
-| [ACCEPTANCE.md](ACCEPTANCE.md) | 验证记录：环境、命令、浏览器与双节点的证据，尚未验收的部分 |
+| [DATABASE.md](DATABASE.md) | Table design: conventions, the role of constraints and indexes, cleanup and retention, conventions for host tables |
+| [OPERATIONS.md](OPERATIONS.md) | Operations commands, data retention and capacity, project quotas, telemetry and Prometheus metrics, two-node deployment |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Diagnose startup, origins, authentication, subscriptions, conflicts and external Effects |
+| [PERFORMANCE.md](PERFORMANCE.md) | Same-resource comparison with Meteor, single-core profiling, shared rooms and append streams compared end to end |
+| [OPTIMIZATIONS.md](OPTIMIZATIONS.md) | Optimization log: what was done, evidence, experiments that were reverted, and directions decided against |
+| [Benchmarks](../bench/README.md), [Equal-conditions specification](../bench/FAIRNESS.md) | Benchmark tooling and fairness rules for comparisons |
+
+## Status and verification
+
+| Document | Contents |
+| --- | --- |
+| [STATUS.md](STATUS.md) | Implementation status of each capability; base and capability acceptance matrices |
+| [ACCEPTANCE.md](ACCEPTANCE.md) | Verification records: environment, commands, browser and two-node evidence, and what is not yet verified |

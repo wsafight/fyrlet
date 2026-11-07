@@ -1,160 +1,160 @@
-# 服务端业务开发
+# Server-side application development
 
-当前应用是可运行的参考实现，核心在 lib/fyrlet，传输在 lib/fyrlet_web，参考业务（收件箱）是独立的示例应用 examples/inbox，安装方式与公共接口见 [INSTALL.md](INSTALL.md)。通过配置注册受信任的业务模块，不提供动态加载租户代码。
+The current application is a runnable reference implementation. The core is in lib/fyrlet, the transport is in lib/fyrlet_web, and the reference application (the inbox) is a separate example application, examples/inbox. For installation and public interfaces see [INSTALL.md](INSTALL.md). Trusted business modules are registered through configuration; dynamic loading of tenant code is not provided.
 
-## 注册定义
+## Registering definitions
 
-业务模块实现 Fyrlet.Definition：
+A business module implements Fyrlet.Definition:
 
-| 回调 | 责任 |
+| Callback | Responsibility |
 | --- | --- |
-| contract/0 | 声明 operations / subscriptions、输入输出 schema、操作 read / write 类型及订阅的可选 shared 标记 |
-| authorize/3 | 根据服务端 Actor 和规范化输入进行操作级授权 |
-| execute/3 | 查询或执行业务，返回 `{:ok, data, affected_scopes}` 或 `{:error, %Fyrlet.Error{}}` |
-| scope/3 | 返回该订阅依赖的内部通知主题 |
-| change/4（可选） | 根据本次操作、Actor、规范化输入与已验证输出，生成即时变更信息 |
-| load_subscription/3（可选） | 根据订阅名称、Actor、规范化参数，返回 `{:ok, data, context}` 或 `{:error, %Fyrlet.Error{}}` |
-| update_subscription/5（可选） | 根据订阅名称、Actor、规范化参数、上一份 `%Fyrlet.Subscriptions.View{}` 和变更，返回局部替换、重置、上下文更新、不变或重载 |
+| contract/0 | Declares operations / subscriptions, input and output schemas, the read / write kind of operations, and the optional shared flag of subscriptions |
+| authorize/3 | Operation-level authorization based on the server-side Actor and the normalized input |
+| execute/3 | Queries or executes the business logic, returning `{:ok, data, affected_scopes}` or `{:error, %Fyrlet.Error{}}` |
+| scope/3 | Returns the internal notification topics the subscription depends on |
+| change/4 (optional) | Produces immediate change information from this operation, the Actor, the normalized input and the validated output |
+| load_subscription/3 (optional) | From the subscription name, Actor and normalized parameters, returns `{:ok, data, context}` or `{:error, %Fyrlet.Error{}}` |
+| update_subscription/5 (optional) | From the subscription name, Actor, normalized parameters, the previous `%Fyrlet.Subscriptions.View{}` and the change, returns a partial replacement, reset, context update, unchanged, or reload |
 
-在 config/config.exs 的 definitions 列表中注册模块。启动时验证回调、名称、操作类型和 schema。完整示例为 examples/inbox/lib/inbox_example/inbox.ex。
+Register modules in the definitions list in config/config.exs. Callbacks, names, operation kinds and schemas are validated at startup. A complete example is examples/inbox/lib/inbox_example/inbox.ex.
 
-schema 支持封闭对象、字符串及字符串 enum、boolean、JavaScript 安全整数、array、null、anyOf，以及 uuid / date-time 字符串格式。它不是完整 JSON Schema；不支持浮点数、任意属性对象、引用或递归类型。高精度业务值应使用明确的字符串编码。
+The schema supports closed objects, strings and string enums, boolean, JavaScript safe integers, array, null, anyOf, and the uuid / date-time string formats. It is not full JSON Schema; floating-point numbers, objects with arbitrary properties, references and recursive types are not supported. High-precision business values should use an explicit string encoding.
 
-## 查询与授权
+## Queries and authorization
 
-Actor 的 project_id / subject_id / session_id 来自已验证会话，不来自业务输入。以收件箱为例：
+The Actor's project_id / subject_id / session_id come from the verified session, not from business input. Taking the inbox as an example:
 
 ```elixir
 from item in InboxExample.Item,
   where: item.project_id == ^actor.project_id and item.subject_id == ^actor.subject_id
 ```
 
-上述数据库过滤负责行级数据范围。authorize 的 :ok 只表示允许执行这个业务，不能替代查询过滤。拥有记录 UUID 或命中 Scope 都不授予权限。角色和团队关系可以加入应用自己的表与 authorize 逻辑；参考应用只实现个人所有权。
+The database filter above is responsible for row-level data scope. An :ok from authorize only means this business operation may run; it cannot replace the query filter. Holding a record UUID or matching a Scope does not grant permission. Roles and team relationships can be added to the application's own tables and authorize logic; the reference application implements only personal ownership.
 
-结果范围必须有界。参考订阅只包含最近一页，历史记录通过 inbox.history 的 keyset 游标读取。快照超限关闭订阅并返回 LIMIT_EXCEEDED，不截断成看似完整的数据。
+Result scope must be bounded. The reference subscription contains only the most recent page, and history is read through the keyset cursor of inbox.history. A snapshot over the limit closes the subscription and returns LIMIT_EXCEEDED; it is not truncated into data that looks complete.
 
-## Observer 与共享边界
+## Observers and sharing boundaries
 
-Observer 默认空闲 1000 ms 后进入 GenServer 休眠，压缩进程堆；消息到达时恢复，刷新、鉴权和 ACK 逻辑照常执行。可通过 `observer_hibernate_after` 或 `FYRLET_OBSERVER_HIBERNATE_AFTER_MS` 调整，环境变量 `infinity` 关闭休眠。这是内存与唤醒 CPU 的取舍，持续忙碌的 Observer 不会进入休眠。
+By default an Observer hibernates its GenServer after 1000 ms idle, compacting the process heap; it resumes when a message arrives, and refresh, authentication and ACK logic run as usual. It can be adjusted with `observer_hibernate_after` or `FYRLET_OBSERVER_HIBERNATE_AFTER_MS`; the environment variable value `infinity` disables hibernation. This is a trade-off between memory and wake-up CPU; a continuously busy Observer does not hibernate.
 
-Observer 的 `init/1` 只注册通知与有界状态，初始业务加载在本 Observer 的首次 attach 内执行，受 15 秒调用超时约束。一个慢加载不会阻塞 DynamicSupervisor 启动其他 session 的 Observer。每节点默认最多 10,000 个 Observer，可通过 `:max_observers` 调整；达到上限的新视图以 `LIMIT_EXCEEDED` 拒绝，已有共享视图仍可 attach。这个资源保护值不是已验证的连接容量。
+An Observer's `init/1` only registers notifications and bounded state; the initial business load runs inside this Observer's first attach and is subject to the 15-second call timeout. One slow load does not block the DynamicSupervisor from starting Observers for other sessions. Each node allows at most 10,000 Observers by default, adjustable through `:max_observers`; a new view at the limit is rejected with `LIMIT_EXCEEDED`, while existing shared views can still be attached. This resource protection value is not a verified connection capacity.
 
-每个订阅通过 Observer 串行维护规范化 View，channel 负责各客户端的 generation、seq、ACK 与到期定时器。只有订阅的服务端契约显式设置 `"shared": true` 才启用共享，缺省或其他值均不共享；这不是客户端 join 选项。当前 `inbox.recent` 已启用。
+Each subscription maintains a normalized View serially through its Observer, and the channel is responsible for each client's generation, seq, ACK and expiry timer. Sharing is enabled only when the subscription's server-side contract explicitly sets `"shared": true`; if absent or any other value, it is not shared; this is not a client join option. `inbox.recent` currently has it enabled.
 
-共享使用节点本地 Registry / DynamicSupervisor，key 为 `{actor, subscription}`，不是 Scope 或仅 project / subject。完整 Actor 包含 project_id、subject_id、session_id、expires_at；准备后的完整 subscription 包含 module、name、规范化 parameters、specification、scope。同 session 的多设备在这些值一致时可复用，不同 session 即使同 project / subject 也不共享；不同节点不共享。客户端 topic UUID 与 delivery 不在共享 key 中，全量和增量客户端可以复用同一个 Observer。
+Sharing uses a node-local Registry / DynamicSupervisor, keyed by `{actor, subscription}`, not by Scope or only project / subject. The full Actor includes project_id, subject_id, session_id and expires_at; the full prepared subscription includes module, name, normalized parameters, specification and scope. Multiple devices of the same session can reuse an Observer when these values are identical; different sessions do not share even with the same project / subject; different nodes do not share. The client topic UUID and delivery are not part of the sharing key, so full and delta clients can reuse the same Observer.
 
-每次全量或局部计算都在开始前重新验证会话并调用 `authorize/3`，计算后再次验证会话。每次 attach 也独立执行会话检查、业务授权、再次会话检查与大小检查，即使已有 Observer 且复用缓存快照也不跳过；没有授权 TTL 缓存。attach 不强制重新查询业务数据，数据新鲜度仍由失效通知、显式刷新与周期复核保证。
+Every full or partial computation re-validates the session and calls `authorize/3` before it starts, and validates the session again after the computation. Every attach also independently performs a session check, business authorization, a second session check and a size check, and does not skip them even when an Observer already exists and a cached snapshot is reused; there is no authorization TTL cache. Attach does not force a fresh query of business data; data freshness is still guaranteed by invalidation notifications, explicit refresh and periodic re-check.
 
-## 事务与失效通知
+## Transactions and invalidation notifications
 
-各租户表保留项目与用户过滤索引，并为 subject / service key 的外键补充以关联字段开头的索引。项目删除触发的级联删除和外键检查可使用这些索引；项目优先的复合索引无法替代仅以 subject_id 查询时所需的索引。
+Each tenant table keeps project and user filter indexes, and the foreign keys to subject / service key get indexes that begin with the referencing column. Cascading deletes triggered by project deletion, and foreign key checks, can use these indexes; a project-first composite index cannot replace the index needed for queries by subject_id alone.
 
-write 操作的 execute 运行于框架事务内。应用可以使用 Repo 或 Ecto.Multi 处理自己的领域数据，成功后返回有变化的 Scope 列表。框架在输出校验通过后写入幂等结果及 Oban 任务，最后一起提交。最外层事务成功提交后立即广播失效通知，订阅刷新不必等待 Oban 调度；持久化任务仍会执行，覆盖提交后进程退出或即时广播失败的情况。命中幂等缓存不再次广播。若调用方已开启 Repo 事务，框架无法确定外层何时提交，因此仅使用持久化任务通知，避免广播尚未提交或最终回滚的写入。
+The execute of a write operation runs inside a framework transaction. The application can use Repo or Ecto.Multi for its own domain data, and returns the list of changed Scopes on success. After output validation passes, the framework writes the idempotency result and the Oban job, and commits everything together. Once the outermost transaction commits, an invalidation notification is broadcast immediately, so subscription refresh need not wait for Oban scheduling; the durable job still runs, covering the cases where the process exits after commit or the immediate broadcast fails. A hit on the idempotency cache does not broadcast again. If the caller has already opened a Repo transaction, the framework cannot know when the outer transaction commits, so it uses only the durable job notification, to avoid broadcasting a write that is not yet committed or is eventually rolled back.
 
-不要在回调中提前广播正文或产生不可回滚的外部副作用。异步外部工作应由单独的持久化任务执行，并自行定义重试与补偿。
+Do not broadcast content early in a callback or produce external side effects that cannot be rolled back. Asynchronous external work should be executed by a separate durable job, which defines its own retry and compensation.
 
-收件箱 Scope 形式为 `projects:<project>:subjects:<subject>:inbox`。持久化任务只保存 Scope 与项目，广播 `{:invalidated, job_id}`。即时通知可广播 `{:invalidated, job_id, change}`，change 只在内存中传递，不写入 Oban 参数。Observer 保存最近 64 个通知 ID，跳过已处理的持久化重试；不按 ID 大小丢弃乱序通知，旧 ID 被淘汰后重放只会触发安全刷新。Observer 先监听通知再读取初始数据；同轮多个待处理刷新合并后丢弃局部变更提示，回退全量加载。持久化兜底没有变更正文，也走全量加载。
+The inbox Scope has the form `projects:<project>:subjects:<subject>:inbox`. The durable job stores only the Scope and the project, and broadcasts `{:invalidated, job_id}`. The immediate notification may broadcast `{:invalidated, job_id, change}`; change is passed only in memory and is not written into the Oban arguments. The Observer keeps the 64 most recent notification IDs and skips durable retries already handled; out-of-order notifications are not dropped by ID magnitude, and once an old ID has been evicted, a replay only triggers a safe refresh. The Observer subscribes to notifications before reading the initial data; multiple pending refreshes in the same round are merged, the partial change hints are discarded, and it falls back to a full load. The durable fallback has no change content and also goes through a full load.
 
-每个 Observer 只有一个协调（reconciliation）定时器，默认每 30 秒重新授权并全量加载以修复遗漏通知，不按客户端创建此定时器。无论 delivery 是否为 delta-v1，都维护同一规范化 View；需要完整快照时编码并缓存当前修订的 data JSON。自动刷新可见数据不变时不推送、不增加视图修订或客户端序号；私有 context 的变化不算可见数据变化。显式 refresh 重新加载，并在请求客户端可接收时发送完整快照，即使数据未变。
+Each Observer has only one reconciliation timer. By default it re-authorizes and does a full load every 30 seconds to repair missed notifications, and this timer is not created per client. Regardless of whether delivery is delta-v1, the same normalized View is maintained; when a full snapshot is needed, the data JSON of the current revision is encoded and cached. When an automatic refresh leaves the visible data unchanged, nothing is pushed and neither the view revision nor the client sequence number increases; a change in the private context does not count as a change in visible data. An explicit refresh reloads, and sends a full snapshot when the requesting client can receive it, even if the data is unchanged.
 
-ACK 按客户端独立维护，每个客户端最多一条待确认更新；等待 ACK 不阻止 Observer 计算或向其他 ready 客户端推送，也不积累每个客户端的补丁队列。落后客户端 ACK 后会触发重新授权的全量加载，并以完整快照追平；只有跟上上一视图修订、已请求 delta-v1 且未强制刷新时才可接收增量。channel 的 seq 与 Observer 内部 revision 不是同一个计数器。
+ACK is maintained independently per client, with at most one unacknowledged update per client; waiting for an ACK does not stop the Observer from computing or pushing to other ready clients, and no per-client patch queue accumulates. After a lagging client sends its ACK, a re-authorized full load is triggered and it catches up with a full snapshot; a delta can be received only if the client has kept up with the previous view revision, has requested delta-v1 and is not forced to refresh. The channel's seq and the Observer's internal revision are not the same counter.
 
-### 规范化 View 与回调
+### Normalized View and callbacks
 
-`%Fyrlet.Subscriptions.View{}` 对唯一字符串 id 的记录数组维护 records（ID → 记录）、order（ID 顺序）、sizes（逐记录 JSON 字节数）、bytes（完整可见数据 JSON 字节数），并保存私有 context、patch、unchanged。其他数据保存在 value，走完整加载路径。`View.data/1` 还原对外数据；context 不进入快照、delta 或对外字节数，但业务必须自行限制其大小，不能把它当作无界缓存。
+For an array of records with unique string ids, `%Fyrlet.Subscriptions.View{}` maintains records (ID to record), order (ID order), sizes (JSON bytes per record) and bytes (JSON bytes of the complete visible data), and also stores the private context, patch and unchanged. Other data is stored in value and goes through the full load path. `View.data/1` restores the externally visible data; the context does not enter snapshots, deltas or the externally reported byte counts, but the application must limit its size itself and must not treat it as an unbounded cache.
 
-`load_subscription/3` 返回 `{:ok, data, context}`，框架校验完整输出并构造 View；未实现时回退到 `execute/3` 并使用空 context。`update_subscription/5` 仅在已有规范化记录数组且有即时变更时调用，第四个参数是 View，不是数组下标索引或旧版 metadata map。返回形式为：
+`load_subscription/3` returns `{:ok, data, context}`, and the framework validates the complete output and builds the View; if it is not implemented, it falls back to `execute/3` with an empty context. `update_subscription/5` is called only when a normalized record array exists and there is an immediate change; the fourth argument is the View, not an array-position index or the old metadata map. The return forms are:
 
-| 返回值 | 含义 |
+| Return value | Meaning |
 | --- | --- |
-| `{:replace, id, record}` | 替换已有字符串 ID 的记录，要求 record 的 id 一致；校验元素并更新字节数和 patch |
-| `{:reset, data, context}` | 校验完整输出，重建 View 并比较可见数据变化 |
-| `{:context, context}` | 只更新私有上下文，可见数据不变 |
-| `:unchanged` | 数据和上下文均不变 |
-| `:reload` | 重新调用加载回调并校验完整输出 |
+| `{:replace, id, record}` | Replaces the record with an existing string ID; the record's id must match; the element is validated and the byte count and patch are updated |
+| `{:reset, data, context}` | Validates the complete output, rebuilds the View and compares changes in visible data |
+| `{:context, context}` | Updates only the private context; visible data is unchanged |
+| `:unchanged` | Neither data nor context changes |
+| `:reload` | Calls the load callback again and validates the complete output |
 
-可选 change 回调在写入事务内执行，只返回信息，不自行广播。局部更新仍须由业务确认项目、用户、记录版本、可见性、过滤条件和排序；索引与变更提示不是授权凭据，不能确定时必须返回 `:reload`。框架在即时变更中附带内部 CommittedChange 元数据，但传给更新回调的是变更正文。仅当替换记录与已验证的操作输出完全一致、订阅元素 schema 与操作输出 schema 完全一致时，才复用输出校验及 JSON 字节数；否则仍校验替换记录。元数据不进入持久化任务。
+The optional change callback runs inside the write transaction, only returns information and does not broadcast by itself. A partial update must still be confirmed by the application for project, user, record version, visibility, filter conditions and ordering; an index or change hint is not an authorization credential, and when this cannot be determined it must return `:reload`. The framework attaches internal CommittedChange metadata to the immediate change, but what is passed to the update callback is the change body. Output validation and the JSON byte count are reused only when the replacement record is exactly the same as the validated operation output and the subscription element schema is exactly the same as the operation output schema; otherwise the replacement record is still validated. The metadata does not enter the durable job.
 
-收件箱初次加载最多查询 `limit + 8` 条，只把前 limit 条发给客户端，其余至多 8 条作为私有候选区保存在 context.reserve，context.complete 表示已知候选是否覆盖剩余结果。可见记录的 inbox.update 在 previous_version、inserted_at、archived 均匹配时局部替换；候选区记录同样检查后只更新 context；确定在窗口与候选区之后的正文更新可以保持不变。新增、删除、归档等成员变化会在 Actor 所有权 SQL 范围内读取当前记录，核对变更与版本，再重排可见数据和候选区。版本缺口、当前记录与通知不一致、缺少可信上下文，或结果未完整覆盖且候选耗尽时重新加载；不能据此宣称所有成员变化均免查询。多个变更合并、持久化兜底与周期复核也全量加载。
+The inbox initial load queries at most `limit + 8` rows and sends only the first limit rows to the client; the remaining at most 8 are kept as a private candidate area in context.reserve, and context.complete indicates whether the known candidates cover the remaining results. For a visible record, inbox.update replaces it locally when previous_version, inserted_at and archived all match; a record in the candidate area is checked the same way and only the context is updated; a body update known to fall after the window and the candidate area can leave things unchanged. Membership changes such as insertion, deletion and archiving read the current record within the Actor-ownership SQL scope, check the change against the version, and then reorder the visible data and the candidate area. On a version gap, a current record inconsistent with the notification, missing trusted context, or a result not fully covered with the candidates exhausted, it reloads; this cannot be taken to mean that all membership changes avoid queries. Merged multiple changes, the durable fallback and the periodic re-check also do a full load.
 
-### 合并并发会话检查
+### Coalescing concurrent session checks
 
-batch_session_checks 默认开启。8 个节点内分片按 session_id 接收检查请求，每批至多 128 个请求，对重复会话合并数据库读取。它不缓存查询结果、不设置等待凑批定时器：只合并本轮查询开始前已经接收的请求，查询进行中到达的请求使用后续查询。返回时仍检查项目、用户、撤销标记及当前到期时间。快照处理前后的两次会话检查均保留。
+batch_session_checks is on by default. 8 in-node shards receive check requests by session_id, at most 128 requests per batch, and merge database reads for duplicate sessions. It does not cache query results and does not set a timer to wait for a batch to fill: it merges only requests already received before the current round of queries starts, and requests arriving while a query is in progress use a later query. On return it still checks the project, user, revocation mark and current expiry time. Both session checks, before and after snapshot handling, are retained.
 
-写入的 FOR SHARE 会话锁及调用方事务中的检查直接使用当前数据库连接，保持事务可见性与撤销串行化。可通过应用配置将 batch_session_checks 设为 false 恢复逐次查询。分片异常或等待超时返回可重试的内部错误，不放行未经确认的会话。
+The FOR SHARE session lock on writes, and checks inside the caller's transaction, use the current database connection directly, preserving transaction visibility and revocation serialization. batch_session_checks can be set to false in the application configuration to restore per-request queries. A shard exception or wait timeout returns a retryable internal error and does not let an unconfirmed session through.
 
-## 可选能力的开发要点
+## Development notes for optional capabilities
 
-各能力的语义见 [RUNS.md](RUNS.md)、[EFFECTS.md](EFFECTS.md)、[STREAMS.md](STREAMS.md)、[SHARING.md](SHARING.md)、[PLUGINS.md](PLUGINS.md)，线上协议见 [PROTOCOL.md](PROTOCOL.md)。以下是业务开发要点。
+For the semantics of each capability see [RUNS.md](RUNS.md), [EFFECTS.md](EFFECTS.md), [STREAMS.md](STREAMS.md), [SHARING.md](SHARING.md) and [PLUGINS.md](PLUGINS.md); for the wire protocol see [PROTOCOL.md](PROTOCOL.md). The following are notes for application development.
 
-### 可选的 Definition 回调
+### Optional Definition callbacks
 
-| 回调 | 用途 |
+| Callback | Purpose |
 | --- | --- |
-| `run/3`、`step/3` | 静态规划的 Run：`run/3` 返回 `{:ok, steps: […], business_key: …, ttl_seconds: …}`，`step/3` 执行一步 |
-| `advance/3`、`plan_options/3` | 动态规划（操作声明 `planning: :dynamic`），与 `run/3` 二选一 |
-| `run_authorize/4` | 授权 `:start`、`:view`、`:signal`、`:cancel`；缺省只有发起者可以 |
-| `definition_version/1`、`implementation/2` | 固定运行所用的定义版本；版本缺失时运行暂停为 `definition_unavailable` |
-| `data_scope/3` | 受管数据访问的行级策略 |
-| `shared_query/3`、`membership/3`、`policy_version/1` | `sharing: "identical"` 的共享订阅 |
-| `ingest/3` | 批量摄取的单条处理，在完成该条的同一事务内执行 |
-| `stream/3` | 追加订阅（`mode: "append"`）：返回 `Fyrlet.Features.Stream` 的流名，在 `authorize/3` 之后调用 |
+| `run/3`, `step/3` | Statically planned Run: `run/3` returns `{:ok, steps: […], business_key: …, ttl_seconds: …}`, and `step/3` executes one step |
+| `advance/3`, `plan_options/3` | Dynamic planning (the operation declares `planning: :dynamic`); an alternative to `run/3` |
+| `run_authorize/4` | Authorizes `:start`, `:view`, `:signal`, `:cancel`; by default only the initiator may |
+| `definition_version/1`, `implementation/2` | Pin the definition version a run uses; when the version is missing the run is paused as `definition_unavailable` |
+| `data_scope/3` | Row-level policy for managed data access |
+| `shared_query/3`, `membership/3`, `policy_version/1` | Shared subscriptions with `sharing: "identical"` |
+| `ingest/3` | Handling of a single item in batch ingestion, executed in the same transaction that completes the item |
+| `stream/3` | Append subscription (`mode: "append"`): returns the stream name of `Fyrlet.Features.Stream`, called after `authorize/3` |
 
-操作种类：`read`、`write`、`run`（`Fyrlet.Runs.operation/2`）、`ingest`（`Fyrlet.Features.Ingest.operation/2`）。
+Operation kinds: `read`, `write`, `run` (`Fyrlet.Runs.operation/2`), `ingest` (`Fyrlet.Features.Ingest.operation/2`).
 
-### 步骤的返回
+### Step return values
 
-`{:ok, 输出}`、`{:ok, 输出, commit: fn -> … end}`（受管提交，与步骤结果同事务）、`{:error, %Fyrlet.Error{}}`（`retryable: true` 且未超过 `max_attempts` 时按退避重试）、`{:effect, %{adapter:, key:, payload:}}`（交给 Effect 派发）。步骤输出必须是对象，上限默认 64 KiB。
+`{:ok, output}`, `{:ok, output, commit: fn -> … end}` (managed commit, in the same transaction as the step result), `{:error, %Fyrlet.Error{}}` (retried with backoff when `retryable: true` and `max_attempts` has not been exceeded), `{:effect, %{adapter:, key:, payload:}}` (handed to Effect dispatch). Step output must be an object, with a default limit of 64 KiB.
 
-### Effect 的重试规则
+### Effect retry rules
 
-按适配器声明的能力：有幂等键则在去重窗口内用同一个 `operation_id` 重发；只能查询则只对账，查不到也不重发；都没有则结果不确定时暂停等待人工，除非步骤显式 `retry_allow_duplicates: true`。**结果不确定的副作用不会被自动判成失败。** 人工处置用 `Fyrlet.Effects.resolve/5`，需要操作者与证据，只追加记录；重发需 `acknowledge_duplicates: true`（接收方仍能去重时除外）。
+Based on the capabilities the adapter declares: with an idempotency key, the same `operation_id` is resent within the deduplication window; if it can only be queried, it only reconciles and does not resend even if nothing is found; with neither, an uncertain outcome pauses to wait for a human, unless the step explicitly sets `retry_allow_duplicates: true`. **A side effect with an unknown outcome is never automatically judged to have failed.** Manual resolution uses `Fyrlet.Effects.resolve/5`, which requires an operator and evidence and only appends records; resending requires `acknowledge_duplicates: true` (except when the receiver can still deduplicate).
 
-### 追加订阅与 `Fyrlet.Features.Stream`
+### Append subscriptions and `Fyrlet.Features.Stream`
 
-订阅声明 `"mode" => "append"`、`"max_items" => n`、`"capability" => "append"`，输出为数组，并实现 `stream/3`；服务端需开启 `capabilities: %{"append" => 1}`。写操作在 `execute/3`（已在事务内）里追加：
+A subscription declares `"mode" => "append"`, `"max_items" => n`, `"capability" => "append"`, outputs an array, and implements `stream/3`; the server must enable `capabilities: %{"append" => 1}`. A write operation appends inside `execute/3` (already in a transaction):
 
 ```elixir
 {:ok, _cursor} = Fyrlet.Features.Stream.append(actor.project_id, "room.#{room}", [%{"text" => text}])
-{:ok, result, [scope]}   # 照常返回受影响 Scope，订阅者据此读取新条目
+{:ok, result, [scope]}   # Return the affected Scope as usual; subscribers read the new items from it
 ```
 
-要点：`append/3` 必须在事务内调用（否则抛 `ArgumentError`），事务持有该流的位置锁直到提交，因此同一流的追加按提交顺序编号、不会出现空洞；条目必须是 JSON 对象（至多 16 KiB，一次至多 100 条）。**更正或删除已发布条目时调用 `Fyrlet.Features.Stream.reset/2`**（新 epoch），不要直接改表，否则客户端会把旧条目当作不可变事实。保留由清理任务按 `config :fyrlet, :streams, retention_items:`（默认 10 000）裁剪。所有成员看到相同条目；需要按成员过滤的数据请用私有快照订阅。
+Key points: `append/3` must be called inside a transaction (otherwise it raises `ArgumentError`); the transaction holds the position lock of that stream until commit, so appends to the same stream are numbered in commit order and leave no gaps; an item must be a JSON object (at most 16 KiB, at most 100 per call). **To correct or delete an already published item, call `Fyrlet.Features.Stream.reset/2`** (a new epoch) and do not modify the table directly, otherwise clients will treat the old items as immutable facts. Retention is trimmed by the cleanup job according to `config :fyrlet, :streams, retention_items:` (default 10 000). All members see the same items; for data that must be filtered per member, use a private snapshot subscription.
 
-### 邮件副作用（`packages/fyrlet_effect_email`）
+### Email side effects (`packages/fyrlet_effect_email`)
 
-`config :fyrlet, effect_adapters: %{"email" => FyrletEffectEmail}` 与 `config :fyrlet_effect_email, provider: MyApp.Mailer, allowed_senders: [...]`。`MyApp.Mailer` 实现 `FyrletEffectEmail.Provider`（`capabilities/0`、`deliver/2`，可选 `status/2`）。适配器负责校验地址与正文、拒绝头注入（不接受自定义头）、限制发件人与收件域；供应商只负责与服务通信，且必须如实声明幂等窗口和可查询性。供应商“受理”是 `accepted`，不是送达；送达与退信经回执接口（退信为 `failed`）或 `status/2` 对账进入。HTTP 适配器同理：`{:fyrlet_effect_http, …}`，`config :fyrlet_effect_http, allowed_hosts: [...]`。
+`config :fyrlet, effect_adapters: %{"email" => FyrletEffectEmail}` and `config :fyrlet_effect_email, provider: MyApp.Mailer, allowed_senders: [...]`. `MyApp.Mailer` implements `FyrletEffectEmail.Provider` (`capabilities/0`, `deliver/2`, optional `status/2`). The adapter is responsible for validating addresses and body, rejecting header injection (custom headers are not accepted), and restricting senders and recipient domains; the provider is only responsible for talking to the service and must honestly declare its idempotency window and whether it can be queried. A provider “accepting” the message is `accepted`, not delivered; delivery and bounces enter through the receipt interface (a bounce is `failed`) or through `status/2` reconciliation. The HTTP adapter works the same way: `{:fyrlet_effect_http, …}`, `config :fyrlet_effect_http, allowed_hosts: [...]`.
 
-### Webhooks（插件 `FyrletWebhooks`）
+### Webhooks (plugin `FyrletWebhooks`)
 
-`config :fyrlet, plugins: [FyrletWebhooks]`，`config :fyrlet_webhooks, sources: %{"billing" => %{project_id:, secret:, handler:}}`；`POST /api/v1/plugins/webhooks/<source>`。事件 ID 记在插件自己的表 `webhooks_events`，由插件内的定时任务按 `retention_seconds` 清理。
+`config :fyrlet, plugins: [FyrletWebhooks]`, `config :fyrlet_webhooks, sources: %{"billing" => %{project_id:, secret:, handler:}}`; `POST /api/v1/plugins/webhooks/<source>`. Event IDs are recorded in the plugin's own table `webhooks_events` and cleaned by the plugin's own scheduled job according to `retention_seconds`.
 
-### Ops（插件 `FyrletOps`）
+### Ops (plugin `FyrletOps`)
 
-`config :fyrlet, plugins: [FyrletOps]`。`FyrletOps.Status.status/1` 与 `alerts/1` 提供有界状态与告警；`config :fyrlet_ops, thresholds: %{...}, alert_handlers: [Mod], interval_ms: 30_000`，处理器实现 `FyrletOps.AlertHandler.handle_alert(:firing | :resolved, alert)`，只在状态转换时调用，崩溃会被记录并跳过。`mix fyrlet.ops [--fail-on-alert]` 可作定时检查；项目级状态在 `GET /api/v1/plugins/ops/status`。
+`config :fyrlet, plugins: [FyrletOps]`. `FyrletOps.Status.status/1` and `alerts/1` provide bounded status and alerts; `config :fyrlet_ops, thresholds: %{...}, alert_handlers: [Mod], interval_ms: 30_000`; a handler implements `FyrletOps.AlertHandler.handle_alert(:firing | :resolved, alert)`, which is called only on state transitions, and a crash is logged and skipped. `mix fyrlet.ops [--fail-on-alert]` can serve as a scheduled check; project-level status is at `GET /api/v1/plugins/ops/status`.
 
-### 写自己的插件的测试
+### Testing your own plugin
 
-`Fyrlet.Testing` 提供 `project/0`、`user/2`、`drive/1` 等辅助，不依赖测试框架；用 `Fyrlet.Conformance.Plugin.failures/1` 检查插件。可参考 `packages/fyrlet_ops/test`。
+`Fyrlet.Testing` provides helpers such as `project/0`, `user/2` and `drive/1`, independent of any test framework; use `Fyrlet.Conformance.Plugin.failures/1` to check a plugin. See `packages/fyrlet_ops/test` for reference.
 
-### 插件
+### Plugins
 
-接口与规则见 [PLUGINS.md](PLUGINS.md#插件-api)。`config :fyrlet, plugins: […]`；必需插件失败阻止启动，可选插件失败被隔离；用 `Fyrlet.Conformance.Plugin.failures/1` 在自己的测试里检查插件。
+For the interface and rules see [PLUGINS.md](PLUGINS.md#plugin-api). `config :fyrlet, plugins: […]`; failure of a required plugin prevents startup, while failure of an optional plugin is isolated; use `Fyrlet.Conformance.Plugin.failures/1` to check a plugin in your own tests.
 
-## 代码组织
+## Code organization
 
-`lib/` 的目录与模块名一一对应，测试目录镜像 `lib/`；可选能力放在 `packages/`，各是独立的 Mix 项目。
+The directories under `lib/` correspond one to one with module names, and the test directory mirrors `lib/`; optional capabilities live in `packages/`, each an independent Mix project.
 
-| 位置 / 命名空间 | 内容 |
+| Location / namespace | Contents |
 | --- | --- |
-| `lib/fyrlet/`（根） | 契约与运行时：`Runtime`、`Registry`、`Schema`、`Definition`、`Capabilities`、`Scope`、`Auth`、`Error`；测试辅助 `Testing` |
-| `lib/fyrlet/subscriptions/` | 订阅管线：`Observer`、`View`、`Delta`、`RecordIndex`、`SessionChecks`、`Tracker` |
-| `lib/fyrlet/runs/` | 持久 Run：状态机、引擎、恢复、执行器协议、限额 |
-| `lib/fyrlet/effects/` | Outbox：`Effects`（创建、派发、对账）、`Receipt`、`Resolution`、`Recovery`、`Store`、`Worker`、适配器行为 `Adapter` |
-| `lib/fyrlet/features/` | 核心可选特性（按能力开关）：`Anonymous`、`Ingest`、`Stream`（追加订阅）、`Executors`。它们改变主体类型、操作种类、通道或协议，只能由核心定义，**不是插件** |
-| `lib/fyrlet/plugin*.ex`、`conformance/` | 插件接口、加载与一致性套件 |
-| `lib/fyrlet_web/` | HTTP、Socket 与频道 |
-| `packages/fyrlet_webhooks`、`packages/fyrlet_ops` | **插件**（`Fyrlet.Plugin`）：自带迁移、进程、路由 `/api/v1/plugins/<name>/…` |
-| `packages/fyrlet_effect_http`、`packages/fyrlet_effect_email` | **副作用适配器包**（`Fyrlet.Effects.Adapter`），经 `effect_adapters` 注册 |
+| `lib/fyrlet/` (root) | Contract and runtime: `Runtime`, `Registry`, `Schema`, `Definition`, `Capabilities`, `Scope`, `Auth`, `Error`; test helper `Testing` |
+| `lib/fyrlet/subscriptions/` | Subscription pipeline: `Observer`, `View`, `Delta`, `RecordIndex`, `SessionChecks`, `Tracker` |
+| `lib/fyrlet/runs/` | Durable Run: state machine, engine, recovery, executor protocol, limits |
+| `lib/fyrlet/effects/` | Outbox: `Effects` (creation, dispatch, reconciliation), `Receipt`, `Resolution`, `Recovery`, `Store`, `Worker`, adapter behaviour `Adapter` |
+| `lib/fyrlet/features/` | Optional core features (switched by capability): `Anonymous`, `Ingest`, `Stream` (append subscriptions), `Executors`. They change the principal type, operation kinds, channels or protocol, and can only be defined by the core; they are **not plugins** |
+| `lib/fyrlet/plugin*.ex`, `conformance/` | Plugin interface, loading and conformance suite |
+| `lib/fyrlet_web/` | HTTP, Socket and channels |
+| `packages/fyrlet_webhooks`, `packages/fyrlet_ops` | **Plugins** (`Fyrlet.Plugin`): bring their own migrations, processes, and routes `/api/v1/plugins/<name>/…` |
+| `packages/fyrlet_effect_http`, `packages/fyrlet_effect_email` | **Side effect adapter packages** (`Fyrlet.Effects.Adapter`), registered through `effect_adapters` |
 
-接入一个包：在宿主 `mix.exs` 加路径依赖（如 `{:fyrlet_ops, path: "packages/fyrlet_ops"}`），插件再写进 `config :fyrlet, plugins: [FyrletOps]`，然后 `mix fyrlet.migrate`（插件迁移随之执行）。包有各自的测试：`cd packages/fyrlet_ops && mix test`；`scripts/test_all.sh` 一次跑完所有套件。
+To adopt a package: add a path dependency in the host `mix.exs` (for example `{:fyrlet_ops, path: "packages/fyrlet_ops"}`), then add the plugin to `config :fyrlet, plugins: [FyrletOps]`, then run `mix fyrlet.migrate` (plugin migrations run with it). Each package has its own tests: `cd packages/fyrlet_ops && mix test`; `scripts/test_all.sh` runs all suites in one go.

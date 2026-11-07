@@ -1,16 +1,18 @@
 # Fyrlet TypeScript SDK
 
-SDK 核心提供业务调用与实时订阅，不依赖 React、浏览器存储或 Cookie 登录。当前包为 private 包，构建产物在 dist，支持 `npm pack` 后本地安装，尚未发布到 npm。
+English | [简体中文](README.zh-CN.md)
 
-本 SDK 位于 `sdks/typescript/`，供 JavaScript / TypeScript 应用使用；多语言布局和新增 SDK 的要求见 [SDK 总览](../README.md)。React 适配包后续基于本 SDK 实现，React Native 的运行时适配也属于 TypeScript 生态。
+The SDK provides business calls and realtime subscriptions without depending on React, browser storage or cookie authentication. The package is currently private, builds into `dist`, and can be installed locally after `npm pack`. It has not been published to npm.
 
-## 入口
+The implementation lives in `sdks/typescript/` and serves JavaScript and TypeScript applications. See the [SDK overview](../README.md) for the language layout and requirements for new SDKs. Future React adapters build on this SDK; React Native runtime integration also belongs to the TypeScript ecosystem. For a complete server-to-browser walkthrough, start with the [integration tutorial](../../docs/TUTORIAL.md).
 
-- `@fyrlet/client`：createClient、ApiError 与公开类型。
-- `@fyrlet/client/server`：受信后端的 createSessionService。
-- `@fyrlet/client/example-contract`：从收件箱服务端契约生成的类型。
+## Entry points
 
-## 后端交换会话
+- `@fyrlet/client`: `createClient`, `ApiError` and public types.
+- `@fyrlet/client/server`: `createSessionService`, for trusted backends.
+- `@fyrlet/client/example-contract`: types generated from the inbox server contract.
+
+## Exchanging sessions on the backend
 
 ```ts
 import { createSessionService } from "@fyrlet/client/server";
@@ -27,11 +29,11 @@ const session = await sessions.issueSession({
 });
 ```
 
-authenticatedUser 必须来自客户应用已验证的登录态。把 session.token 返回给对应用户；不要把服务密钥返回客户端。`revokeSession(session_id)` 可以撤销本项目单个会话。
+`authenticatedUser` must come from your application's verified login state. Return `session.token` only to that user; keep the service key on the backend. `revokeSession(session_id)` revokes one session in this project.
 
-## 调用与重试
+## Calls and retries
 
-`createClient<Contract>({endpoint,projectId,getToken})` 使用宿主应用提供的短期用户令牌。首次认证读取 identity 并绑定 Subject，拒绝在同一个 client 中切换账号。getToken 收到 forceRefresh=true 时应重新验证宿主登录态并获取会话。
+`createClient<Contract>({ endpoint, projectId, getToken })` uses short-lived user tokens supplied by the host application. The first authentication reads the identity and binds the Subject; switching accounts on the same client is rejected. When `getToken` receives `forceRefresh: true`, revalidate the host login and obtain a new session.
 
 ```ts
 const item = await client.call("inbox.add", { text: "Hello" }, {
@@ -45,9 +47,9 @@ await client.call("inbox.update", {
 });
 ```
 
-SDK 为每次 call 自动生成幂等键，认证失效最多刷新一次并复用该键。网络中断后的业务重试由调用者决定，需要显式复用同一键。CONFLICT 不自动重试。宿主登录失效时，getToken 应抛出 code 为 UNAUTHENTICATED 的 ApiError，结束自动恢复并清空订阅数据。
+The SDK generates an idempotency key for each call. It refreshes expired authentication at most once and reuses that key. Your application decides whether to retry a business call after a network interruption and must explicitly reuse the same key. `CONFLICT` is not retried automatically. If the host login has expired, `getToken` should throw an `ApiError` with code `UNAUTHENTICATED` to stop recovery and clear subscription data.
 
-默认通过 HTTP 调用业务。需要复用实时连接时可选择 Socket RPC：
+Calls use HTTP by default. To reuse the realtime connection, choose Socket RPC:
 
 ```ts
 const client = createClient<Contract>({
@@ -58,11 +60,11 @@ const client = createClient<Contract>({
 });
 ```
 
-Socket 模式的调用共用一个 operations channel，与订阅共用连接；没有订阅也可调用。服务端事务、权限、幂等与错误码相同，身份验证仍使用 HTTP。断线会拒绝正在等待的调用；连接恢复不会自动重放写入。并发调用在服务端同一 operations channel 中串行处理。
+Socket calls share one operations channel and the same connection as subscriptions. Calls also work without subscriptions. Transactions, authorization, idempotency and error codes have the same semantics; identity verification still uses HTTP. A disconnect rejects pending calls. Reconnecting does not replay writes. Concurrent calls on one operations channel are processed serially on the server.
 
-ApiError 包含 code、message、details、retryable、status、requestId。HTTP 与调用等待默认 10 秒超时，可用 timeoutMs 调整；AbortSignal 和 close 可以取消客户端等待。取消或超时不表示服务端一定未提交，重试写入仍应复用幂等键。
+`ApiError` exposes `code`, `message`, `details`, `retryable`, `status` and `requestId`. HTTP requests and call waits default to a 10-second timeout, configurable with `timeoutMs`. `AbortSignal` and `close()` cancel client waits. Cancellation or timeout does not prove that the server failed to commit; reuse the idempotency key when retrying a write.
 
-## 订阅状态
+## Subscription states
 
 ```ts
 const recent = client.subscribe("inbox.recent", { limit: 20 });
@@ -75,112 +77,117 @@ recent.unsubscribe();
 client.close();
 ```
 
-onChange 立即发出当前状态，之后在状态更新时通知。connecting 是初次建立；ready 表示收到当前订阅快照；recovering 保留旧数据并标记正在恢复；error 和 closed 清空数据。generation 与 seq 用于排除旧订阅或旧消息。
+`onChange` immediately emits the current state and then reports state updates. `connecting` is the initial connection; `ready` means the subscription has received its current snapshot. `recovering` retains the previous data while recovering; `error` and `closed` clear data. `generation` and `seq` reject stale subscriptions and messages.
 
-refresh 返回 Promise<void>，只表示服务端接受刷新请求；观察之后的状态更新取得数据。SDK 自动确认快照、重建断线订阅，并在重连初始快照后进入 ready。业务和权限错误终止对应订阅；reconnect 可以显式重新尝试所有仍保留的订阅。
+`refresh()` returns `Promise<void>` and only confirms that the server accepted the refresh request. Observe subsequent state updates to receive data. The SDK acknowledges snapshots, rebuilds disconnected subscriptions and returns to `ready` after the new initial snapshot. Business and permission errors terminate the affected subscription. `reconnect()` explicitly retries subscriptions that are still retained.
 
-SDK 默认请求 delta-v1；服务端确认后，SDK 在本地应用字段增量，onChange 继续提供完整业务视图。初始、显式刷新与重新加入均接收完整快照；序号缺口触发重新连接以恢复。订阅数据递归冻结，之前交给消费者的视图不会被后续增量修改；需要本地编辑时先创建副本。设置 `delta: false` 可使用完整快照模式。
+The SDK requests `delta-v1` by default. Once confirmed by the server, field deltas are applied locally and `onChange` still receives a complete business view. Initial joins, explicit refreshes and rejoins receive full snapshots. A sequence gap triggers reconnection. Subscription data is recursively frozen; later deltas do not mutate previously delivered views. Make a copy before editing locally, or set `delta: false` to use full snapshots.
 
-共享由服务端契约决定，不是 SDK 或 join 选项。`"shared": true`（例如 inbox.recent）以完整 Actor 和规范化订阅描述为 key，仅在本节点、同 session 的设备间共享；不同 session 仍隔离。跨用户的公共结果需服务端声明 `"sharing": "identical"` 并实现成员检查和公共查询投影，例如 Chat 的房间状态。共享不跳过会话、业务授权或成员检查，不缓存授权结论；各客户端的 generation、seq 和 ACK 独立。慢端不阻塞其他设备，落后后经重新授权的完整快照追平，不补放历史 delta。
+Sharing is determined by the server contract, not an SDK or join option. `"shared": true`, as in `inbox.recent`, keys sharing by the complete Actor and normalized subscription descriptor, so it shares only between devices on the same node using the same session. Different sessions remain isolated. Public results shared across users require `"sharing": "identical"`, member checks and a public query projection, as in Chat room state. Sharing never skips session, authorization or membership checks, and does not cache authorization decisions. Each client's `generation`, `seq` and ACK are independent. Slow clients catch up through a newly authorized full snapshot without blocking other clients or replaying historical deltas.
 
-运行中 Observer 退出、会话检查 worker 故障或超时产生 retryable 的内部错误 status 时，SDK 自动进入 recovering，保留旧数据，刷新令牌并重新验证身份、重建连接与订阅；收到新 generation 的完整快照后才 ready。默认重试从 250 ms 指数增长至最多 30 秒，可用 retryDelayMs 覆盖。这是订阅恢复，不自动重放未确认的业务写入；认证或业务权限终止错误仍清空数据。attach 调用退出时服务端会内部重试一次。首次加入返回 retryable 错误（例如 Observer 短暂不可用）时，该订阅进入 recovering，由 Phoenix 按 `retryDelayMs`（未设置时用 Phoenix 默认退避）自动重新加入，不影响连接上的其他订阅；连续失败超过 10 次才报告为 error。UNAUTHENTICATED 仍按认证失败重建整个连接，不可重试的 join 错误立即失败。
+If a running Observer exits or a session-check worker fails or times out with a retryable internal status, the SDK enters `recovering`, retains previous data, refreshes the token, verifies identity and rebuilds the connection and subscriptions. It returns to `ready` only after a full snapshot with a new generation. Recovery backs off from 250 ms to at most 30 seconds unless `retryDelayMs` overrides it. Unconfirmed writes are not replayed. Terminal authentication and business permission errors clear data. The server retries an exited attach call once internally. Retryable initial join errors recover on the affected subscription through Phoenix rejoin backoff; they do not interrupt other subscriptions. More than 10 consecutive failures produce an error. `UNAUTHENTICATED` rebuilds the whole connection; non-retryable join errors fail immediately.
 
-ACK 为单向、无 ref 的通知，不等待服务端回执，也不创建回复定时器。服务端与 SDK 统一使用紧凑增量格式，详见 docs/PROTOCOL.md；没有旧协议兼容分支。纯字段修改复用不可变视图的 ID 索引，只复制结果数组与被修改记录；增删或重排仍验证完整成员关系，索引通过 WeakMap 随视图回收。
+ACK is a one-way notification without a ref, response wait or reply timer. The SDK and server use the compact delta format in the [protocol](../../docs/PROTOCOL.md), without a legacy compatibility branch. Field-only changes reuse the immutable view's ID index and copy only the result array and changed records. Additions, removals and reordering still validate complete membership; a `WeakMap` releases indexes with their views.
 
-unsubscribe 结束一个订阅；默认 HTTP 模式下最后一个订阅结束时释放连接。Socket 调用模式保留连接供后续调用，使用 close 释放。close 释放所有订阅、定时器和请求，并禁止再次使用这个 client。账号切换时先 close，再创建新的 client。
+`unsubscribe()` ends one subscription. In HTTP mode, ending the last subscription releases the connection. Socket mode retains it for later calls; use `close()` to release it. `close()` releases all subscriptions, timers and requests and permanently closes the client. Close the old client before creating one for a different account.
 
-## Run 与追加订阅（可选能力）
+## Runs and append subscriptions
 
-只有声明了能力，下面的 API 才可用；**不声明就调用**会得到 `UNSUPPORTED_CAPABILITY`（Promise 拒绝；订阅类同步抛出）。
+Declare the capability before using these APIs. Otherwise calls reject, and subscription methods throw synchronously, with `UNSUPPORTED_CAPABILITY`.
 
 ```ts
-const client = createClient({ endpoint, projectId, getToken, capabilities: ["runs", "append"] });
+const flowClient = createClient({
+  endpoint: flowEndpoint, projectId: flowProjectId, getToken: getFlowToken, capabilities: ["runs"],
+});
 
-// 持久运行：受理不等于完成，用订阅观察
-const { run_id } = await client.startRun("flow.start", { source: "x" }); // 自动带 Idempotency-Key
-const view = client.subscribeRun(run_id);          // fyrlet.run 的完整有界快照
-view.onChange((s) => render(s.data));              // s.data.status、steps、effects、events_truncated…
+const { run_id } = await flowClient.startRun("flow.start", {
+  flow_id: "demo",
+  nodes: [{ type: "wait", name: "approval", signal: "approve", timeout_seconds: 600 }],
+});
+const view = flowClient.subscribeRun(run_id);
+view.onChange((state) => render(state.data));
 
-await client.signalRun(run_id, { wait_id, name: "approve", payload: {} }); // accepted ≠ consumed
-const cancel = await client.cancelRun(run_id);     // cancellation_outcome: confirmed | fenced_timeout
-await client.getRun(run_id);
+await flowClient.signalRun(run_id, { wait_id, name: "napprove", payload: {} });
+const cancel = await flowClient.cancelRun(run_id);
+await flowClient.getRun(run_id);
 
-// 追加订阅：data 是最新 max_items 条的窗口，不是完整历史
-const feed = client.subscribeAppend("room.recent", { room: "r1" });
-feed.getState().cursor; // 不透明位置，只可比较是否相等
+const chatClient = createClient({
+  endpoint: chatEndpoint, projectId: chatProjectId, getToken: getChatToken, capabilities: ["append"],
+});
+const feed = chatClient.subscribeAppend("chat.messages", { room_id });
+feed.getState().cursor;
 ```
 
-要点：
+The Run example connects to a Flow host; the append example connects to a Chat host. Use each host's endpoint, project and token provider. Obtain `wait_id` from the waiting Run and `room_id` from a conversation you have joined. Flow normalizes signal `approve` to `napprove`.
 
-- `cancelRun` 的 `fenced_timeout` 只表示该运行之后不能再推进，**不代表外部工作已停止**；在途副作用的真实状态仍在 `effects` 中。
-- 追加订阅只在批次的 `base_cursor` 恰好接上本地游标、序号连续时才合并；否则停止合并并 `refresh`，由服务端重发快照。重复批次不会被应用两次；断线重连后从服务端快照重新开始。
-- Run 与追加订阅的类型（`RunView`、`StartedRun` …）从包入口导出；内置订阅 `fyrlet.run` 不在生成的契约里。
+- Starting a Run means acceptance, not completion. Observe its bounded `fyrlet.run` snapshot for status, steps, effects and truncated events. `startRun` automatically supplies an idempotency key; an accepted signal has not necessarily been consumed.
+- `cancelRun` can return `confirmed` or `fenced_timeout`. The latter fences future advancement; it does not prove external work stopped. Inspect `effects` for the actual state of in-flight side effects.
+- Append data is the latest `max_items` window, not complete history. Batches merge only when `base_cursor` matches the local cursor and sequence numbers are continuous. Otherwise the SDK refreshes from a server snapshot. Duplicate batches are not applied twice; reconnects restart from a snapshot. Treat cursors as opaque values and compare only for equality.
+- Run and append types, including `RunView` and `StartedRun`, are exported from the package. The built-in `fyrlet.run` subscription is not part of the generated business contract.
 
-## 乐观写入（`CallOptions.optimistic`）
+## Optimistic writes (`CallOptions.optimistic`)
 
-调用写操作时给订阅叠加一个本地预测，界面立刻变化，不必等服务端确认：
+Overlay a local prediction on a subscription while a write is pending:
 
 ```ts
 const items = client.subscribe("inbox.recent", {});
 await client.call("inbox.add", { text }, {
   optimistic: [{
     subscription: items,
-    // 按 id 覆盖，而不是盲目追加：服务端自己的那份变更可能已经在 current 里了
     update: (current) => [...current.filter((item) => item.id !== draft.id), draft],
   }],
 });
-items.getState().data;     // 预测叠加在服务端数据上的结果
-items.getState().pending;  // 当前叠加着多少个未被服务端数据取代的预测
+items.getState().data;
+items.getState().pending;
 ```
 
-- **失败立即回滚**：调用抛错时预测马上撤销，错误原样抛出。
-- **成功后保留**，直到这个订阅**下一次收到服务端数据**（快照或增量），或超过 `optimisticTtlMs`（默认 5000 毫秒）。
-- 服务端数据在写入进行中到达时，预测会重新叠加在新数据上；因此 `update` **必须幂等**，且必须返回新值（收到的数据是冻结的，原地修改会抛错）。抛错的预测会被丢弃并交给 `onListenerError`，调用本身不受影响。
-- 只对已经有数据的、由同一个客户端创建的、尚未取消的订阅生效；传入别的订阅会在发出请求前抛 `TypeError`，不会有任何副作用。没有数据的订阅被跳过。
-- 内部状态始终是服务端的真值（增量补丁基于它应用），预测只在 `getState()` 和监听回调里派生出来。
+The update replaces by ID instead of blindly appending, because `current` may already contain the server's change. `data` includes predictions; `pending` counts predictions not yet replaced by server data.
 
-**保证的边界，请按需评估：**
+- A failed call immediately rolls back its prediction and throws the original error.
+- A successful prediction remains until the next server snapshot or delta for that subscription, or `optimisticTtlMs` expires (5000 ms by default).
+- Predictions are reapplied when server data arrives during the write. `update` must be idempotent and return a new value; mutating frozen data throws. A prediction that throws is discarded and reported to `onListenerError` without affecting the call.
+- Only active subscriptions created by the same client are accepted. Invalid subscriptions cause a `TypeError` before sending the request. Subscriptions without data are skipped.
+- Internal state remains the server's truth; overlays are derived only for `getState()` and listeners.
 
-- 服务端不会告诉客户端“这次推送已经包含你的写入”，所以预测的结束时机是启发式的。少见的竞态下——例如下一次推送是在你的写入提交之前算好的——界面可能短暂回退到没有这次写入的状态，随后被真正的更新纠正。
-- 预测不会跨页面刷新保留，没有离线队列：断线期间发出的写入仍然会失败并回滚。
-- 追加订阅可以传入（数据是窗口，请自行确认 `update` 的语义）；Presence 订阅不支持，传入会抛 `TypeError`。
+The server does not identify which push includes a particular write, so ending predictions is heuristic. A push computed before the commit can briefly remove a prediction before the actual update arrives. Predictions do not survive page reloads and do not provide an offline queue: disconnected writes still fail and roll back. Append subscriptions are supported, but updates must respect their window semantics. Presence subscriptions are rejected with `TypeError`.
 
-## 在线状态（能力 `presence`）
+## Presence
 
-“谁在这个房间里”和“正在输入”这类短暂状态，不写数据库。声明 `capabilities: ["presence"]` 后：
+Presence tracks transient state such as room membership and typing without writing it to the database. Declare `capabilities: ["presence"]` first:
 
 ```ts
 const room = client.subscribePresence("room.presence", { room: "r1" }, { typing: false });
 room.onChange((state) => {
-  // state.data: { [subjectId]: [{ ref, data, joined_at }] } —— 同一个人两台设备就是两条
   console.log(Object.keys(state.data ?? {}));
 });
-await room.update({ typing: true });   // 替换自己这条 meta
-room.self();                           // 自己的 subject_id（加入后可用）
-room.unsubscribe();                    // 离开房间，别人会看到你消失
+await room.update({ typing: true });
+room.self();
+room.unsubscribe();
 ```
 
-- 房间名、参数和 `meta` 的 schema 来自契约的 `presence` 段（见 [PROTOCOL.md](../../docs/PROTOCOL.md)）。**生成的类型暂不覆盖这一段**，所以方法按字符串名字调用。
-- 名册按 `ref` 增量更新，重复收到同一个 diff 无害。重连后会以**最新一次 `update` 的 meta** 重新加入，并整体替换名册，不会留下过期成员。
-- `update` 受服务端频率限制，过于频繁会以可重试的 `LIMIT_EXCEEDED` 拒绝；meta 不符合 schema 返回 `VALIDATION_FAILED`；房间未就绪时返回 `NOT_READY`。
-- 匿名会话不能进入房间；房间里的所有成员能看到彼此的 `subject_id` 和 `meta`。
+`state.data` maps each subject ID to `{ ref, data, joined_at }` entries; two devices for the same user produce two entries. `update()` replaces this connection's metadata. `self()` returns your subject ID after joining, and `unsubscribe()` leaves the room.
 
-## Socket decoder 与批处理
+- Room names, parameters and metadata schemas come from the contract's `presence` section in the [protocol](../../docs/PROTOCOL.md). Generated types do not cover this section yet, so calls use string names.
+- Membership updates by `ref`; repeated diffs are harmless. Reconnecting rejoins with the most recently updated metadata and replaces the roster.
+- Updates are rate-limited. Excessive updates return retryable `LIMIT_EXCEEDED`, invalid metadata returns `VALIDATION_FAILED`, and an unready room returns `NOT_READY`.
+- Anonymous sessions cannot join. Members can see one another's subject IDs and metadata.
 
-SDK 为 Phoenix 安装自定义 decoder，接受标准单帧 `[join_ref, ref, topic, event, payload]` 或唯一外层字段为 batch 的 `{"batch":[...]}`。两个 ref 为字符串或 null，topic / event 为字符串，payload 为非 null 对象且不是数组；batch 必须有 1–64 帧。先校验整个批次再按顺序分派，空批、超限、非法成员或非法 JSON 产生不可重试的 PROTOCOL_ERROR，清空订阅数据，不部分应用非法批次。
+## Socket decoder and batching
 
-服务端只聚合同轮 transport mailbox 已有推送，不定时等待凑批；单帧保持标准数组。多帧可以来自不同 topic，最多 64 帧，默认聚合预算 256 KiB，单条超预算消息独立发送。该包装不表示跨订阅事务，也不合并 onChange 通知。使用此 SDK 无需业务代码解包；自行使用原生 Phoenix 客户端时必须提供兼容 decoder。SDK 的 join、call、ACK 仍按标准单帧发送。
+The SDK installs a Phoenix decoder accepting either a standard `[join_ref, ref, topic, event, payload]` frame or an object whose only field is `batch`: `{"batch":[...]}`. Refs are strings or null; topics and events are strings; payloads are non-null objects, not arrays. Batches contain 1–64 frames. The whole batch is validated before dispatch. Empty or oversized batches, invalid members and malformed JSON produce a non-retryable `PROTOCOL_ERROR` and clear subscription data; invalid batches are never partially applied.
 
-## 运行时适配
+The server batches only pushes already present in the current transport mailbox and does not wait to fill a batch. A single frame keeps the standard array format. Multiple frames can span topics, with a maximum of 64 frames and a default 256 KiB budget; an oversized single message is sent separately. Batching does not provide transactions across subscriptions or combine `onChange` notifications. This SDK handles decoding; a native Phoenix client needs a compatible decoder. Joins, calls and ACKs are still sent as standard single frames.
 
-ClientOptions 支持注入 fetch、WebSocket、createId、retryDelayMs 与 onListenerError。默认 createId 使用 crypto.randomUUID；缺少该 API 的运行时必须提供安全随机 UUID 生成函数。
+## Runtime integration
 
-Node 已通过真实集成测试。浏览器与 React Native 不需要导入 server 入口；React Native 还需宿主处理前后台切换、网络恢复和安全令牌存储，真机行为尚未验收。没有移动端推送或离线写入。
+`ClientOptions` accepts injected `fetch`, `WebSocket`, `createId`, `retryDelayMs` and `onListenerError`. The default ID generator uses `crypto.randomUUID`; runtimes without it must supply a secure random UUID generator.
 
-## 契约与验证
+Node has passed real integration tests. Browser and React Native clients do not import the server entry point. React Native applications must also handle foreground/background transitions, network restoration and secure token storage; physical-device behavior has not been verified. There is no mobile push or offline writing.
+
+## Contracts and verification
 
 ```sh
-mix fyrlet.contract priv/contract.json
+(cd examples/inbox && mix fyrlet.contract ../../priv/contract.json)
 npm --prefix sdks/typescript run generate
 npm --prefix sdks/typescript run build
 npm --prefix sdks/typescript test
@@ -189,8 +196,8 @@ bash scripts/integration.sh
 DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 ```
 
-命令从仓库根目录执行。生成器支持当前受限契约，拒绝不支持的 schema；输入默认字段生成可选属性，输出按 required 字段生成。生成类型提供编译期约束，服务端仍对所有输入输出进行运行时校验。
+Run these commands from the repository root. The generator supports the current restricted contract dialect and rejects unsupported schemas. Input fields with defaults become optional; output fields follow `required`. Generated types provide compile-time checks, while the server validates all input and output at runtime.
 
-单元测试 63 个；真实服务端集成 13 个，包含 Run 幂等、信号、取消、主体/项目隔离、重启恢复、append 窗口与撤销。四个领域应用另有 8 个端到端场景。
+The recorded verification includes 63 unit tests and 13 real-server integration scenarios, covering Run idempotency, signals, cancellation, subject/project isolation, restart recovery, append windows and revocation. Four domain applications add 8 end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for the commands and verification boundaries.
 
-执行 `bash scripts/package.sh` 生成 `.local/releases/fyrlet-client-0.1.0.tgz`，其他项目可用 `npm install /绝对路径/fyrlet-client-0.1.0.tgz` 安装。`bash scripts/install_smoke.sh` 会在仓库外创建 consumer，实际安装并导入主入口与 `@fyrlet/client/server`；分发和版本边界见 [INSTALL.md](../../docs/INSTALL.md)。
+`bash scripts/package.sh` produces `.local/releases/fyrlet-client-0.1.0.tgz`; another project can install it with `npm install /absolute/path/fyrlet-client-0.1.0.tgz`. `bash scripts/install_smoke.sh` installs the package into a consumer outside the repository and imports both the main and server entry points. See [installation](../../docs/INSTALL.md) for distribution and version boundaries.

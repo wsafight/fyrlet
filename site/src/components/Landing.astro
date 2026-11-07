@@ -1,0 +1,197 @@
+---
+import { Code } from "astro:components";
+import { gh, href, type Lang } from "../i18n";
+import "../styles/landing.css";
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const zh = lang === "zh";
+const L = <T,>(en: T, chinese: T) => (zh ? chinese : en);
+const doc = (slug: string) => href(lang, `/docs/${slug}/`);
+const themes = { light: "github-light", dark: "github-dark" } as const;
+
+const features = [
+  { title: L("Operations and contracts", "业务操作与契约"), text: L("Define named operations in Elixir. Use the same contract for validation, export and generated TypeScript types.", "在 Elixir 中定义命名的业务操作，同一份契约用于输入校验、导出和 TypeScript 类型生成。"), slug: "protocol" },
+  { title: L("Transactional writes", "事务写入"), text: L("Commit business changes, idempotency records and invalidation notifications in one database transaction.", "业务变更、幂等记录与失效通知在同一个数据库事务中提交。"), slug: "server" },
+  { title: L("Authorization", "权限检查"), text: L("Isolate projects and users. Recheck sessions and authorization before each push.", "按项目和用户隔离数据，每次推送前重新检查会话与授权。"), slug: "auth" },
+  { title: L("Live subscriptions", "实时订阅"), text: L("Subscribe to authorized views with snapshots and acknowledgments. Negotiate field deltas when needed.", "订阅已授权的数据视图，支持完整快照与确认，也可协商字段级增量。"), slug: "sharing" },
+  { title: L("Connection recovery", "断线恢复"), text: L("The SDK rebuilds subscriptions after a disconnect and retrieves the current authorized view.", "断线后，SDK 重建订阅，取回当前已授权的数据视图。"), slug: "sdk" },
+  { title: L("TypeScript SDK", "TypeScript SDK"), text: L("Typed calls, subscription state, optimistic updates and presence are available through the client SDK.", "客户端 SDK 提供类型化调用、订阅状态、乐观更新与在线状态。"), slug: "sdk" },
+];
+
+const apps = [
+  { name: "Notify", slug: "notify", text: L("Live notifications, email delivery and reconciliation.", "站内通知、邮件投递与结果对账。") },
+  { name: "Flow", slug: "flow", text: L("Durable workflows with HTTP and wait nodes.", "包含 HTTP 与等待节点的持久化流程。") },
+  { name: "Agent", slug: "agent", text: L("Bounded tools, human approval and durable task state.", "有限工具、人工审批与持久任务状态。") },
+  { name: "Chat", slug: "chat", text: L("Shared rooms, live messages and paginated history.", "共享房间、实时消息与分页历史。") },
+];
+
+const resources = [
+  { title: L("Integration tutorial", "接入教程"), text: L("Start a host, issue a session and subscribe from the browser.", "启动宿主、签发会话，在浏览器中订阅数据。"), slug: "tutorial" },
+  { title: "TypeScript SDK", text: L("Calls, subscription state, recovery and optimistic updates.", "调用、订阅状态、断线恢复与乐观更新。"), slug: "sdk" },
+  { title: L("Server development", "服务端开发"), text: L("Implement contract, authorize, execute and scope callbacks.", "实现 contract、authorize、execute 和 scope 回调。"), slug: "server" },
+  { title: L("Troubleshooting", "问题排查"), text: L("Diagnose connection, authorization, migration and recovery failures.", "排查连接、鉴权、迁移与恢复失败。"), slug: "troubleshooting" },
+];
+
+const clientCode = `import { createClient } from "@fyrlet/client";
+import type { AppContract } from "./contract";
+
+const client = createClient<AppContract>({
+  endpoint, projectId, getToken,
+});
+
+const inbox = client.subscribe("inbox.recent", { limit: 20 });
+inbox.onChange(({ data }) => renderInbox(data));
+
+await client.call("inbox.add", {
+  text: "Hello Phoenix",
+});`;
+
+const serverCode = `def execute("inbox.add", actor, input) do
+  item =
+    Repo.insert!(%InboxItem{
+      project_id: actor.project_id,
+      subject_id: actor.subject_id,
+      text: input["text"],
+      content_type: input["content_type"]
+    })
+
+  {:ok, serialize(item), [scope("inbox.recent", actor, %{})]}
+end`;
+
+const quickCode = `bash scripts/postgres.sh start
+mix deps.get
+npm --prefix sdks/typescript ci
+npm --prefix sdks/typescript run build
+cd examples/inbox
+mix fyrlet.migrate --create
+mix fyrlet.project --output ../../.local/project.json "My App"
+PHX_SERVER=true PORT=4000 mix phx.server`;
+---
+
+<div class="landing">
+  <section class="intro wrap" aria-labelledby="intro-title">
+    <div class="intro-copy">
+      <h1 id="intro-title">{L("Realtime applications", "基于 Phoenix 的")}<br />{L("with Phoenix", "实时应用框架")}</h1>
+      <p class="intro-description">{L("Define business operations and subscriptions in Elixir. Connect your clients with typed calls and live, authorized data views.", "在 Elixir 中定义业务操作和订阅，通过类型化调用与实时数据视图连接客户端。数据按用户授权，写入后更新订阅，断线后自动恢复。")}</p>
+      <div class="intro-actions">
+        <a class="btn btn-primary" href={doc("tutorial")}>{L("Read the tutorial", "阅读接入教程")}</a>
+        <a class="btn btn-ghost" href={gh}>{L("View source", "查看源码")}</a>
+      </div>
+      <ul class="intro-stack" aria-label={L("Technology stack", "技术栈")}>
+        <li>Elixir</li><li>Phoenix</li><li>PostgreSQL</li><li>TypeScript</li>
+      </ul>
+      <p class="intro-status">{L("In development. Not yet published to Hex or npm.", "开发中，尚未发布到 Hex / npm。")} <a href={doc("status")}>{L("Project status", "当前状态")}</a></p>
+    </div>
+
+    <div class="code-example" data-code-example>
+      <div class="code-tabs" role="tablist" aria-label={L("Inbox example code", "Inbox 示例代码")}>
+        <button id="client-tab" type="button" role="tab" aria-controls="client-panel" aria-selected="true" tabindex="0">TypeScript</button>
+        <button id="server-tab" type="button" role="tab" aria-controls="server-panel" aria-selected="false" tabindex="-1">Elixir</button>
+      </div>
+      <div id="client-panel" class="code-panel" role="tabpanel" aria-labelledby="client-tab" tabindex="0">
+        <div class="code-filename">client.ts</div>
+        <Code code={clientCode} lang="ts" themes={themes} defaultColor={false} />
+        <p class="code-caption">{L("Client excerpt. Supply endpoint, projectId and getToken from your host application.", "客户端节选。endpoint、projectId 和 getToken 由宿主应用提供。")}</p>
+      </div>
+      <div id="server-panel" class="code-panel" role="tabpanel" aria-labelledby="server-tab" tabindex="0" hidden>
+        <div class="code-filename">examples/inbox/lib/inbox_example/inbox.ex</div>
+        <Code code={serverCode} lang="elixir" themes={themes} defaultColor={false} />
+        <p class="code-caption">{L("Server callback excerpt. The full example also defines its contract, authorization and scope.", "服务端回调节选。完整示例还包含契约、授权与 scope 定义。")}</p>
+      </div>
+      <div class="code-example-footer"><span>{L("From the Inbox example", "来自 Inbox 示例")}</span><a href={doc("example-inbox")}>{L("Read the full example", "查看完整示例")}</a></div>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="operation-path">
+      <p>{L("A write in Inbox", "Inbox 中的一次写入")}</p>
+      <ol>
+        <li><span>{L("Call an operation", "调用业务操作")}</span><code>inbox.add</code></li>
+        <li><span>{L("Commit the transaction", "提交数据库事务")}</span><strong>PostgreSQL</strong></li>
+        <li><span>{L("Update authorized views", "更新已授权的订阅")}</span><code>inbox.recent</code></li>
+      </ol>
+    </div>
+  </div>
+
+  <section class="feature-section" id="features" aria-labelledby="features-title">
+    <div class="wrap feature-layout">
+      <div class="section-intro">
+        <h2 id="features-title">{L("What the framework handles", "框架负责什么")}</h2>
+        <p>{L("Your application defines the business logic. Fyrlet handles the contract, write path and subscription lifecycle.", "应用定义业务逻辑，Fyrlet 负责契约、写入流程和订阅生命周期。")}</p>
+        <a href={doc("architecture")}>{L("Architecture", "查看架构说明")}</a>
+      </div>
+      <dl class="feature-list">
+        {features.map((feature) => <div><dt><a href={doc(feature.slug)}>{feature.title}</a></dt><dd>{feature.text}</dd></div>)}
+      </dl>
+    </div>
+  </section>
+
+  <section class="examples-section wrap" id="examples" aria-labelledby="examples-title">
+    <div class="section-heading">
+      <div><h2 id="examples-title">{L("Example applications", "示例应用")}</h2><p>{L("Five runnable host applications, with their setup and boundaries documented.", "五个可运行的宿主应用，附启动步骤与功能边界。")}</p></div>
+      <a href={doc("examples")}>{L("Setup and requirements", "启动与环境要求")}</a>
+    </div>
+    <div class="example-layout">
+      <article class="inbox-example">
+        <div><h3>Inbox</h3><p>{L("A minimal host with a private live inbox. Start here to try writes and subscription updates from a Node CLI.", "带私有实时收件箱的最小宿主。可以从这里开始，用 Node CLI 体验写入和订阅更新。")}</p></div>
+        <div class="inbox-example-footer"><code>examples/inbox/</code><a href={doc("example-inbox")}>{L("Open Inbox guide", "查看 Inbox 指南")}</a></div>
+      </article>
+      <ul class="example-list">
+        {apps.map((app) => <li><a href={doc(`example-${app.slug}`)}><h3>{app.name}</h3><p>{app.text}</p></a></li>)}
+      </ul>
+    </div>
+  </section>
+
+  <section class="documentation-section" id="documentation" aria-labelledby="documentation-title">
+    <div class="wrap documentation-layout">
+      <div>
+        <h2 id="documentation-title">{L("Documentation", "文档与本地运行")}</h2>
+        <p class="documentation-intro">{L("Run the Inbox host locally, then follow the tutorial to connect a browser client.", "先在本地启动 Inbox 宿主，再按教程接入浏览器客户端。")}</p>
+        <ul class="resource-list">
+          {resources.map((resource) => <li><a href={doc(resource.slug)}>{resource.title}</a><p>{resource.text}</p></li>)}
+        </ul>
+      </div>
+      <div class="quickstart">
+        <div class="quickstart-heading"><h3>{L("Start the Inbox host", "启动 Inbox 宿主")}</h3><span>{L("From the repository root", "在仓库根目录执行")}</span></div>
+        <Code code={quickCode} lang="bash" themes={themes} defaultColor={false} />
+        <div class="quickstart-footer"><p>Elixir ≥ 1.18<br />PostgreSQL ≥ 14<br />Node ≥ 22.23.4</p><a href={doc("install")}>{L("Installation guide", "安装与配置说明")}</a></div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="project-status wrap" aria-label={L("Verification scope", "验证范围")}>
+    <p>{L("Verified locally on a single node, with the Node SDK, four domain applications and two nodes on one machine. Production capacity has not been validated.", "已验证单节点、Node SDK、四个领域应用和同机双节点。生产容量尚未验证。")}</p>
+    <a href={doc("acceptance")}>{L("Verification record", "查看验收记录")}</a>
+  </aside>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-code-example]").forEach((example) => {
+    const tabs = Array.from(example.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const panels = Array.from(example.querySelectorAll<HTMLElement>('[role="tabpanel"]'));
+    const selectTab = (selected: HTMLButtonElement) => {
+      tabs.forEach((tab) => {
+        const active = tab === selected;
+        tab.setAttribute("aria-selected", String(active));
+        tab.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach((panel) => { panel.hidden = panel.id !== selected.getAttribute("aria-controls"); });
+    };
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => selectTab(tab));
+      tab.addEventListener("keydown", (event) => {
+        let nextIndex: number;
+        if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+        else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === "Home") nextIndex = 0;
+        else if (event.key === "End") nextIndex = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        const nextTab = tabs[nextIndex];
+        selectTab(nextTab);
+        nextTab.focus();
+      });
+    });
+  });
+</script>

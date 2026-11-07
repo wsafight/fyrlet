@@ -1,72 +1,72 @@
-# 架构与扩展原则
+# Architecture and extension principles
 
-## 基础模型
+## Base model
 
-Fyrlet 的中心抽象是：
+The central abstraction of Fyrlet is:
 
-> **一次授权查询 → 一份完整快照 → 一次事务写入 → 一个业务结果。**
+> **One authorized query → one complete snapshot → one transactional write → one business result.**
 
-基础模型由 **Operation**（一次请求、一次事务、一个结果）和 **Subscription**（授权查询、完整快照、ACK）组成。需要实时能力的多端产品（客服会话、通知投递、监控、工作流、Agent 运行）往往还包含长时运行的工作、外部副作用、持续追加的输出、多人群组和公开入口。这些通过**可选**模块表达，而不是改变基础模型：
+The base model consists of **Operation** (one request, one transaction, one result) and **Subscription** (authorized query, complete snapshot, ACK). Multi-device products that need realtime capabilities (customer support conversations, notification delivery, monitoring, workflows, Agent runs) often also involve long-running work, external side effects, continuously appended output, multi-person groups and public entry points. These are expressed through **optional** modules rather than by changing the base model:
 
-- **Run + Effect**：需要跨请求、跨进程恢复的持久任务，以及有明确交付语义的外部副作用，见 [RUNS.md](RUNS.md)、[EFFECTS.md](EFFECTS.md)。
-- **追加订阅**：持续追加的有序记录，见 [STREAMS.md](STREAMS.md)。
-- **共享订阅与受管数据访问**：见 [SHARING.md](SHARING.md)。
-- **匿名入口、批量摄取、Webhook、外部执行器等**：见 [PLUGINS.md](PLUGINS.md)。
+- **Run + Effect**: durable tasks that must recover across requests and processes, and external side effects with explicit delivery semantics, see [RUNS.md](RUNS.md) and [EFFECTS.md](EFFECTS.md).
+- **Append subscriptions**: continuously appended ordered records, see [STREAMS.md](STREAMS.md).
+- **Shared subscriptions and managed data access**: see [SHARING.md](SHARING.md).
+- **Anonymous entry, batch ingestion, webhooks, external executors and so on**: see [PLUGINS.md](PLUGINS.md).
 
-普通读写和订阅无需创建 Run。所有可选能力都要通过[能力协商](PROTOCOL.md#能力协商)才对客户端可见。
+Ordinary reads, writes and subscriptions do not need to create a Run. Every optional capability becomes visible to a client only through [capability negotiation](PROTOCOL.md#capability-negotiation).
 
-## 三层结构
+## Three layers
 
-| 层 | 内容 | 是否可插件化 | 判据 |
+| Layer | Content | Can be a plugin | Criterion |
 | --- | --- | --- | --- |
-| **核心（core）** | 契约、身份、授权执行点、事务写入、幂等、快照订阅；官方可选 Run/Effect 模块的协议与状态不变量 | 核心保证不可替换；可选模块按能力启用 | 定义"保证什么"，不要求所有应用启用所有模块 |
-| **能力包（capability package）** | 匿名/webhook/ingest 入口、副作用适配器、执行策略、配额与观测集成 | **是** | 通过公开接口增加入口或执行方式，不削弱已声明保证 |
-| **领域包（starter kit）** | 聊天、通知、工作流、Agent 运行 | 不是插件，是独立应用 | 只消费框架（definition + 迁移 + 界面），不扩展框架 |
+| **Core** | Contract, identity, authorization enforcement points, transactional writes, idempotency, snapshot subscriptions; the protocol and state invariants of the official optional Run/Effect modules | The core guarantees cannot be replaced; optional modules are enabled by capability | Defines "what is guaranteed", and does not require every application to enable every module |
+| **Capability package** | Anonymous/webhook/ingest entry points, side effect adapters, execution strategies, quota and observability integrations | **Yes** | Adds entry points or execution methods through public interfaces without weakening declared guarantees |
+| **Domain package (starter kit)** | Chat, notifications, workflows, Agent runs | Not a plugin, a standalone application | Only consumes the framework (definition + migration + UI) and does not extend it |
 
-协议由核心定义，与实现必须常驻核心是两回事。Run/Effect 可独立组织和按需加载，但启用后必须遵守同一套状态机、授权和兼容规则。
+The protocol is defined by the core, which is not the same as the implementation having to live in the core. Run/Effect can be organized independently and loaded on demand, but once enabled they must obey the same state machine, authorization and compatibility rules.
 
-## 鉴权的分层边界
+## Authentication boundaries
 
-"鉴权"不是一个可以整体归位的模块。把它整体放进核心或整体放进能力包都会出错，需要拆成四块：
+"Authentication" is not a module that can be placed as a whole. Putting it entirely in the core or entirely in capability packages would both be wrong, so it is split into four parts:
 
-| 组成 | 归属 | 理由 |
+| Component | Belongs to | Reason |
 | --- | --- | --- |
-| **身份与会话**：用户 Actor、短期令牌，以及新增入口所需的受限主体类型 | 核心 | 统一构造、校验与撤销 |
-| **授权执行点**：操作前、快照发送前、周期复核、受管查询与后台执行入口 | 核心 | 所有官方路径必须执行检查，缺失策略时拒绝访问 |
-| **业务授权规则**：`authorize/3`、`run_authorize/4`、`data_scope/3`、执行授权策略 | 应用（definition） | 核心在规定时机调用，业务负责策略与领域过滤的正确性 |
-| **新增入口的凭证方案**：匿名身份、webhook 签名、执行器凭据、外部 IdP | 能力包 | 校验凭证后，经核心身份 API 获得项目与权限受限的主体 |
+| **Identity and session**: user Actor, short-lived token, and the restricted principal types needed by new entry points | Core | Uniform construction, verification and revocation |
+| **Authorization enforcement points**: before an operation, before a snapshot is sent, periodic re-check, managed queries and background execution entry points | Core | All official paths must perform the checks, and access is denied when a policy is missing |
+| **Business authorization rules**: `authorize/3`, `run_authorize/4`, `data_scope/3`, execution authorization policy | Application (definition) | The core calls them at the specified times; the business is responsible for the correctness of policy and domain filtering |
+| **Credential schemes of new entry points**: anonymous identity, webhook signatures, executor credentials, external IdP | Capability package | After verifying the credential, obtains a principal restricted in project and permissions through the core identity API |
 
-关键约束：
+Key constraints:
 
-1. **凭证适配与业务授权分开。** 插件校验凭证并调用核心身份 API；不能把请求中的 subject/project 字段直接构造成可信 Actor，也不能替代业务授权。
-2. **凭证类插件必须 fail-closed。** 缺失、配置错误或加载失败时，其入口不可用，不得退回无认证路径。必需插件失败应阻止就绪；可选插件失败可隔离入口并报告降级状态。
-3. **后台执行不复用过期用户令牌。** 发起者、执行主体与查看者的权限分别处理，见 [RUNS.md](RUNS.md#执行身份与代码版本)。
+1. **Credential adaptation and business authorization are separate.** A plugin verifies credentials and calls the core identity API; it must not construct a trusted Actor directly from the subject/project fields in a request, and it cannot replace business authorization.
+2. **Credential plugins must fail closed.** When missing, misconfigured or failing to load, their entry points are unavailable and must not fall back to an unauthenticated path. A failing required plugin should block readiness; a failing optional plugin may isolate its entry point and report a degraded state.
+3. **Background execution does not reuse an expired user token.** The permissions of the initiator, the executing principal and the viewer are handled separately, see [RUNS.md](RUNS.md#execution-identity-and-code-version).
 
-## 硬规则
+## Hard rules
 
-1. **插件只做加法。** 可以新增入口、执行方式、适配器；不得替换快照权威性或绕过官方授权路径。默认禁止跨 Actor 复用私有查询结果；唯一共享例外是[显式声明的公共结果投影](SHARING.md#共享订阅范围)。
-2. **客户端可见的语义只能由核心定义。** 新增事件、新状态、新错误码由核心纳入协议并通过能力协商暴露；插件不得私自扩展客户端协议。
-3. **领域包不是插件。** 领域模型、表结构、界面属于应用，独立发布、独立测试。
-4. **先实现、后抽象。** 在至少两个真实实现验证接缝之前，不冻结插件 API（见 [PLUGINS.md](PLUGINS.md#接缝原则)）。
-5. **可选能力默认关闭。** 新能力全部可选、可关闭；未声明能力的客户端不会收到任何能力相关的事件。
-6. **保证必须限定范围。** 状态提交、任务执行、外部副作用、历史保留分别声明保证；不把查询辅助工具或一致性测试描述为任意业务代码的安全沙箱。
+1. **Plugins only add.** They may add entry points, execution methods and adapters; they must not replace snapshot authority or bypass the official authorization path. Reuse of private query results across Actors is forbidden by default; the only sharing exception is the [explicitly declared public result projection](SHARING.md#shared-subscription-scope).
+2. **Client-visible semantics are defined only by the core.** New events, new states and new error codes are brought into the protocol by the core and exposed through capability negotiation; plugins must not extend the client protocol on their own.
+3. **Domain packages are not plugins.** Domain models, table structures and UI belong to the application, and are released and tested independently.
+4. **Implement first, abstract later.** The plugin API is not frozen until the seams have been validated by at least two real implementations (see [PLUGINS.md](PLUGINS.md#seam-principle)).
+5. **Optional capabilities are off by default.** All new capabilities are optional and can be turned off; a client that has not declared a capability never receives any event related to it.
+6. **Guarantees must be scoped.** State commits, task execution, external side effects and history retention each declare their own guarantees; query helpers or consistency tests are not described as a security sandbox for arbitrary business code.
 
-## 架构总览
+## Architecture overview
 
 ```text
-┌──────────────────────────── 客户端（SDK / 自建）────────────────────────────┐
+┌─────────────────────────── Client (SDK / custom) ───────────────────────────┐
 │  call / subscribe(snapshot) / subscribe(delta) / startRun / signal / cancel │
 └───────────────────────────────────┬────────────────────────────────────────┘
-                                    │  能力协商（contract.capabilities）
+                                    │  capability negotiation (contract.capabilities)
 ┌───────────────────────────────────▼────────────────────────────────────────┐
-│ 核心与官方可选模块                                                          │
-│  契约与校验 · 身份与会话 · 授权执行点 · 事务写入与幂等 · 快照订阅        │
-│  可选：Run / Effect · 增量通道 · 共享订阅范围；受管数据访问 · 能力协商      │
+│ Core and official optional modules                                          │
+│  Contract/validation · identity/session · authorization points · writes    │
+│  Optional: Run / Effect · delta channel · shared scope; managed data access │
 └───────┬──────────────────────────┬──────────────────────────┬──────────────┘
         │                          │                          │
 ┌───────▼─────────┐      ┌─────────▼──────────┐     ┌─────────▼─────────┐
-│ 能力包（插件）   │      │ 执行器              │     │ 领域包（应用）     │
-│ 匿名入口/Webhook │      │ Oban / 内置执行器   │     │ 聊天 / 通知 /      │
-│ Ingest / 适配器  │      │ 外部 worker         │     │ 工作流 / Agent     │
+│ Capability pkgs │      │ Executors          │     │ Domain packages   │
+│ Anonymous/Webhook│     │ Oban / built-in    │     │ Chat / notify /   │
+│ Ingest/adapters │      │ External worker    │     │ workflow / Agent  │
 └─────────────────┘      └────────────────────┘     └───────────────────┘
 ```
