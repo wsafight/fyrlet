@@ -27,6 +27,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "npm run build && node --test test/unit.test.mjs test/unit/*.test.mjs",
+    "test:coverage": "npm run build && node --experimental-test-coverage --test --test-coverage-include=\"dist/**/*.js\" test/unit.test.mjs test/unit/*.test.mjs",
     "test:integration": "npm run build && node --test test/integration.test.mjs"
   },
   "dependencies": {

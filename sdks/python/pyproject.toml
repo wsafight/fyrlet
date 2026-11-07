@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fyrlet"
+version = "0.1.0"
+description = "Fyrlet client for typed operations and recoverable Phoenix subscriptions"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["websockets>=13.1,<14"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
