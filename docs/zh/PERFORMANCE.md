@@ -51,6 +51,8 @@
 
 ### 为什么没有测更高速率
 
+*更新（分片生成器）：* 生成器现在可以拆到多个进程（`GENERATORS=N`，见 [`bench/fair/`](../../bench/fair/README.md)）。在 1 vCPU、1000 writes/s 的一组对照里，单个生成器进程自己丢了 20000 个 tick 中的 5204 个，4 个分片只丢 271 个，所以这个速率下生成器不再是最先到极限的一环。这**不能**说明服务端的容量：同样的 4 分片配置重复运行，完成的写入占比从 70% 到 99% 不等（13.9k/20k、26.9k/30k、28.1k/30k、19.9k/20k），而 1000 writes/s 正处在一个 vCPU 能持续承受的边缘。要得到容量，需要做速率扫描，每个点至少 3 次交替重复。下文描述的是此前单生成器的运行。
+
 把目标速率提到 900 和 1300 writes/s 时，是**负载生成器**（单线程 Node）先掉拍（`generatorDropped`），Fyrlet 的 cgroup 节流为 0。按 FAIRNESS.md 的规则，生成器掉拍的点不能证明服务端容量上限，所以这套对照给不出 Fyrlet 的容量上限。
 
 ## 没有对齐的条件
@@ -73,7 +75,7 @@
 
 ## 复现与现状
 
-对照用的 Dockerfile 与运行脚本目前只在本机 `.local/fair/`，含本机绝对路径和一个临时的 `docker` 包装脚本，**尚未整理成可复用工具**。复现需要：
+**Fyrlet 一侧**现在可以用 [`bench/fair/`](../../bench/fair/README.md) 里的脚本复现（受限 PostgreSQL、release 镜像、单次运行、A B B A 交替、分片生成器）。**Meteor 一侧**（Dockerfile、MongoDB 副本集、运行器）仍只在本机 `.local/fair/`，含本机绝对路径，尚未整理成可复用工具。最初的复现步骤是：
 
 1. 用 `mix release` 构建 Fyrlet 镜像（运行层需与构建层的 glibc 版本一致，本次用 `debian:trixie-slim`）；用 `meteor build --server-only --architecture os.linux.aarch64` 打 Meteor bundle 并装进 `node:24.22.1`。
 2. 在 Linux 虚拟机里用 `--cpus`、`--memory`、`--memory-swap`、`--cpuset-cpus` 起应用、数据库和生成器容器，并把文件描述符限制提高到 65536。

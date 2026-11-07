@@ -298,3 +298,150 @@ test("DDP ignores a late close from the socket replaced during reconnect", async
   assert.notEqual(connection.state.status, "error");
   connection.close();
 });
+
+import { mergeShards } from "../lib/merge.mjs";
+
+test("sharded configuration validates and splits users and rate without gaps", () => {
+  assert.throws(() => configuration(["--shard", "2/2"]), /shard/);
+  assert.throws(() => configuration(["--shard", "0/1"]), /shard/);
+  assert.deepEqual(configuration(["--shard", "1/4"]).shard, { index: 1, count: 4 });
+  const rates = [0, 1, 2].map((index) => Math.floor(500 / 3) + (index < 500 % 3 ? 1 : 0));
+  assert.equal(rates.reduce((a, b) => a + b), 500);
+});
+
+test("merging generator shards pools raw samples and sums counters", () => {
+  const shardResult = (index, propagation, writes, dropped) => {
+    const s = summary(propagation);
+    return {
+      scenario: "soak", repetition: 1, shard: { index, count: 2 }, success: true,
+      workload: { users: 2, devices: 2, rows: 5, payloadBytes: 128 }, errors: [],
+      measurementValidity: { valid: true }, completedWrites: writes, expectedDeliveries: writes * 2, observedDeliveries: writes * 2,
+      connections: { writers: 1, observers: 2, total: 3, opened: 3 }, setupDurationMs: 100 + index,
+      pacedLoad: { offered: writes, dispatched: writes, busyDropped: 0, concurrencyDropped: 0, generatorDropped: dropped,
+        schedulerLagMs: { p95: 1, max: 2 }, offeredRate: 10, durationMs: 1000, elapsedMs: 1000 },
+      firstReadyMs: summary([]), writeMs: summary([1]), propagationMs: { ...s, count: propagation.length },
+      recoveryMs: summary([]), samples: { firstReadyMs: [], writeMs: [1], propagationMs: propagation, recoveryMs: [] },
+      windows: [{ index: 0, startedAtMs: 0, durationMs: 1000, completedWrites: writes, expectedDeliveries: writes * 2, observedDeliveries: writes * 2 }],
+      traffic: { sent: 10, queuedPeak: index + 1 }, durationMs: 1000,
+      pendingDeliveries: { peakMarkers: 3, remainingMarkers: 0, limit: 100000 },
+    };
+  };
+  const merged = mergeShards([shardResult(0, [1, 2, 3, 4, 5], 5, 1), shardResult(1, [6, 7, 8, 9, 100], 5, 2)]);
+  assert.equal(merged.completedWrites, 10);
+  assert.equal(merged.propagationMs.count, 10);
+  assert.equal(merged.propagationMs.max, 100);
+  assert.equal(merged.propagationMs.p95, 100);          // pooled, not the average of 5 and 100
+  assert.equal(merged.pacedLoad.generatorDropped, 3);
+  assert.equal(merged.traffic.sent, 20);
+  assert.equal(merged.traffic.queuedPeak, 2);
+  assert.equal(merged.connections.total, 6);
+  assert.equal(merged.setupDurationMs, 101);
+  assert.equal(merged.deliveryCoverage, 1);
+  assert.ok(markdown([{ results: [merged], target: "fyrlet", label: "x", environment: {}, capabilities: {}, measurement: {} }]));
+  assert.throws(() => mergeShards([shardResult(0, [1], 1, 0), shardResult(0, [1], 1, 0)]), /Duplicate/);
+});
+
+// A per-user fake server: each user owns one record; every observer of that user is notified of each update.
+function shardAdapter(opened) {
+  const records = new Map();
+  const listeners = new Map();
+  return { connect: async ({ user, observe }) => {
+    opened.push({ id: user.ids[0], observe });
+    const id = user.ids[0];
+    if (!records.has(id)) { records.set(id, { id, text: "initial", version: 1 }); listeners.set(id, new Set()); }
+    return {
+      getState: () => ({ status: "ready", data: [records.get(id)] }),
+      onChange: (listener) => { listeners.get(id).add(listener); return () => listeners.get(id).delete(listener); },
+      update: async (item, text) => {
+        const next = { ...item, text, version: item.version + 1 };
+        records.set(id, next);
+        for (const listener of listeners.get(id)) listener({ status: "ready", data: [next] });
+        return next;
+      },
+      close() {},
+    };
+  } };
+}
+
+const shardFixture = { run_id: "bench-shard", users: Array.from({ length: 6 }, (_unused, index) => ({ ids: [`user-${index}`] })) };
+const soakArguments = ["--scenario", "soak", "--users", "6", "--devices", "2", "--rows", "1", "--rate", "50", "--duration-ms", "400",
+  "--warmup", "0", "--settle-ms", "0", "--concurrency", "6", "--timeout-ms", "5000"];
+
+test("a shard drives only its own users and its share of the offered rate", async () => {
+  const seen = [];
+  for (const index of [0, 1]) {
+    const opened = [];
+    const config = configuration([...soakArguments, "--shard", `${index}/2`]);
+    const result = await runScenario(shardAdapter(opened), shardFixture, config, config.scenarios[0], 1);
+    assert.equal(result.success, true, JSON.stringify(result.errors));
+    assert.deepEqual([...new Set(opened.map((actor) => actor.id))].sort(),
+      [0, 1, 2, 3, 4, 5].filter((user) => user % 2 === index).map((user) => `user-${user}`));
+    assert.equal(opened.filter((actor) => actor.observe).length, 6);           // 3 users x 2 observers
+    assert.deepEqual({ ...result.shard }, { index, count: 2 });
+    assert.equal(result.connections.writers, 3);
+    assert.equal(result.pacedLoad.offered, 10);                                 // 25 writes/s x 0.4 s
+    seen.push(...opened.map((actor) => actor.id));
+  }
+  assert.equal(new Set(seen).size, 6);                                          // every user is driven by exactly one shard
+});
+
+test("shard rates add up to the total even when it does not divide evenly", async () => {
+  const rates = [];
+  for (const index of [0, 1, 2]) {
+    const config = configuration([...soakArguments, "--rate", "100", "--shard", `${index}/3`]);
+    const result = await runScenario(shardAdapter([]), shardFixture, config, config.scenarios[0], 1);
+    rates.push(result.pacedLoad.offeredRate);
+  }
+  assert.deepEqual(rates, [34, 33, 33]);
+  assert.equal(rates.reduce((total, value) => total + value, 0), 100);
+});
+
+test("a shard with no users or no rate share fails fast", async () => {
+  const config = configuration([...soakArguments, "--users", "1", "--shard", "1/2"]);
+  await assert.rejects(runScenario(shardAdapter([]), shardFixture, config, config.scenarios[0], 1), /no users/);
+  const starved = configuration([...soakArguments, "--rate", "1", "--shard", "1/2"]);
+  await assert.rejects(runScenario(shardAdapter([]), shardFixture, starved, starved.scenarios[0], 1), /no users or no share/);
+});
+
+test("--start-at holds every shard until the common start time and rejects a time already passed", async () => {
+  const startAt = Date.now() + 600;
+  const config = configuration([...soakArguments, "--start-at", String(startAt)]);
+  const result = await runScenario(shardAdapter([]), shardFixture, config, config.scenarios[0], 1);
+  assert.equal(result.success, true, JSON.stringify(result.errors));
+  assert.ok(Date.now() >= startAt, "measurement must not finish before the start time");
+
+  const late = configuration([...soakArguments, "--start-at", String(Date.now() - 1000)]);
+  const failed = await runScenario(shardAdapter([]), shardFixture, late, late.scenarios[0], 1);
+  assert.equal(failed.success, false);
+  assert.match(failed.errors[0].message, /after --start-at/);
+});
+
+test("merge.mjs combines shard result files and refuses mismatched input", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fyrlet-merge-"));
+  try {
+    const document = { formatVersion: 1, runId: "bench-shard", target: "fyrlet", label: "x", profile: "standard", environment: {}, capabilities: {}, measurement: {}, results: [] };
+    for (const index of [0, 1]) {
+      const config = configuration([...soakArguments, "--shard", `${index}/2`]);
+      const result = await runScenario(shardAdapter([]), shardFixture, config, config.scenarios[0], 1);
+      await mkdir(join(directory, `shard-${index}`));
+      await writeFile(join(directory, `shard-${index}`, "results.json"), JSON.stringify({ ...document, results: [result] }));
+    }
+    const { execFile } = await import("node:child_process");
+    const run = (...args) => new Promise((resolve) => execFile(process.execPath, [new URL("../merge.mjs", import.meta.url).pathname, ...args],
+      (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+    const ok = await run(join(directory, "merged"), join(directory, "shard-0"), join(directory, "shard-1"));
+    assert.equal(ok.error, null, ok.stderr);
+    const merged = JSON.parse(await (await import("node:fs/promises")).readFile(join(directory, "merged", "results.json"), "utf8"));
+    assert.equal(merged.results.length, 1);
+    assert.equal(merged.results[0].connections.writers, 6);
+    assert.equal(merged.results[0].pacedLoad.offered, 20);
+    assert.equal(merged.results[0].shards.length, 2);
+    const report = await (await import("node:fs/promises")).readFile(join(directory, "merged", "report.md"), "utf8");
+    assert.match(report, /soak/);
+    const bad = await run(join(directory, "merged2"), join(directory, "shard-0"), join(directory, "shard-0"));
+    assert.ok(bad.error, "the same shard twice must be rejected");
+    assert.match(bad.stderr, /Duplicate shard/);
+    const single = await run(join(directory, "merged3"), join(directory, "shard-0"));
+    assert.ok(single.error);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
