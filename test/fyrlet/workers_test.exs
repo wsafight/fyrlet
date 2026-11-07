@@ -131,4 +131,77 @@ defmodule Fyrlet.WorkersTest do
   test "process/1 is a no-op for a batch that does not exist" do
     assert :ok = Ingest.process(Ecto.UUID.generate())
   end
+
+  test "a local chain respects its limit and redelivered jobs never repeat completed steps", %{
+    alice: alice
+  } do
+    put_runs(local_chain: 2)
+
+    Application.put_env(:fyrlet, :run_plans, %{
+      "runs.demo" => fn _, _ ->
+        {:ok,
+         steps:
+           for(name <- ["first", "second", "third"], do: %{type: :step, name: name, input: %{}})}
+      end
+    })
+
+    id = start_run!(alice)
+    job = %Oban.Job{args: %{"run_id" => id}}
+    assert :ok = Fyrlet.Runs.Worker.perform(job)
+
+    assert step_statuses(id) == [
+             {"first", "succeeded"},
+             {"second", "succeeded"},
+             {"third", "pending"}
+           ]
+
+    assert length(attempts(id)) == 2
+    assert run(id).execution_epoch == 2
+
+    assert :ok = Fyrlet.Runs.Worker.perform(job)
+    assert status(id) == "completed"
+    assert Enum.map(attempts(id), & &1.execution_epoch) == [1, 2, 3]
+    before = events(id)
+    assert :ok = Fyrlet.Runs.Worker.perform(job)
+    assert events(id) == before
+    assert length(attempts(id)) == 3
+  end
+
+  test "a local chain stops at a wait instead of executing later steps", %{alice: alice} do
+    put_runs(local_chain: 10)
+    id = start_run!(alice)
+    assert :ok = Fyrlet.Runs.Worker.perform(%Oban.Job{args: %{"run_id" => id}})
+    assert status(id) == "waiting"
+
+    assert step_statuses(id) == [
+             {"prepare", "succeeded"},
+             {"approval", "waiting"},
+             {"publish", "pending"}
+           ]
+
+    assert length(attempts(id)) == 1
+  end
+
+  test "wait timeout jobs ignore early delivery and apply an expired timeout only once", %{
+    alice: alice
+  } do
+    id = start_run!(alice)
+    assert drive(id) == "waiting"
+    wait = wait_step(id)
+    job = %Oban.Job{args: %{"kind" => "wait_timeout", "run_id" => id, "step_id" => wait.id}}
+
+    assert :ok = Fyrlet.Runs.Worker.perform(job)
+    assert status(id) == "waiting"
+
+    Repo.update_all(from(entry in Step, where: entry.id == ^wait.id),
+      set: [wait_deadline: DateTime.add(Auth.now(), -1, :second)]
+    )
+
+    assert :ok = Fyrlet.Runs.Worker.perform(job)
+    assert status(id) == "failed"
+    assert run(id).error["code"] == "WAIT_TIMEOUT"
+    before = events(id)
+    assert :ok = Fyrlet.Runs.Worker.perform(job)
+    assert events(id) == before
+  end
 end
