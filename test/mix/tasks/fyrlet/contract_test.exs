@@ -23,9 +23,9 @@ defmodule Mix.Tasks.Fyrlet.ContractTest do
     assert contract["protocol_version"] == 1
     assert contract["schema_dialect"] == "fyrlet-subset"
     assert contract["capabilities"]["runs"] == 1
-    assert contract["operations"]["inbox.add"]["kind"] == "write"
+    assert contract["operations"]["records.add"]["kind"] == "write"
     assert contract["operations"]["runs.demo"]["kind"] == "run"
-    assert contract["subscriptions"]["inbox.recent"]
+    assert contract["subscriptions"]["records.recent"]
     assert String.ends_with?(json, "\n")
   end
 

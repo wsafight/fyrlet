@@ -4,7 +4,7 @@ defmodule Fyrlet.IngestTest do
   import Plug.Conn, only: [put_req_header: 3]
   alias Fyrlet.Features.Ingest
   alias Fyrlet.Features.Ingest.Item, as: IngestItem
-  alias InboxExample.Item, as: Row
+  alias Fyrlet.TestRecord, as: Row
   @endpoint FyrletWeb.Endpoint
 
   setup do

@@ -186,6 +186,21 @@ mix run --no-start bench/json.exs
 
 For runtime tuning, set the same `ERL_FLAGS` before an ordinary benchmark command. Reports record only scheduler-related options instead of copying complete VM arguments that might contain credentials. Four schedulers with busy waiting disabled are an option measured on the current machine rather than a default recommendation for every deployment.
 
+## Subscription process footprint
+
+These Elixir microbenchmarks use the test database and do not launch a TCP server:
+
+```sh
+FOOTPRINT_LABEL=current FOOTPRINT_BYTES=65536 mix test bench/connection_footprint.exs
+FOOTPRINT_LABEL=current FOOTPRINT_BYTES=255000 mix test bench/connection_footprint.exs
+FOOTPRINT_LABEL=shared FOOTPRINT_SHARED=1 mix test bench/connection_footprint.exs
+mix test bench/tracker_claims.exs
+```
+
+`FOOTPRINT_CONNECTIONS` defaults to 40 modelled subjects, `FOOTPRINT_SUBSCRIPTIONS` to five Channels per subject, and `FOOTPRINT_ROUNDS` to six invalidation rounds. No actual network connections are created. Snapshots default to 65,536 bytes; the fixture accepts 1,024–262,144 bytes. Keep the same concurrency, fixture and runtime on both sides of an A/B. Each scope runs sequentially to avoid overloading the single SQL sandbox connection. The production JSON serializer is used; business data is synthetic, while session checks use PostgreSQL.
+
+Reports in `.local/footprint/` record process heaps, unique referenced binaries, VM memory, RSS, query counts, notification-to-receipt P95 and queue lengths after forced GC. They exclude TCP/TLS/Bandit and SDK memory and cannot establish connection capacity or sustained update throughput. `tracker_claims.exs` separately records achieved arrival rates and call latency including process-monitor cleanup. The [controlled report](../docs/bench/connection-footprint-2026-11-07.json) and [interpretation](../docs/OPTIMIZATIONS.md#13-private-subscription-process-and-cache-footprint-2026-11-07) preserve the before/after experiment; running the commands above measures the current checkout only.
+
 ## Verification
 
 ```sh

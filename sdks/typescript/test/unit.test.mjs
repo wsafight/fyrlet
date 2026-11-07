@@ -176,7 +176,7 @@ test("socket authentication refresh retries once with the same idempotency key",
       calls.push(payload);
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", calls.length === 1
         ? { status: "error", response: { error: unauthorized, status: 401 } }
-        : { status: "ok", response: { data: "saved" } }]));
+        : { status: "ok", response: { outcome: "committed", data: "saved" } }]));
     }
   }
   const instance = client(context, { operationTransport: "socket", WebSocket: RefreshSocket,

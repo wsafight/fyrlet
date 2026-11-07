@@ -10,6 +10,7 @@ Fyrlet 是基于 Phoenix 的实时应用框架：在服务端定义业务操作�
 | --- | --- |
 | [PRODUCT.md](PRODUCT.md) | 产品定位、适用场景、范围与非目标、功能需求、一致性承诺、风险与成功判据 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 基础模型、可选模块、三层结构（核心 / 能力包 / 领域包）、鉴权分层与硬规则 |
+| [ROADMAP.md](ROADMAP.md) | 后续阶段、优先级、依赖、完成条件与评估事项 |
 
 ## 接入与使用
 
@@ -37,6 +38,7 @@ Fyrlet 是基于 Phoenix 的实时应用框架：在服务端定义业务操作�
 | 文档 | 内容 |
 | --- | --- |
 | [SERVER.md](SERVER.md) | 注册定义、查询与授权、Observer、事务与失效通知、可选回调、代码组织 |
+| [MUTATIONS.md](MUTATIONS.md) | 操作结果、未知状态与不重放写入的恢复查询 |
 | [RUNS.md](RUNS.md) | 持久 Run：状态机、等待与信号、取消、租约、外部执行器、执行身份 |
 | [EFFECTS.md](EFFECTS.md) | 外部副作用与 Outbox：模型、适配器协议、未知结果的处置 |
 | [STREAMS.md](STREAMS.md) | 追加订阅：位置、衔接、窗口、历史与重置 |

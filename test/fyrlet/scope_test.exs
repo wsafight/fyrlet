@@ -2,7 +2,7 @@ defmodule Fyrlet.ScopeTest do
   use Fyrlet.DataCase, async: true
   alias Fyrlet.Scope
   alias Fyrlet.Scope.Violation
-  alias InboxExample.Item
+  alias Fyrlet.TestRecord, as: Item
 
   defmodule Policy do
     def data_scope(_action, _actor, _input), do: {:ok, project: :project_id, subject: :subject_id}
@@ -155,7 +155,7 @@ defmodule Fyrlet.ScopeTest do
       from(i in Item) |> union_all(^from(o in Item)),
       from(i in Item) |> windows([i], w: [partition_by: i.id]),
       from(i in Item, order_by: fragment("random()")),
-      "inbox_items"
+      "fyrlet_test_records"
     ]
 
     for query <- refused do
@@ -175,7 +175,7 @@ defmodule Fyrlet.ScopeTest do
     assert {:ok, [%{"text" => "mine"}], _} =
              (fn ->
                 {:ok, data, scopes} =
-                  InboxExample.Inbox.execute("inbox.recent", alice.actor, %{"limit" => 10})
+                  Fyrlet.TestRecords.execute("records.recent", alice.actor, %{"limit" => 10})
 
                 {:ok, data, scopes}
               end).()

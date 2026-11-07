@@ -20,8 +20,7 @@ defmodule Fyrlet.MixProject do
     ]
   end
 
-  # The reference Inbox application lives in examples/inbox; core tests compile its source.
-  defp elixirc_paths(:test), do: ["lib", "test/support", "examples/inbox/lib"]
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_environment), do: ["lib"]
 
   defp deps do

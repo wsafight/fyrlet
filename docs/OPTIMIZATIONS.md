@@ -2,7 +2,7 @@
 
 This document records the optimizations made to Fyrlet, the methods and evidence behind them, and the experiments that were reverted or left off by default after measurement. The principle is **measure first, then change**: each item states the level of its evidence (function-level, statement count, end-to-end), and a function-level gain is never written up as a gain for the service as a whole. For same-resource comparison results and the benchmark method, see [PERFORMANCE.md](PERFORMANCE.md).
 
-The raw run data is in `.local/fair/` on the local machine (ignored by version control) and is not committed with the repository.
+Earlier raw run data is in `.local/fair/` on the local machine (ignored by version control). Section 13 includes a sanitized report in `docs/bench/` for the subscription footprint measurements.
 
 ## Overview
 
@@ -16,6 +16,9 @@ The raw run data is in `.local/fair/` on the local machine (ignored by version c
 | Batching of connection authentication | Reverted | 6 alternating rounds, 2–3% difference, below noise |
 | `snapshot_with_metadata` dead code | Moved to test helpers | Cleanup, no performance data |
 | Configurable idempotency retention period | Done, default unchanged | Estimate |
+| Private view state embedded in Channel; encoded cache released | Implemented | Channel/process A/B: 200 private views use 200 instead of 400 processes; 64 KiB idle retained memory −45.3% |
+| Contract snapshot budgets and node-wide Channel cap | Implemented | Startup validation and runtime regression tests; no capacity claim |
+| Channel and SDK duplication | Simplified | Production source −131 physical / −115 nonblank lines; lifecycle and handle-ownership regression tests |
 
 ## 1. Oban pruner capacity
 
@@ -115,6 +118,8 @@ End to end (cache toggled alternately in the same process, median of 4 rounds):
 ## 9. "Measure first, then change", item by item (2026-11-07)
 
 All load tests are written as ExUnit files that run **inside the sandbox** and live in `test/bench/` (file names do not end in `_test.exs`, so a routine `mix test` does not run them; specify the path explicitly when needed), and they roll back automatically when done, leaving no data in the test database. (When non-sandbox scripts were used earlier, residual data was left behind and caused an unrelated test failure; it was cleaned up and this approach adopted.)
+
+After separating core tests from Inbox, ordinary operations and subscriptions in `query_counts.exs` and `revalidate_callers.exs` use `Fyrlet.TestRecords`. These measure framework paths without Inbox-specific optimizations such as its reserve window. Comparisons with earlier Inbox measurements must account for the different definition.
 
 | File | What it measures | Usage |
 | --- | --- | --- |
@@ -303,3 +308,48 @@ The following directions were listed during the static analysis. Without evidenc
 - **Reducing database round trips on the write path**: merging the advisory lock and the idempotency lookup does not hold under READ COMMITTED (see "Single-core profile" in [Performance comparison](PERFORMANCE.md)); "insert a placeholder row first for idempotency" is expected to save one round trip, about 10%, below measurement noise, and is not implemented.
 
 A general lesson: the factor of a function-level microbenchmark does not represent the service as a whole. If the optimized part accounts for 20% of the total time and is sped up 5 times, the whole is only about 1.19 times faster; the time of this path is mainly database round trips, so **reducing the number of round trips** (the statement count can be counted directly) has real value, while speeding up some Elixir computation by a few tens of microseconds cannot be seen end to end.
+
+## 13. Private subscription process and cache footprint (2026-11-07)
+
+Private subscriptions now embed `Fyrlet.Subscriptions.Observation` inside their Channel. Explicit session sharing and `sharing: "identical"` continue to host that state machine in an Observer. Private Channels retain the normalized View but release encoded snapshot bodies after returning or enqueueing them; queued outbound data is still retained until consumed. Shared Observers keep their encoded cache for reuse across members. The View remains necessary for equality checks, incremental updates and bounded query context, even with snapshot delivery. Dropping it would discard useful state and can add queries.
+
+The controlled experiment alternated before/after three times. Only the Observer and SubscriptionChannel source variants were switched; the remaining runtime, contract limits, benchmark fixture and measurement method stayed fixed. Each run modelled 40 subjects with five Channels each, 32 records per snapshot and six invalidation rounds, using `Phoenix.Socket.V2.JSONSerializer`. One subject's scope was notified at a time (five private views, or one shared view with five members). The shared case is a control. Elixir 1.20.5 / OTP 29, 12 online schedulers, local PostgreSQL. The [report](bench/connection-footprint-2026-11-07.json) contains every successful controlled sample and the measured source fingerprints.
+
+| Case (200 Channels) | Distinct Channel + view-owner processes | Idle retained MiB, before → after | Active retained MiB, before → after |
+| --- | --- | --- | --- |
+| Private, 1 KiB | 400 → 200 | 4.10 → 4.20 (+2.5%) | 5.89 → 4.21 (−28.6%) |
+| Private, 64 KiB | 400 → 200 | 30.28 → 16.57 (−45.3%) | 33.00 → 19.01 (−42.4%) |
+| Private, 255,000 B | 400 → 200 | 102.55 → 51.68 (−49.6%) | 105.00 → 55.15 (−47.5%) |
+| Session-shared, 64 KiB | 240 → 240 | 7.92 → 7.89 | 7.83 → 7.83 |
+
+Retained memory is the sum of process heaps plus unique referenced ref-counted binaries across the measured processes, after forced GC; a shared binary is counted once. Idle figures are medians of three runs, active figures medians of 18 update samples. These are live retained bytes, not RSS savings; the report records VM and RSS samples separately. Small idle snapshots show the added Channel state can outweigh the saved process heap.
+
+The median of per-round notification-to-receipt P95 was 3.285 → 3.338 ms for private 64 KiB and 7.779 → 7.668 ms for private 255,000 B; the shared control was 2.064 → 2.050 ms. This supports no latency improvement claim. Each round still made 400 session queries for private views or 80 for shared views, with no queued messages at sample time. Business database reads are absent from this synthetic fixture. An earlier all-scope concurrent run exhausted the single SQL sandbox connection's queue; it was excluded rather than reported as product capacity.
+
+**Boundaries:** ChannelTest with real PostgreSQL session checks, one sandbox connection and controlled scope concurrency. It excludes TCP, TLS, Bandit transport and SDK memory, does not measure sustained per-second update rates or maximum connections, and does not justify a 50k/100k-node capacity estimate. Standard production hibernation defaults remain unchanged; the short measurement samples do not establish idle hibernation savings. Reconciliation was extended only in the fixture to avoid unrelated timer work during measurement.
+
+`bench/tracker_claims.exs` also measured bounded arrival bursts including process-monitor cleanup. Requested rates of 1,000 and 5,000 claims/s achieved approximately 1,001 and 4,997 claims/s; P99 call times were 36 and 296 µs (max 64 and 637 µs). Claims returned to the baseline after each run. This isolated result provides no reason to shard Tracker; it excludes authentication, Channel startup and concurrent business load.
+
+Resource protection now separates active Channels from shared Observer processes. `max_subscriptions_per_node` defaults to 10,000, includes ordinary, append and Presence Channels, and is validated at startup. The environment setting `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` accepts 1–1,000,000. `max_observers` remains a separate shared-process ceiling. A subscription may declare a positive `max_snapshot_bytes` no larger than the global ceiling; definitions are validated at startup, and actual initial/recomputed snapshots are checked at runtime with `LIMIT_EXCEEDED`, never truncated. No arbitrary business-specific budgets were imposed on existing example contracts.
+
+Shared mode stays explicit: `public` permits anonymous access and does not prove actor-independent results. The production reconciliation interval stays 30 seconds to preserve the missed-notification repair window. Multiplexing remains an evidence-gated [roadmap](ROADMAP.md#later-evaluations) item; the project is unlaunched and does not need an old-protocol fallback. VM, GC and OS settings stay unchanged without a measured deployment bottleneck. Reproduction commands and fixture boundaries are in [bench/README.md](../bench/README.md#subscription-process-footprint).
+
+## 14. Channel and SDK code quality (2026-11-07)
+
+This pass extracts shared Channel mechanics into `FyrletWeb.ChannelSupport`: identifier validation, error replies, anonymous capability checks, quota claims, expiry and ACK timer scheduling, timer cleanup, close status, snapshot envelopes and JSON fragments. Subscription, append and Presence Channels keep their authorization order, state machines and backpressure rules. The local/shared dispatch for subscription ACKs and refreshes now uses one path.
+
+The TypeScript client also shares the readiness, success, error and timeout handling for refresh and Presence updates. Presence now extends the existing subscription handle and looks up its entry through the existing WeakMap. The former copied handle lost its ownership registration, so using it in an optimistic write incorrectly raised a TypeError. A regression test reproduced the failure before the fix. The registered handle is now preserved, without scanning all entries.
+
+| Production file | Lines before → after |
+| --- | --- |
+| `lib/fyrlet_web/subscription_channel.ex` | 321 → 235 |
+| `lib/fyrlet_web/append_channel.ex` | 423 → 346 |
+| `lib/fyrlet_web/presence_channel.ex` | 223 → 187 |
+| `lib/fyrlet_web/operation_channel.ex` | 81 → 69 |
+| `lib/fyrlet_web/channel_support.ex` | 0 → 87 |
+| `sdks/typescript/src/client.ts` | 572 → 565 |
+| **Affected production files, including the new helper** | **1620 → 1489 (−131)** |
+
+The baseline is the working tree at the start of this pass, after section 13. Across `lib/**/*.ex` and `sdks/typescript/src/**/*.ts`, physical lines fell from 13,448 to 13,317; nonblank lines fell from 11,332 to 11,217 (−115). These counts include the new helper and exclude tests, documentation and benchmark code. The reduction comes from removing repeated implementations; line count alone does not establish quality or runtime performance.
+
+Nine new Elixir regressions exercise malformed identifiers, a shared node budget across all three subscription Channel kinds, slot release on leave, expiry and timer cleanup. Three new SDK regressions cover Presence handle ownership, stale handles, readiness, error/timeout replies and preserving the last acknowledged Presence meta after failed updates. Final suite results are recorded in [ACCEPTANCE.md](ACCEPTANCE.md).

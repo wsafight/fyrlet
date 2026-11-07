@@ -64,7 +64,7 @@ export interface ClientOptions {
   retryDelayMs?: (attempt: number) => number;
   onListenerError?: (error: unknown) => void;
   delta?: boolean;
-  /** How long a successful write's prediction may stay without server data to replace it. Default 5000. */
+  /** How long a successful or unknown write's prediction may stay without server data to replace it. Default 5000. */
   optimisticTtlMs?: number;
   operationTransport?: "http" | "socket";
   /**
@@ -92,11 +92,35 @@ export interface CallOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
   /**
-   * Predictions applied now and undone if the call fails. After it succeeds they stay until the
+   * Predictions applied now and undone on definite failure. After success or an unknown outcome they stay until the
    * subscription next receives data from the server (or `optimisticTtlMs` passes). Only
    * subscriptions that already have data are predicted, and only ones created by this client.
    */
   optimistic?: OptimisticUpdate[];
+}
+
+export type OperationOutcome = "completed" | "committed" | "accepted";
+
+export type RecoveryResult<Data> =
+  | { readonly status: "committed" | "accepted"; readonly data: Data }
+  | { readonly status: "unknown" };
+
+export type MutationState<Data> =
+  | { readonly status: "pending" }
+  | { readonly status: OperationOutcome; readonly data: Data }
+  | { readonly status: "failed"; readonly error: unknown }
+  | { readonly status: "unknown"; readonly error: import("./errors.js").OutcomeUnknownError };
+
+export interface RecoveryOptions extends RequestOptions {
+  idempotencyKey: string;
+}
+
+export interface Mutation<Data> {
+  readonly idempotencyKey: string;
+  readonly result: Promise<Data>;
+  getState(): MutationState<Data>;
+  onChange(listener: (state: MutationState<Data>) => void): () => void;
+  recover(options?: RequestOptions): Promise<MutationState<Data>>;
 }
 
 export interface Client<Contract extends FyrletContract> {
@@ -105,6 +129,16 @@ export interface Client<Contract extends FyrletContract> {
     input: Contract["operations"][Name]["input"],
     options?: CallOptions,
   ): Promise<Contract["operations"][Name]["output"]>;
+  mutate<Name extends keyof Contract["operations"] & string>(
+    name: Name,
+    input: Contract["operations"][Name]["input"],
+    options?: CallOptions,
+  ): Mutation<Contract["operations"][Name]["output"]>;
+  recover<Name extends keyof Contract["operations"] & string>(
+    name: Name,
+    input: Contract["operations"][Name]["input"],
+    options: RecoveryOptions,
+  ): Promise<RecoveryResult<Contract["operations"][Name]["output"]>>;
   subscribe<Name extends keyof Contract["subscriptions"] & string>(
     name: Name,
     params: Contract["subscriptions"][Name]["input"],

@@ -25,6 +25,22 @@ Fyrlet 的中心抽象是：
 
 协议由核心定义，与实现必须常驻核心是两回事。Run/Effect 可独立组织和按需加载，但启用后必须遵守同一套状态机、授权和兼容规则。
 
+## 代码与测试边界
+
+`lib/fyrlet` 放框架逻辑，`lib/fyrlet_web` 放 HTTP 与 Channel 入口，`packages` 放扩展包，`examples` 放领域应用，`sdks` 放客户端。模块按职责拆分；上线前可直接调整接口，同步修改服务端、SDK 与示例。
+
+`Fyrlet.Definition` 保留统一的应用接入行为，按能力说明可选回调。`Fyrlet.Definition.Validation` 负责启动时的契约与能力校验，`Fyrlet.Registry` 负责索引、查找和导出。共享订阅与 Run 都通过 `Fyrlet.Definition.current_version/2` 读取定义版本，共享订阅不依赖 Run 的实现解析器。
+
+通用事务边界由 `Fyrlet.Transaction` 与 `Fyrlet.AfterCommit` 管理。失效任务在事务内持久化，立即广播与遥测在最外层受管事务提交后释放；回滚时清理待处理内容。`Fyrlet.Runs.Notify` 只组织 Run 的通知范围并委托基础层处理，基础事务不依赖 Run 模块。
+
+TypeScript SDK 的 `client.ts` 管理身份、连接和通道生命周期，`requests.ts` 管理请求时限、取消和一次认证刷新，`subscription.ts` 管理快照、增量、追加、Presence 与乐观更新的状态。订阅状态处理返回 ACK、刷新或重连请求，由客户端执行网络操作。
+
+`FyrletWeb.ChannelSupport` 负责通道共有的标识校验、错误封装、匿名能力检查、配额申领、定时器调度与清理，以及快照序列化。各 Channel 仍负责自己的授权顺序、事件处理和背压策略。SDK 的 refresh 与 Presence update 复用带确认的推送逻辑；Presence 直接扩展已登记的订阅句柄，使归属检查和乐观更新使用同一对象。
+
+`Fyrlet.Subscriptions.Observation` 维护订阅状态机。私有订阅将状态嵌入 Channel 进程；显式共享的订阅由独立 Observer 进程运行同一状态机。私有 Channel 保留增量更新需要的规范化 View，快照正文发出后释放编码缓存；共享 Observer 缓存编码正文，供多个成员复用。每份视图保留授权检查、修订、对账和通知去重；每个 Channel 维护自己的 generation、seq 与 ACK 时限。
+
+根项目的 `mix test` 使用 `test/support` 下的专用定义、记录和迁移，不编译示例源码。Inbox 的归档、分页和增量窗口测试在 `examples/inbox/test` 中运行，与框架测试分开维护。`scripts/test_all.sh` 依次运行框架、示例和扩展包测试；SDK 另行运行 `npm --prefix sdks/typescript test` 与 `npm --prefix sdks/typescript run typecheck`。
+
 ## 鉴权的分层边界
 
 "鉴权"不是一个可以整体归位的模块。把它整体放进核心或整体放进能力包都会出错，需要拆成四块：

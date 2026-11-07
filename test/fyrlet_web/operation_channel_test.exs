@@ -19,16 +19,16 @@ defmodule FyrletWeb.OperationChannelTest do
 
   test "socket operations keep transactional idempotency and structured errors", %{socket: socket} do
     parameters = %{
-      "name" => "inbox.add",
+      "name" => "records.add",
       "input" => %{"text" => "socket write"},
       "idempotency_key" => "same"
     }
 
     reference = push(socket, "call", parameters)
-    assert_reply reference, :ok, %{"data" => item}
+    assert_reply reference, :ok, %{"outcome" => "committed", "data" => item}
     reference = push(socket, "call", parameters)
     assert_reply reference, :ok, %{"data" => ^item}
-    assert Repo.aggregate(InboxItem, :count) == 1
+    assert Repo.aggregate(TestRecord, :count) == 1
     assert Repo.aggregate(Oban.Job, :count) == 1
     reference = push(socket, "call", put_in(parameters, ["input", "text"], "different"))
     assert_reply reference, :error, %{"status" => 409, "error" => %{"code" => "CONFLICT"}}
@@ -42,6 +42,26 @@ defmodule FyrletWeb.OperationChannelTest do
     leave(socket)
   end
 
+  test "socket recovery returns committed or unknown without replay", %{socket: socket} do
+    parameters = %{
+      "name" => "records.add",
+      "input" => %{"text" => "saved"},
+      "idempotency_key" => "recover"
+    }
+
+    reference = push(socket, "recover", parameters)
+    assert_reply reference, :ok, %{"outcome" => "unknown", "data" => nil}
+    assert Repo.aggregate(TestRecord, :count) == 0
+    reference = push(socket, "call", parameters)
+    assert_reply reference, :ok, %{"outcome" => "committed", "data" => record}
+    reference = push(socket, "recover", parameters)
+    assert_reply reference, :ok, %{"outcome" => "committed", "data" => ^record}
+    assert Repo.aggregate(TestRecord, :count) == 1
+    reference = push(socket, "recover", put_in(parameters, ["input", "text"], "different"))
+    assert_reply reference, :error, %{"status" => 409, "error" => %{"code" => "CONFLICT"}}
+    leave(socket)
+  end
+
   test "socket operations enforce ownership and revalidate credentials on each call", %{
     socket: socket,
     project: project,
@@ -52,7 +72,7 @@ defmodule FyrletWeb.OperationChannelTest do
 
     reference =
       push(socket, "call", %{
-        "name" => "inbox.delete",
+        "name" => "records.delete",
         "input" => %{"id" => private["id"], "expected_version" => 1},
         "idempotency_key" => "delete"
       })
@@ -63,7 +83,7 @@ defmodule FyrletWeb.OperationChannelTest do
       set: [revoked_at: Auth.now()]
     )
 
-    reference = push(socket, "call", %{"name" => "inbox.history", "input" => %{}})
+    reference = push(socket, "call", %{"name" => "records.list", "input" => %{}})
     assert_reply reference, :error, %{"status" => 401, "error" => %{"code" => "UNAUTHENTICATED"}}
     leave(socket)
   end

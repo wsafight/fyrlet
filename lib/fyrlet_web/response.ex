@@ -4,6 +4,11 @@ defmodule FyrletWeb.Response do
   def result(conn, {:ok, data}), do: success(conn, data)
   def result(conn, {:error, error}), do: error(conn, error)
 
+  def operation(conn, {:ok, envelope}),
+    do: send_json(conn, 200, Map.put(envelope, "request_id", request_id(conn)))
+
+  def operation(conn, {:error, error}), do: error(conn, error)
+
   def success(conn, data) do
     send_json(conn, 200, %{"request_id" => request_id(conn), "data" => data})
   end

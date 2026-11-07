@@ -8,6 +8,7 @@ defmodule Fyrlet.Application do
     Fyrlet.Quota.validate!()
     Fyrlet.Retention.validate!()
     Fyrlet.Metrics.validate!()
+    Fyrlet.Subscriptions.Tracker.validate!()
 
     children =
       cluster() ++

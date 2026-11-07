@@ -186,6 +186,21 @@ BENCH_JSON_ITERATIONS 默认 10000，可调整每轮循环次数。结果保存�
 
 运行时调优可在普通 bench 命令前设置相同 ERL_FLAGS。报告仅记录调度器相关选项，不复制可能包含凭证的整段虚拟机参数。4 个调度器与关闭忙等是当前机器上的可选方案，不是所有部署的默认建议。
 
+## 订阅进程内存测量
+
+以下 Elixir 微基准使用测试数据库，不启动 TCP 服务：
+
+```sh
+FOOTPRINT_LABEL=current FOOTPRINT_BYTES=65536 mix test bench/connection_footprint.exs
+FOOTPRINT_LABEL=current FOOTPRINT_BYTES=255000 mix test bench/connection_footprint.exs
+FOOTPRINT_LABEL=shared FOOTPRINT_SHARED=1 mix test bench/connection_footprint.exs
+mix test bench/tracker_claims.exs
+```
+
+`FOOTPRINT_CONNECTIONS` 默认模拟 40 个主体，`FOOTPRINT_SUBSCRIPTIONS` 默认每主体 5 个 Channel，`FOOTPRINT_ROUNDS` 默认 6 轮失效通知，没有建立真实网络连接。快照默认 65,536 字节，fixture 接受 1,024–262,144 字节。A/B 两侧须固定并发、fixture 和运行时。各 Scope 顺序执行，避免压满单个 SQL 沙盒连接。使用生产 JSON 序列化器；业务数据为合成数据，会话检查经过 PostgreSQL。
+
+`.local/footprint/` 报告记录强制 GC 后的进程堆、去重二进制引用、VM 内存、RSS、查询数、通知至接收的 P95 和队列长度。不包含 TCP/TLS/Bandit 与 SDK 内存，不能证明连接容量或持续更新吞吐。`tracker_claims.exs` 单独记录实际到达率及包含进程监视清理的调用耗时。[受控报告](../docs/bench/connection-footprint-2026-11-07.json) 和[结果解释](../docs/zh/OPTIMIZATIONS.md#13-私有订阅进程与编码缓存2026-11-07) 保留前后对照；上述命令只测量当前 checkout。
+
 ## 验证
 
 ```sh

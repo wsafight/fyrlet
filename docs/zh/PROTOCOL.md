@@ -17,8 +17,11 @@
 | `GET /api/v1/contract` | 用户 Bearer + X-Project-Id | 导出的业务契约 |
 | `GET /api/v1/identity` | 用户 Bearer + X-Project-Id | 当前 project_id / subject_id，用于 SDK 绑定身份 |
 | `POST /api/v1/operations/:name` | 用户 Bearer + X-Project-Id | `{"input":{…}}` → 业务结果；写入必须有 Idempotency-Key |
+| `POST /api/v1/operations/:name/recover` | 用户 Bearer + X-Project-Id | 原输入与 Idempotency-Key → write/run 回执或未知；不会执行业务操作 |
 
 请求体上限 64 KiB。默认幂等保留窗口 24 小时，以 project + subject + operation + key 为范围；相同规范化输入重放原结果，更换输入返回 CONFLICT。窗口之后不保证去重。仅本数据库事务内副作用受到保证。
+
+操作成功响应在 `data` 旁必须携带 `outcome`：读为 `completed`，写为 `committed`，Run / ingest 受理为 `accepted`。恢复查询对未过期且输入匹配的回执返回原结果及其 outcome；查不到可见回执时返回 `{"outcome":"unknown","data":null}`。查询验证当前会话、业务权限、规范化输入与所需能力，不删除过期回执，也不重放业务。read 和 ingest 的操作级恢复返回 `UNSUPPORTED_CAPABILITY`。这些字段和恢复入口属于版本 1 的核心协议，无需额外可选能力；Run / ingest 仍受原能力门控。未发布的协议与 SDK 同步调整，不保留旧响应解析器。客户端状态及失败边界见 [MUTATIONS.md](MUTATIONS.md)。
 
 | 错误码 | HTTP | 含义 |
 | --- | --- | --- |
@@ -106,7 +109,7 @@ p 为紧凑 patch，可包含 a（完整新记录数组）、c（变更元组数
 {"name":"inbox.update","input":{"id":"记录 UUID","text":"Updated","expected_version":1},"idempotency_key":"请求 UUID"}
 ```
 
-成功回复 `{"data":…}`，失败回复 `{"error":{…},"status":409}`，由 Phoenix reply 的 ok / error 状态区分。写入必须携带 idempotency_key，其范围、保留时间和事务规则与 HTTP 相同。每次调用重新验证会话与业务权限；会话到期关闭 channel。业务执行与订阅共用连接，operations channel 内串行处理调用。身份验证、契约和服务端会话管理仍使用 HTTP。
+成功回复 `{"outcome":"committed","data":…}`（或 `completed` / `accepted`），失败回复 `{"error":{…},"status":409}`，由 Phoenix reply 的 ok / error 状态区分。`recover` 事件接受与 `call` 相同的 name、input、idempotency_key，只查询保存的回执；结果分类与未知响应同 HTTP。写入必须携带 idempotency_key，其范围、保留时间和事务规则与 HTTP 相同。每次调用与恢复查询重新验证会话与业务权限；会话到期关闭 channel。业务执行与订阅共用连接，operations channel 内串行处理请求。身份验证、契约和服务端会话管理仍使用 HTTP。
 
 ## 收敛与资源
 

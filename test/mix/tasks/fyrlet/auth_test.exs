@@ -140,7 +140,7 @@ defmodule Mix.Tasks.Fyrlet.AuthTest do
       assert Jason.decode!(json) == %{"idempotency_results" => 1, "sessions" => 0}
       refute Repo.get(Idempotency, expired.id)
       assert Repo.get!(Idempotency, live.id).result == live.result
-      assert Repo.aggregate(InboxItem, :count) == 2
+      assert Repo.aggregate(TestRecord, :count) == 2
     end
 
     test "keeps recently expired sessions and removes sessions expired for over a day" do

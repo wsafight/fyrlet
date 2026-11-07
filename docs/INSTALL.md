@@ -36,6 +36,8 @@ import Config
 config :fyrlet, Fyrlet.RuntimeConfig.settings(config_env())
 ```
 
+The node-wide channel ceiling can be set with `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` (1–1,000,000; default 10,000). It includes ordinary subscriptions, append and Presence; see [capacity limits](OPERATIONS.md).
+
 Environment variables: `DATABASE_URL`, `POOL_SIZE`, `PORT`, `PHX_SERVER`, `CORS_ORIGINS`. Numeric variables must be integers within range (`POOL_SIZE` 1–10000, `PORT` 1–65535); otherwise startup fails and names the variable. Each entry of `ALLOWED_ORIGINS` and `CORS_ORIGINS` has leading and trailing spaces removed; under `:prod`, `SECRET_KEY_BASE` and `ALLOWED_ORIGINS` are required. When the web pages and the API share an origin, that origin is allowed automatically; other origins still need explicit `CORS_ORIGINS` configuration. Optional project quota defaults: `FYRLET_PROJECT_READS_PER_SECOND`, `FYRLET_PROJECT_WRITES_PER_SECOND`, `FYRLET_PROJECT_MAX_SUBSCRIPTIONS` (see [OPERATIONS.md](OPERATIONS.md#project-quotas-fyrletquota)). Optional default retention period for ingested data: `FYRLET_INGEST_RETENTION_SECONDS` (a number of seconds, at least 60, or `forever`; see [DATABASE.md](DATABASE.md#per-project-retention)). Optional `FYRLET_METRICS_TOKEN` (enables `GET /metrics`, see [OPERATIONS.md](OPERATIONS.md#prometheus-metrics-fyrletmetrics)). Optional `FYRLET_CLUSTER_NODES` is a comma-separated list of `name@host`, at most 32; once configured, Erlang named nodes must be enabled with the same cookie. For deployment and tuning see [OPERATIONS.md](OPERATIONS.md).
 
 ### Shared repository constraints

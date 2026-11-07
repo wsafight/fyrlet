@@ -64,7 +64,9 @@ const client = createClient<Contract>({
 
 Socket 模式的调用共用一个 operations channel，与订阅共用连接；没有订阅也可调用。服务端事务、权限、幂等与错误码相同，身份验证仍使用 HTTP。断线会拒绝正在等待的调用；连接恢复不会自动重放写入。并发调用在服务端同一 operations channel 中串行处理。
 
-ApiError 包含 code、message、details、retryable、status、requestId。HTTP 与调用等待默认 10 秒超时，可用 timeoutMs 调整；AbortSignal 和 close 可以取消客户端等待。取消或超时不表示服务端一定未提交，重试写入仍应复用幂等键。
+ApiError 包含 code、message、details、retryable、status、requestId。HTTP 与调用等待默认 10 秒超时，可用 timeoutMs 调整；AbortSignal 和 close 可以取消客户端等待。开始发送后的不确定错误会抛出 `OutcomeUnknownError`，保留操作名、幂等键与原始原因。先恢复回执，再决定是否重新发起业务调用。
+
+`client.mutate(name, input, options?)` 返回包含 `idempotencyKey`、`result`、`getState()`、`onChange()` 与 `recover()` 的句柄，区分 `pending`、读完成 `completed`、写提交 `committed`、Run / ingest 受理 `accepted`、确定失败 `failed` 与 `unknown`。`call` 仍直接返回业务结果。`mutation.recover()` 或 `client.recover(name, originalInput, { idempotencyKey })` 只查询 write/run 回执，不执行业务；回执缺失或过期时保持未知。示例、持久化与确认边界见[操作结果与恢复](../../docs/zh/MUTATIONS.md)。
 
 ## 订阅状态
 
@@ -146,8 +148,8 @@ items.getState().data;     // 预测叠加在服务端数据上的结果
 items.getState().pending;  // 当前叠加着多少个未被服务端数据取代的预测
 ```
 
-- **失败立即回滚**：调用抛错时预测马上撤销，错误原样抛出。
-- **成功后保留**，直到这个订阅**下一次收到服务端数据**（快照或增量），或超过 `optimisticTtlMs`（默认 5000 毫秒）。
+- **确定失败立即回滚**：预测马上撤销，错误原样抛出。
+- **成功和未知结果保留预测**，直到这个订阅**下一次收到服务端数据**（快照或增量），或超过 `optimisticTtlMs`（默认 5000 毫秒）。预测到期不会解决未知的操作结果。
 - 服务端数据在写入进行中到达时，预测会重新叠加在新数据上；因此 `update` **必须幂等**，且必须返回新值（收到的数据是冻结的，原地修改会抛错）。抛错的预测会被丢弃并交给 `onListenerError`，调用本身不受影响。
 - 只对已经有数据的、由同一个客户端创建的、尚未取消的订阅生效；传入别的订阅会在发出请求前抛 `TypeError`，不会有任何副作用。没有数据的订阅被跳过。
 - 内部状态始终是服务端的真值（增量补丁基于它应用），预测只在 `getState()` 和监听回调里派生出来。
@@ -155,8 +157,8 @@ items.getState().pending;  // 当前叠加着多少个未被服务端数据取�
 **保证的边界，请按需评估：**
 
 - 服务端不会告诉客户端“这次推送已经包含你的写入”，所以预测的结束时机是启发式的。少见的竞态下——例如下一次推送是在你的写入提交之前算好的——界面可能短暂回退到没有这次写入的状态，随后被真正的更新纠正。
-- 预测不会跨页面刷新保留，没有离线队列：断线期间发出的写入仍然会失败并回滚。
-- 追加订阅可以传入（数据是窗口，请自行确认 `update` 的语义）；Presence 订阅不支持，传入会抛 `TypeError`。
+- 预测不会跨页面刷新保留，没有离线队列；断线调用根据是否已经开始发送，区分确定失败与结果未知。
+- 追加订阅可以传入（数据是窗口，请自行确认 `update` 的语义）；Presence 预测只改变本地 roster，不发布 meta。
 
 ## 在线状态（能力 `presence`）
 
@@ -204,6 +206,6 @@ DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 
 命令从仓库根目录执行。生成器支持当前受限契约，拒绝不支持的 schema；输入默认字段生成可选属性，输出按 required 字段生成。生成类型提供编译期约束，服务端仍对所有输入输出进行运行时校验。
 
-单元测试 63 个；真实服务端集成 13 个，包含 Run 幂等、信号、取消、主体/项目隔离、重启恢复、append 窗口与撤销。四个领域应用另有 8 个端到端场景，命令与验收边界见[验收记录](../../docs/zh/ACCEPTANCE.md)。
+单元测试 132 个，真实服务端集成 18 个，覆盖操作结果分类、提交后丢失响应的回执恢复、并发请求取消、认证刷新期间的总超时、通道间故障隔离、乐观写入乱序完成，以及 Run 幂等、信号、主体/项目隔离、重启恢复、append 窗口与撤销。四个领域应用另有 8 个端到端场景，命令与验收边界见[验收记录](../../docs/zh/ACCEPTANCE.md)。
 
 执行 `bash scripts/package.sh` 生成 `.local/releases/fyrlet-client-0.1.0.tgz`，其他项目可用 `npm install /绝对路径/fyrlet-client-0.1.0.tgz` 安装。`bash scripts/install_smoke.sh` 会在仓库外创建 consumer，实际安装并导入主入口与 `@fyrlet/client/server`；分发和版本边界见 [INSTALL.md](../../docs/zh/INSTALL.md)。

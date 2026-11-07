@@ -28,7 +28,7 @@ defmodule FyrletWeb.AppendChannel do
 
   alias Fyrlet.{Auth, Capabilities, Error, Runtime}
   alias Fyrlet.Features.Stream
-  alias Fyrlet.Subscriptions.Tracker
+  import FyrletWeb.ChannelSupport
 
   @max_syncs_per_turn 10
 
@@ -40,22 +40,19 @@ defmodule FyrletWeb.AppendChannel do
       ) do
     actor = socket.assigns.actor
 
-    with {:ok, _uuid} <- cast_identifier(identifier),
+    with {:ok, _uuid} <- identifier(identifier),
          {:ok, capabilities} <- Capabilities.negotiate(options["capabilities"]),
          :ok <- Capabilities.require(capabilities, "append"),
          :ok <- anonymous_entry(actor, capabilities),
          {:ok, subscription} <- Runtime.prepare_subscription(actor, name, parameters),
          :ok <- append_mode(subscription),
          {:ok, stream} <- resolve_stream(actor, subscription),
-         :ok <-
-           Tracker.claim(socket.transport_pid, self(), tracker_limit(actor), actor.project_id),
+         :ok <- claim(socket, actor),
          # Listen first, then read: a change committed in between is picked up by the next sync.
          :ok <- Phoenix.PubSub.subscribe(Fyrlet.PubSub, subscription.scope),
          {:ok, window} <- read_window(actor, stream, subscription),
          # Nothing is sent on the strength of a check made before the data was read.
          {:ok, _actor} <- Auth.revalidate(actor) do
-      remaining = max(DateTime.diff(actor.expires_at, Auth.now(), :millisecond), 1)
-
       socket =
         assign(socket,
           subscription: subscription,
@@ -70,51 +67,18 @@ defmodule FyrletWeb.AppendChannel do
           dirty: false,
           sync_queued: false,
           ack_timer: nil,
-          expiry_timer: Process.send_after(self(), :expired, remaining),
+          expiry_timer: expiry_timer(actor),
           reconcile_timer: reconcile_timer()
         )
         |> track(1, window.cursor, window.bytes, :snapshot)
 
       {:ok, snapshot_envelope(socket, window), socket}
     else
-      :error ->
-        {:error,
-         %{
-           "error" =>
-             Error.to_map(Error.new("VALIDATION_FAILED", "Invalid subscription identifier"))
-         }}
-
-      {:error, error} ->
-        {:error, %{"error" => Error.to_map(error)}}
+      {:error, error} -> reject(error)
     end
   end
 
-  def join(_topic, _parameters, _socket) do
-    {:error,
-     %{
-       "error" =>
-         Error.to_map(
-           Error.new(
-             "UNSUPPORTED_VERSION",
-             "Append subscriptions need protocol_version 1, name and params"
-           )
-         )
-     }}
-  end
-
-  defp cast_identifier(identifier), do: Ecto.UUID.cast(identifier)
-
-  defp anonymous_entry(actor, capabilities) do
-    if Fyrlet.Features.Anonymous.anonymous?(actor),
-      do: Capabilities.require(capabilities, Fyrlet.Features.Anonymous.capability()),
-      else: :ok
-  end
-
-  defp tracker_limit(actor),
-    do:
-      if(Fyrlet.Features.Anonymous.anonymous?(actor),
-        do: Fyrlet.Features.Anonymous.max_subscriptions()
-      )
+  def join(_topic, _parameters, _socket), do: unsupported()
 
   defp append_mode(%{specification: %{"mode" => "append"}}), do: :ok
 
@@ -168,7 +132,7 @@ defmodule FyrletWeb.AppendChannel do
   end
 
   def handle_in(_event, _parameters, socket),
-    do: {:reply, {:error, %{"error" => Error.to_map(Error.not_found())}}, socket}
+    do: {:reply, reject(Error.not_found()), socket}
 
   defp acknowledged?(socket, sequence, cursor),
     do: Enum.any?(socket.assigns.sent, &(&1.seq == sequence and &1.cursor == cursor))
@@ -201,7 +165,7 @@ defmodule FyrletWeb.AppendChannel do
 
         if deadline <= System.monotonic_time(:millisecond),
           do: stop(socket, Error.new("LIMIT_EXCEEDED", "Updates were not acknowledged in time")),
-          else: {:noreply, arm_ack_timer(socket, deadline)}
+          else: {:noreply, arm_ack_timer(socket, :ack_check, deadline)}
     end
   end
 
@@ -209,14 +173,8 @@ defmodule FyrletWeb.AppendChannel do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
-  def terminate(_reason, socket) do
-    for key <- [:ack_timer, :expiry_timer, :reconcile_timer],
-        reference = socket.assigns[key],
-        is_reference(reference),
-        do: Process.cancel_timer(reference)
-
-    :ok
-  end
+  def terminate(_reason, socket),
+    do: cancel_timers(socket, [:ack_timer, :expiry_timer, :reconcile_timer])
 
   # Coalesces bursts of invalidations into one read.
   defp queue_sync(%{assigns: %{sync_queued: true}} = socket), do: socket
@@ -349,33 +307,21 @@ defmodule FyrletWeb.AppendChannel do
            Stream.snapshot(actor.project_id, stream, subscription.specification["max_items"]) do
       encoded = Jason.encode!(items)
 
-      if byte_size(encoded) <= Application.fetch_env!(:fyrlet, :max_snapshot_bytes),
-        do: {:ok, %{cursor: cursor, encoded: encoded, bytes: byte_size(encoded)}},
-        else:
-          {:error, Error.new("LIMIT_EXCEEDED", "The snapshot exceeds the response size limit")}
+      with :ok <-
+             Fyrlet.Subscriptions.Limits.check_snapshot(
+               byte_size(encoded),
+               subscription.specification
+             ),
+           do: {:ok, %{cursor: cursor, encoded: encoded, bytes: byte_size(encoded)}}
     end
   end
 
   defp snapshot_envelope(socket, window) do
-    a = socket.assigns
-
-    :telemetry.execute([:fyrlet, :subscription, :snapshot], %{bytes: window.bytes}, %{
-      name: a.subscription.name
-    })
-
-    %{
-      "protocol_version" => Capabilities.protocol_version(),
-      "subscription_id" => a.subscription_id,
-      "generation" => a.generation,
-      "seq" => a.seq,
+    snapshot(socket, window.encoded, %{
       "cursor" => window.cursor,
       "mode" => "append",
-      "max_items" => a.subscription.specification["max_items"],
-      "project_id" => a.actor.project_id,
-      "subject_id" => a.actor.subject_id,
-      "capabilities" => a.capabilities,
-      "data" => fragment(socket, window.encoded)
-    }
+      "max_items" => socket.assigns.subscription.specification["max_items"]
+    })
   end
 
   # ---- unacknowledged bookkeeping --------------------------------------------------------
@@ -390,32 +336,11 @@ defmodule FyrletWeb.AppendChannel do
     }
 
     socket = assign(socket, sent: socket.assigns.sent ++ [entry])
-    if socket.assigns.ack_timer, do: socket, else: arm_ack_timer(socket, entry.at + ack_timeout())
-  end
 
-  defp arm_ack_timer(socket, deadline) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 1)
-    assign(socket, ack_timer: Process.send_after(self(), :ack_check, remaining))
+    if socket.assigns.ack_timer,
+      do: socket,
+      else: arm_ack_timer(socket, :ack_check, entry.at + ack_timeout())
   end
 
   defp ack_timeout, do: Application.fetch_env!(:fyrlet, :snapshot_ack_timeout)
-
-  defp reconcile_timer,
-    do:
-      Process.send_after(
-        self(),
-        :reconcile,
-        Application.fetch_env!(:fyrlet, :reconciliation_interval)
-      )
-
-  defp stop(socket, error) do
-    push(socket, "status", %{"state" => "closed", "error" => Error.to_map(error)})
-    {:stop, :normal, socket}
-  end
-
-  defp fragment(socket, encoded) do
-    if socket.serializer == Phoenix.Socket.V2.JSONSerializer and Phoenix.json_library() == Jason,
-      do: Jason.Fragment.new(encoded),
-      else: Jason.decode!(encoded)
-  end
 end

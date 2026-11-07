@@ -13,7 +13,11 @@ mix fyrlet.prune
 
 project 输出文件权限为 0600，已有文件会拒绝覆盖。prune 可由部署环境定时执行。密钥管理命令属于受信任控制面，目前不开放 HTTP 管理项目或密钥接口。
 
-当前配置中的关键限制包括 max_subscriptions、max_snapshot_bytes、max_channel_queue（当前检查 Observer 邮箱）、snapshot_ack_timeout、reconciliation_interval、socket_batch_max_messages、socket_batch_max_bytes、idempotency_ttl。单个数据库语句超时由 Repo 的 PostgreSQL statement_timeout 控制；任意 Elixir CPU 任务没有通用强制隔离超时，业务回调应保持短小。
+当前配置中的关键限制包括 max_subscriptions、max_subscriptions_per_node、max_observers、max_snapshot_bytes、max_channel_queue（检查视图所属进程的邮箱）、snapshot_ack_timeout、reconciliation_interval、socket_batch_max_messages、socket_batch_max_bytes、idempotency_ttl。单个数据库语句超时由 Repo 的 PostgreSQL statement_timeout 控制；任意 Elixir CPU 任务没有通用强制隔离超时，业务回调应保持短小。
+
+`max_subscriptions` 默认每连接 20 个。`max_subscriptions_per_node` 默认限制单节点合计 10,000 个活动订阅、append 和 Presence Channel，可通过 `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` 设置（1–1,000,000）。Tracker 同时执行节点、连接与项目上限，在 Channel 退出时释放名额。`max_observers` 单独限制共享 Observer 进程，默认 10,000 个；私有订阅在 Channel 内运行，不占 Observer 进程。这些值是资源保护上限，不代表节点容量。
+
+订阅契约可声明 `"max_snapshot_bytes" => 32_768`，最大不超过配置的全局上限（默认 256 KiB）。启动时验证预算是否合法；首次加入、重新计算和显式刷新时检查实际快照。超限返回 `LIMIT_EXCEEDED`，不会截断数据。该预算覆盖私有、共享与 append 快照；append 批次仍执行独立的流控上限。
 
 - `mix fyrlet.runs`：停滞的运行；`mix fyrlet.effects`：未知、等待人工或超期未派发的副作用；`mix fyrlet.plugins`：插件、能力与迁移状态。
 - 恢复扫描器（`Fyrlet.Runs.Recovery`）修复过期租约、漏发的唤醒、等待超时、取消期限、运行到期、授权失效、定义缺失；它只看数据库，不依赖进程存活或一次通知。启用 `runs` 能力时自动随应用启动。
@@ -131,7 +135,7 @@ Run、Effect 与插件的事件：
 
 SocketTransport 保持单帧为标准 Phoenix 五元素数组；多帧出站消息包装为 `{"batch":[...]}`，保留帧顺序。只聚合同轮 transport mailbox 已有的推送，通过自发送 flush 消息提交，不设置等待凑批定时器。socket_batch_max_messages 默认 64 且硬上限为 64；socket_batch_max_bytes 默认 256 KiB，是聚合预算，单条超预算消息单独发送，不截断。入站 Socket 帧 64 KiB 限制与出站批处理预算不同。批处理可混合不同 topic，不提供跨订阅事务或原子可见性；自写客户端必须支持此包装，不能假定原生 Phoenix decoder 即可处理。
 
-channel 监控 Observer，运行中的 Observer 退出时发送 retryable 的 INTERNAL_ERROR；会话检查 worker 故障或超时也返回 retryable 内部错误，不绕过认证。SDK 收到 retryable status 后重建连接和订阅，以新 generation 的完整快照恢复，不重放未确认的业务写入。attach 遇到 Observer 调用退出会内部重试一次，仍失败则返回 retryable 错误；SDK 对首次加入返回的 retryable 错误也会自动恢复：该订阅进入 recovering，由 Phoenix 通道按退避重新加入（连续失败超过 10 次才报告 error），连接上的其他订阅不受影响；UNAUTHENTICATED 仍重建整个连接，不可重试的 join 错误立即失败。
+共享 Channel 监控 Observer，运行中的 Observer 退出时发送 retryable 的 INTERNAL_ERROR。私有 Channel 持有自己的视图状态；Channel 退出后，SDK 重新加入该 topic 并接收新快照。会话检查 worker 故障或超时也返回 retryable 内部错误，不绕过认证。SDK 收到 retryable status 后重建连接和订阅，以新 generation 的完整快照恢复，不重放未确认的业务写入。attach 遇到 Observer 调用退出会内部重试一次，仍失败则返回 retryable 错误；SDK 对首次加入返回的 retryable 错误也会自动恢复：该订阅进入 recovering，由 Phoenix 通道按退避重新加入（连续失败超过 10 次才报告 error），连接上的其他订阅不受影响；UNAUTHENTICATED 仍重建整个连接，不可重试的 join 错误立即失败。
 
 ## 运行时调优
 

@@ -144,7 +144,7 @@ defmodule FyrletWeb.PresenceChannelTest do
     assert code(enter(alice, "r1", %{"capabilities" => %{}})) == "UNSUPPORTED_CAPABILITY"
     assert code(enter(alice, "r1", %{"capabilities" => nil})) == "UNSUPPORTED_CAPABILITY"
     assert code(enter(alice, "r1", %{"name" => "nope.presence"})) == "NOT_FOUND"
-    assert code(enter(alice, "r1", %{"name" => "inbox.add"})) == "NOT_FOUND"
+    assert code(enter(alice, "r1", %{"name" => "records.add"})) == "NOT_FOUND"
     assert code(enter(alice, "r1", %{"params" => %{}})) == "VALIDATION_FAILED"
     assert code(enter(alice, "r1", %{"name" => 5})) == "UNSUPPORTED_VERSION"
 

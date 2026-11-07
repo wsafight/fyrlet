@@ -37,9 +37,9 @@ from item in InboxExample.Item,
 
 Observer 默认空闲 1000 ms 后进入 GenServer 休眠，压缩进程堆；消息到达时恢复，刷新、鉴权和 ACK 逻辑照常执行。可通过 `observer_hibernate_after` 或 `FYRLET_OBSERVER_HIBERNATE_AFTER_MS` 调整，环境变量 `infinity` 关闭休眠。这是内存与唤醒 CPU 的取舍，持续忙碌的 Observer 不会进入休眠。
 
-Observer 的 `init/1` 只注册通知与有界状态，初始业务加载在本 Observer 的首次 attach 内执行，受 15 秒调用超时约束。一个慢加载不会阻塞 DynamicSupervisor 启动其他 session 的 Observer。每节点默认最多 10,000 个 Observer，可通过 `:max_observers` 调整；达到上限的新视图以 `LIMIT_EXCEEDED` 拒绝，已有共享视图仍可 attach。这个资源保护值不是已验证的连接容量。
+共享 Observer 的 `init/1` 只注册通知与有界状态，首次 attach 执行初始业务加载，受 15 秒调用超时约束。一个慢加载不会阻塞 DynamicSupervisor 启动其他共享 Observer；私有视图直接在 Channel 中加载。`:max_observers` 默认限制 10,000 个共享 Observer 进程，达到上限的新共享视图返回 `LIMIT_EXCEEDED`。加入已有共享视图无需新建 Observer，但仍消耗独立的 `:max_subscriptions_per_node` 名额（默认 10,000），与私有、append 和 Presence Channel 合并计数。两个上限都不是连接容量结论。
 
-每个订阅通过 Observer 串行维护规范化 View，channel 负责各客户端的 generation、seq、ACK 与到期定时器。只有订阅的服务端契约显式设置 `"shared": true` 才启用共享，缺省或其他值均不共享；这不是客户端 join 选项。当前 `inbox.recent` 已启用。
+私有订阅由 Channel 内的 `Fyrlet.Subscriptions.Observation` 维护规范化 View，不创建独立 Observer 进程或监视器。显式共享的订阅由 Observer 运行同一状态机。Channel 负责各客户端的 generation、seq、ACK 与到期定时器。同 session 共享需在服务端契约设置 `"shared": true`；跨成员共享需声明 `"sharing": "identical"` 并实现独立查询和成员检查。两者都不会根据 `public` 自动推断，也不是客户端 join 选项。当前 `inbox.recent` 已启用 session 共享。
 
 共享使用节点本地 Registry / DynamicSupervisor，key 为 `{actor, subscription}`，不是 Scope 或仅 project / subject。完整 Actor 包含 project_id、subject_id、session_id、expires_at；准备后的完整 subscription 包含 module、name、规范化 parameters、specification、scope。同 session 的多设备在这些值一致时可复用，不同 session 即使同 project / subject 也不共享；不同节点不共享。客户端 topic UUID 与 delivery 不在共享 key 中，全量和增量客户端可以复用同一个 Observer。
 
@@ -53,9 +53,9 @@ write 操作的 execute 运行于框架事务内。应用可以使用 Repo 或 E
 
 不要在回调中提前广播正文或产生不可回滚的外部副作用。异步外部工作应由单独的持久化任务执行，并自行定义重试与补偿。
 
-收件箱 Scope 形式为 `projects:<project>:subjects:<subject>:inbox`。持久化任务只保存 Scope 与项目，广播 `{:invalidated, job_id}`。即时通知可广播 `{:invalidated, job_id, change}`，change 只在内存中传递，不写入 Oban 参数。Observer 保存最近 64 个通知 ID，跳过已处理的持久化重试；不按 ID 大小丢弃乱序通知，旧 ID 被淘汰后重放只会触发安全刷新。Observer 先监听通知再读取初始数据；同轮多个待处理刷新合并后丢弃局部变更提示，回退全量加载。持久化兜底没有变更正文，也走全量加载。
+收件箱 Scope 形式为 `projects:<project>:subjects:<subject>:inbox`。持久化任务只保存 Scope 与项目，广播 `{:invalidated, job_id}`。即时通知可广播 `{:invalidated, job_id, change}`，change 只在内存中传递，不写入 Oban 参数。视图状态保存最近 64 个通知 ID，跳过已处理的持久化重试；不按 ID 大小丢弃乱序通知，旧 ID 被淘汰后重放只会触发安全刷新。视图所属进程先监听通知再读取初始数据；同轮多个待处理刷新合并后丢弃局部变更提示，回退全量加载。持久化兜底没有变更正文，也走全量加载。
 
-每个 Observer 只有一个协调（reconciliation）定时器，默认每 30 秒重新授权并全量加载以修复遗漏通知，不按客户端创建此定时器。无论 delivery 是否为 delta-v1，都维护同一规范化 View；需要完整快照时编码并缓存当前修订的 data JSON。自动刷新可见数据不变时不推送、不增加视图修订或客户端序号；私有 context 的变化不算可见数据变化。显式 refresh 重新加载，并在请求客户端可接收时发送完整快照，即使数据未变。
+每个私有 Channel 或共享 Observer 只有一个协调（reconciliation）定时器，默认每 30 秒重新授权并全量加载以修复遗漏通知；共享成员复用 Observer 的定时器。无论 delivery 是否为 delta-v1，都保留用于判等和增量更新的规范化 View。私有 Channel 按需编码快照，发出后释放编码正文；共享 Observer 缓存当前修订的编码正文。自动刷新可见数据不变时不推送、不增加视图修订或客户端序号；私有 context 的变化不算可见数据变化。显式 refresh 重新加载，并在请求客户端可接收时发送完整快照，即使数据未变。
 
 ACK 按客户端独立维护，每个客户端最多一条待确认更新；等待 ACK 不阻止 Observer 计算或向其他 ready 客户端推送，也不积累每个客户端的补丁队列。落后客户端 ACK 后会触发重新授权的全量加载，并以完整快照追平；只有跟上上一视图修订、已请求 delta-v1 且未强制刷新时才可接收增量。channel 的 seq 与 Observer 内部 revision 不是同一个计数器。
 
@@ -148,7 +148,7 @@ batch_session_checks 默认开启。8 个节点内分片按 session_id 接收检
 | 位置 / 命名空间 | 内容 |
 | --- | --- |
 | `lib/fyrlet/`（根） | 契约与运行时：`Runtime`、`Registry`、`Schema`、`Definition`、`Capabilities`、`Scope`、`Auth`、`Error`；测试辅助 `Testing` |
-| `lib/fyrlet/subscriptions/` | 订阅管线：`Observer`、`View`、`Delta`、`RecordIndex`、`SessionChecks`、`Tracker` |
+| `lib/fyrlet/subscriptions/` | 订阅管线：`Observation`、`Observer`、`View`、`Delta`、`RecordIndex`、`Limits`、`SessionChecks`、`Tracker` |
 | `lib/fyrlet/runs/` | 持久 Run：状态机、引擎、恢复、执行器协议、限额 |
 | `lib/fyrlet/effects/` | Outbox：`Effects`（创建、派发、对账）、`Receipt`、`Resolution`、`Recovery`、`Store`、`Worker`、适配器行为 `Adapter` |
 | `lib/fyrlet/features/` | 核心可选特性（按能力开关）：`Anonymous`、`Ingest`、`Stream`（追加订阅）、`Executors`。它们改变主体类型、操作种类、通道或协议，只能由核心定义，**不是插件** |

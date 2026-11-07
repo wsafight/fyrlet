@@ -13,7 +13,7 @@ defmodule Fyrlet.Fixtures do
   end
 
   def add(actor, text \\ "hello") do
-    Fyrlet.Runtime.call(actor, "inbox.add", %{"text" => text}, Ecto.UUID.generate())
+    Fyrlet.Runtime.call(actor, "records.add", %{"text" => text}, Ecto.UUID.generate())
   end
 
   # Test-only reference that also reports a content fingerprint and record index for a

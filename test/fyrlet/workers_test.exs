@@ -6,7 +6,7 @@ defmodule Fyrlet.WorkersTest do
   alias Fyrlet.Effects.{Effect, Event}
   alias Fyrlet.Features.Ingest
   alias Fyrlet.Features.Ingest.Item, as: IngestItem
-  alias InboxExample.Item, as: Row
+  alias Fyrlet.TestRecord, as: Row
 
   setup do
     project = project()

@@ -16,6 +16,7 @@ defmodule FyrletWeb.SharedScopeTest do
     on_exit(fn ->
       Application.delete_env(:fyrlet, :room_deny)
       Application.delete_env(:fyrlet, :room_policy_version)
+      Application.delete_env(:fyrlet, :room_definition_version)
 
       for {{:identical, _, project_id, _, _, _, _, _}, observer} <-
             Registry.select(Fyrlet.ObserverRegistry, [
@@ -63,6 +64,7 @@ defmodule FyrletWeb.SharedScopeTest do
     bob: bob,
     project: project
   } do
+    slow_reconcile()
     SharedRooms.post("r1", "hello")
     {:ok, first, socket_a} = join_room(alice)
     queries_after_first = SharedRooms.queries()
@@ -77,6 +79,9 @@ defmodule FyrletWeb.SharedScopeTest do
     assert [%{"text" => "hello"}] = first["data"]
     push(socket_a, "ack", ack(first))
     push(socket_b, "ack", ack(second))
+    for socket <- [socket_a, socket_b], do: :sys.get_state(socket.channel_pid)
+    [{_key, observer}] = observers(project)
+    assert Enum.all?(flush(observer).clients, fn {_channel, client} -> client.ready end)
 
     SharedRooms.post("r1", "second")
     before = SharedRooms.queries()
@@ -304,7 +309,7 @@ defmodule FyrletWeb.SharedScopeTest do
     leave(socket_c)
   end
 
-  test "different rooms, parameters and policy versions never share", %{
+  test "different rooms, parameters, policy and projection versions never share", %{
     alice: alice,
     bob: bob,
     project: project
@@ -318,7 +323,12 @@ defmodule FyrletWeb.SharedScopeTest do
     Application.put_env(:fyrlet, :room_policy_version, "2")
     {:ok, _, a3} = join_room(alice, "r1")
     assert length(observers(project)) == 3
-    for socket <- [a1, b1, a2, a3], do: leave(socket)
+
+    Application.put_env(:fyrlet, :room_definition_version, 2)
+    {:ok, _, projection_socket} = join_room(alice, "r1")
+    assert length(observers(project)) == 4
+    assert Fyrlet.Definition.current_version(Fyrlet.SharedTestDefinition, "room.recent") == "2"
+    for socket <- [a1, b1, a2, a3, projection_socket], do: leave(socket)
   end
 
   test "the shared query sees the project and scope but no person", %{

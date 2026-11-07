@@ -17,8 +17,11 @@ No response is cached. Success is `{"request_id":"…","data":…}`; failure is 
 | `GET /api/v1/contract` | User Bearer + X-Project-Id | Exported business contract |
 | `GET /api/v1/identity` | User Bearer + X-Project-Id | Current project_id / subject_id, used by the SDK to bind identity |
 | `POST /api/v1/operations/:name` | User Bearer + X-Project-Id | `{"input":{…}}` → business result; writes must carry an Idempotency-Key |
+| `POST /api/v1/operations/:name/recover` | User Bearer + X-Project-Id | Original input and Idempotency-Key → stored write/run receipt or unknown; never executes the operation |
 
 The request body limit is 64 KiB. The default idempotency retention window is 24 hours, scoped to project + subject + operation + key; the same normalized input replays the original result, and a different input returns CONFLICT. Deduplication is not guaranteed after the window. Only side effects inside this database's transaction are guaranteed.
+
+Successful operation responses require `outcome` beside `data`: `completed` for reads, `committed` for writes and `accepted` for Run/ingest admission. Recovery returns the same outcome and original result for an unexpired matching receipt, or `{"outcome":"unknown","data":null}` when no receipt is visible. It validates current session, business authorization, normalized input and required capabilities. Expired receipts are not deleted or replayed by recovery. Read and ingest operation-level recovery returns `UNSUPPORTED_CAPABILITY`. These fields and the recovery entry point belong to the core version 1 protocol and require no optional capability; Run/ingest retain their existing gates. The unreleased protocol and SDK are updated together without a legacy response parser. See [MUTATIONS.md](MUTATIONS.md) for client states and failure boundaries.
 
 | Error code | HTTP | Meaning |
 | --- | --- | --- |
@@ -106,7 +109,7 @@ The same connection can join the topic `operations` with parameters `{"protocol_
 {"name":"inbox.update","input":{"id":"record UUID","text":"Updated","expected_version":1},"idempotency_key":"request UUID"}
 ```
 
-Success replies `{"data":…}` and failure replies `{"error":{…},"status":409}`, distinguished by the ok / error status of the Phoenix reply. Writes must carry an idempotency_key, whose scope, retention time and transaction rules are the same as for HTTP. Every call re-validates the session and business permissions; the channel is closed when the session expires. Business execution shares the connection with subscriptions, and calls are processed serially within the operations channel. Authentication, the contract and server-side session management still use HTTP.
+Success replies `{"outcome":"committed","data":…}` (or `completed` / `accepted`) and failure replies `{"error":{…},"status":409}`, distinguished by the ok / error status of the Phoenix reply. The `recover` event takes the same name, input and idempotency_key as `call`, and only queries the stored receipt, with the same outcomes and unknown response as HTTP. Writes must carry an idempotency_key, whose scope, retention time and transaction rules are the same as for HTTP. Every call and recovery re-validates the session and business permissions; the channel is closed when the session expires. Business execution shares the connection with subscriptions, and requests are processed serially within the operations channel. Authentication, the contract and server-side session management still use HTTP.
 
 ## Convergence and resources
 

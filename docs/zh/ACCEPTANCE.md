@@ -4,7 +4,11 @@
 
 ## 已通过的验证
 
-下表是 2026-11-07 当天的运行记录。此后核心测试增至 527 项、SDK 单元测试增至 63 项（新增项目配额、Prometheus 指标、在线状态、乐观写入、租约与并发上限、加入失败恢复等），其余套件尚未按此重跑。能力级别的实现状态与验收矩阵见 [STATUS.md](STATUS.md)。
+同日路线图 1A 开发通过：**687 项 Elixir 测试**（核心 617、示例 35、独立包 35）、**132 项 SDK 单元测试**、SDK 类型检查与 **18 项真实服务端集成**。相较上一轮新增 16 项 Elixir、29 项 SDK 单元与 3 项集成测试。覆盖读完成 / 写提交 / 持久受理、确定失败与未知结果、发送前后取消、响应体停滞、监听清理、回执过期、规范化输入、权限与身份隔离。真实 HTTP 和 Socket 用例在数据库提交后故意丢弃回复，恢复原回执，并断言只存在一条业务记录、没有重放。复现命令：`bash scripts/test_all.sh`、`npm --prefix sdks/typescript test`、`npm --prefix sdks/typescript run typecheck`、`INTEGRATION_PORT=4197 bash scripts/integration.sh`。恢复边界见[操作结果文档](MUTATIONS.md)；订阅权威视图确认（1B）尚未交付。
+
+下表保留 2026-11-07 较早一轮的运行记录。同日后续架构、订阅内存与代码质量回归最终通过：核心 601 项、示例 35 项（含 Inbox 18 项）、独立包 35 项、SDK 单元 103 项、SDK 类型检查、真实服务端集成 15 项（`INTEGRATION_PORT=4197 bash scripts/integration.sh`）。最新一轮增加 9 项通道生命周期、3 项 SDK 句柄与控制消息回归。覆盖包括事务清理与去重、定义校验、请求取消与刷新总超时、通道故障隔离、乐观写入乱序完成，以及私有视图嵌入、snapshot/delta 推送、ACK 恢复、权限撤销、快照预算、跨通道节点配额与定时器清理。Inbox 的 360 步混合变更逐步对照独立窗口模型和实时快照。共享查询计数用例在同步初始 ACK 后连续 11 轮通过。内存和 Tracker 测量见 [OPTIMIZATIONS.md](OPTIMIZATIONS.md#13-私有订阅进程与编码缓存2026-11-07)，代码精简及 Presence 归属修复见第 14 节。其余验收结果沿用下表记录。能力级别的实现状态与验收矩阵见 [STATUS.md](STATUS.md)。
+
+代码质量回归首次全量运行时，两项 `SessionChecksTest` 用例收到额外批处理遥测事件，结果为 599/601。随后会话检查与生命周期子集 17 项通过，原种子 `926877` 加 `--trace` 的全量 601 项通过，最终 `bash scripts/test_all.sh` 的 671 项 Elixir 测试全部通过。首次事件计数干扰保留在记录中，来源尚未确定。
 
 | 验证 | 结果 | 入口 / 证据 |
 | --- | --- | --- |
@@ -32,7 +36,7 @@ bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-SDK 集成脚本使用独立的 `fyrlet_integration` 数据库及 4100 端口，验证 13 个真实 HTTP / WebSocket 场景，覆盖多设备、幂等并发、隔离、撤销、重启、Run 与 append。领域脚本默认用 4180/4181 端口，可按上例改端口，依次运行四个应用的 8 个业务与网页资源场景。所有脚本启动和关闭自己的服务，凭证和日志在 `.local/integration/`。分发包和 SHA256 清单在 `.local/releases/`，未发布到外部注册表。浏览器、双节点和真实邮件的验证见下文各节。
+SDK 集成脚本使用独立的 `fyrlet_integration` 数据库，默认端口为 4100，可用 `INTEGRATION_PORT` 覆盖；验证 18 个真实 HTTP / WebSocket 场景，覆盖多设备、幂等并发、隔离、撤销、重启、Run、append 与混合通道。领域脚本默认用 4180/4181 端口，可按上例改端口，依次运行四个应用的 8 个业务与网页资源场景。所有脚本启动和关闭自己的服务，凭证和日志在 `.local/integration/`。分发包和 SHA256 清单在 `.local/releases/`，未发布到外部注册表。浏览器、双节点和真实邮件的验证见下文各节。
 
 ## 浏览器覆盖
 

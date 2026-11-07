@@ -58,22 +58,11 @@ defmodule FyrletWeb.Router do
   end
 
   post "/api/v1/operations/:name" do
-    envelope = Schema.object(%{"input" => %{"type" => "object"}}, ["input"])
+    operation(conn, name, &Runtime.call_with_outcome/5)
+  end
 
-    result =
-      with {:ok, actor} <- actor(conn),
-           {:ok, capabilities} <- capabilities(conn),
-           {:ok, body} <- Schema.validate(envelope, conn.body_params) do
-        Runtime.call(
-          actor,
-          name,
-          body["input"],
-          List.first(get_req_header(conn, "idempotency-key")),
-          capabilities: capabilities
-        )
-      end
-
-    Response.result(conn, result)
+  post "/api/v1/operations/:name/recover" do
+    operation(conn, name, &Runtime.recover/5)
   end
 
   get "/api/v1/runs/:id" do
@@ -245,6 +234,21 @@ defmodule FyrletWeb.Router do
       Fyrlet.Capabilities.negotiate_header(
         List.first(get_req_header(conn, "x-fyrlet-capabilities"))
       )
+
+  defp operation(conn, name, perform) do
+    envelope = Schema.object(%{"input" => %{"type" => "object"}}, ["input"])
+
+    result =
+      with {:ok, actor} <- actor(conn),
+           {:ok, capabilities} <- capabilities(conn),
+           {:ok, body} <- Schema.validate(envelope, conn.body_params) do
+        perform.(actor, name, body["input"], List.first(get_req_header(conn, "idempotency-key")),
+          capabilities: capabilities
+        )
+      end
+
+    Response.operation(conn, result)
+  end
 
   defp actor(conn),
     do: Auth.authenticate(bearer(conn), List.first(get_req_header(conn, "x-project-id")))

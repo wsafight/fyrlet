@@ -1,4 +1,33 @@
 defmodule Fyrlet.Definition do
+  @moduledoc """
+  The application definition facade. Existing definitions use this single behaviour.
+
+  Every definition provides `contract/0`, `authorize/3`, `execute/3` and `scope/3`.
+  Optional callbacks belong to the features declared in its contract:
+
+  * Incremental snapshots: `change/4`, `load_subscription/3`, `update_subscription/5`.
+  * Identical sharing: `shared_query/3`, `membership/3`, `policy_version/1`.
+  * Append subscriptions: `stream/3`.
+  * Managed data access: `data_scope/3`.
+  * Runs: `run/3` or `advance/3`, `step/3`, `plan_options/3`, `run_authorize/4`,
+    `implementation/2`.
+  * Ingest: `ingest/3`.
+
+  `definition_version/1` identifies a shared projection or pins a run implementation.
+  It defaults to `"1"`; a sharing authorization policy has its own `policy_version/1`.
+  `Fyrlet.Registry.validate!/0` checks declared features and their required callbacks
+  at startup through `Fyrlet.Definition.Validation`.
+  """
+
+  @doc "The current definition version used by shared subscriptions and durable runs."
+  def current_version(module, name) do
+    Code.ensure_loaded!(module)
+
+    if function_exported?(module, :definition_version, 1),
+      do: to_string(module.definition_version(name)),
+      else: "1"
+  end
+
   @callback contract() :: map()
   @callback authorize(String.t(), Fyrlet.Actor.t(), map()) :: :ok | {:error, Fyrlet.Error.t()}
   @callback execute(String.t(), Fyrlet.Actor.t(), map()) ::
@@ -49,8 +78,8 @@ defmodule Fyrlet.Definition do
   @doc "Authorizes `:start`, `:view`, `:signal` or `:cancel`. Without it only the starter may act."
   @callback run_authorize(String.t(), atom(), Fyrlet.Actor.t(), map()) ::
               :ok | {:error, Fyrlet.Error.t()}
-  @doc "The version a run is pinned to when accepted. Defaults to \"1\"."
-  @callback definition_version(String.t()) :: String.t()
+  @doc "The shared projection version, or the version a run is pinned to. Defaults to \"1\"."
+  @callback definition_version(String.t()) :: String.t() | integer()
   @doc "The module implementing `version` of an operation, or nil when it is gone."
   @callback implementation(String.t(), String.t()) :: module() | nil
 

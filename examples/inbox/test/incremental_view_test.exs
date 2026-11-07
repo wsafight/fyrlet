@@ -1,5 +1,5 @@
-defmodule Fyrlet.IncrementalViewTest do
-  use Fyrlet.DataCase, async: false
+defmodule InboxExample.IncrementalViewTest do
+  use InboxExample.DataCase, async: false
   alias Fyrlet.Subscriptions.View
   alias InboxExample.Inbox
 

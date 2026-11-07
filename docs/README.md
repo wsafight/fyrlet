@@ -10,6 +10,7 @@ Fyrlet is a realtime application framework built on Phoenix: you define business
 | --- | --- |
 | [PRODUCT.md](PRODUCT.md) | Product positioning, use cases, scope and non-goals, functional requirements, consistency commitments, risks and success criteria |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Base model, optional modules, the three layers (core / capability package / domain package), authentication layering and hard rules |
+| [ROADMAP.md](ROADMAP.md) | Planned milestones, priorities, dependencies, completion criteria and later evaluations |
 
 ## Integration and usage
 
@@ -37,6 +38,7 @@ Fyrlet is a realtime application framework built on Phoenix: you define business
 | Document | Contents |
 | --- | --- |
 | [SERVER.md](SERVER.md) | Registering definitions, queries and authorization, Observers, transactions and invalidation notifications, optional callbacks, code organization |
+| [MUTATIONS.md](MUTATIONS.md) | Operation outcomes, unknown results and recovery without replay |
 | [RUNS.md](RUNS.md) | Durable Runs: state machine, waits and signals, cancellation, leases, external executors, execution identity |
 | [EFFECTS.md](EFFECTS.md) | External side effects and Outbox: model, adapter protocol, handling unknown outcomes |
 | [STREAMS.md](STREAMS.md) | Append subscriptions: positions, joining, windows, history and reset |
