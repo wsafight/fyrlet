@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-`sdks/` 收纳 Fyrlet 的客户端 SDK，按语言建立子目录，每个 SDK 独立构建、测试和发布。当前只有 [TypeScript SDK](typescript/README.zh-CN.md)，本地包名为 `@fyrlet/client`；包尚未发布，npm scope 可用性尚未确认。
+`sdks/` 收纳 Fyrlet 的客户端 SDK，按语言建立子目录，每个 SDK 独立构建、测试和发布。[TypeScript SDK](typescript/README.zh-CN.md)（本地包名 `@fyrlet/client`）最完整；[Python](python/README.zh-CN.md)（`fyrlet`）、[Go](go/README.zh-CN.md)（`github.com/wsafight/fyrlet/sdks/go`）、[Swift](swift/README.zh-CN.md)（`Fyrlet`）、[.NET](dotnet/README.zh-CN.md)（`Fyrlet`）、[Rust](rust/README.zh-CN.md)（`fyrlet`）、[Java](java/README.zh-CN.md)（`com.fyrlet:fyrlet`）和 [Kotlin](kotlin/README.zh-CN.md)（`com.fyrlet:fyrlet-kotlin`）SDK 覆盖会话交换、带幂等与恢复的业务调用和可恢复订阅，Run、append、presence、乐观写入和 Socket RPC 暂时只有 TypeScript 提供。所有包均未发布，npm scope 可用性尚未确认。
 
 ## 目录约定
 
@@ -15,9 +15,16 @@ sdks/
     examples/
     test/
     package.json
+  python/        pyproject.toml、src/、tests/、examples/
+  go/            go.mod、*.go、examples/
+  swift/         Package.swift、Sources/、Tests/、Examples/
+  dotnet/        Fyrlet.sln、src/、tests/、examples/
+  rust/          Cargo.toml、src/、tests/、examples/
+  java/          pom.xml、src/、examples/
+  kotlin/        pom.xml、src/、examples/
 ```
 
-未来实际实现某种语言时，再增加 `dart/`、`swift/`、`kotlin/` 或 `python/` 等目录。当前不创建空 SDK，也不承诺这些语言的交付顺序。每个语言目录拥有自己的依赖、版本和包管理方式，服务端继续位于仓库根目录。
+未来实际实现某种语言时，再增加 `dart/`、`flutter/` 等目录。当前不创建空 SDK，也不承诺这些语言的交付顺序。每个语言目录拥有自己的依赖、版本和包管理方式，服务端继续位于仓库根目录。
 
 React 适配基于 TypeScript 核心；需要独立发布时可在 `typescript/packages/` 下拆包。React Native 同样复用 TypeScript 核心，并补充前后台、网络恢复与令牌存储适配。Flutter、原生 iOS 和原生 Android 的 SDK 则分别在相应语言目录实现。
 

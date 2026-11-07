@@ -22,3 +22,21 @@
 /site/node_modules/
 /site/dist/
 /site/.astro/
+
+# Python / Go SDK build output
+/sdks/python/**/__pycache__/
+/sdks/python/**/*.egg-info/
+/sdks/python/.pytest_cache/
+/sdks/python/build/
+/sdks/python/dist/
+
+# Swift / .NET SDK build output
+/sdks/swift/.build/
+/sdks/swift/.swiftpm/
+/sdks/dotnet/**/bin/
+/sdks/dotnet/**/obj/
+
+# Rust / Java / Kotlin SDK build output
+/sdks/rust/target/
+/sdks/java/target/
+/sdks/kotlin/target/

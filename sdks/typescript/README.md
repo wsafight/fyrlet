@@ -193,6 +193,7 @@ Node has passed real integration tests. Browser and React Native clients do not 
 npm --prefix sdks/typescript run generate
 npm --prefix sdks/typescript run build
 npm --prefix sdks/typescript test
+npm --prefix sdks/typescript run test:coverage
 npm --prefix sdks/typescript run typecheck
 bash scripts/integration.sh
 DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
@@ -200,6 +201,6 @@ DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 
 Run these commands from the repository root. The generator supports the current restricted contract dialect and rejects unsupported schemas. Input fields with defaults become optional; output fields follow `required`. Generated types provide compile-time checks, while the server validates all input and output at runtime.
 
-The recorded verification includes 132 unit tests and 18 real-server integration scenarios, covering mutation outcomes, receipt recovery after lost committed responses, concurrent request cancellation, authorization refresh deadlines, channel isolation, optimistic write ordering, Run idempotency, signals, subject/project isolation, restart recovery, append windows and revocation. Four domain applications add 8 end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for commands and boundaries.
+The 203 unit tests cover mutation outcomes, receipt recovery after lost committed responses, invalid recovery receipts, concurrent request cancellation, authorization refresh deadlines and races, operation channel join failures, channel isolation, malformed deltas, optimistic write ordering, and backend session issuance and revocation, including credential and endpoint validation, malformed responses and cancellation. `test:coverage` uses Node's built-in coverage tooling to report SDK runtime coverage. The recorded real-server verification includes 18 integration scenarios covering Run idempotency, signals, subject/project isolation, restart recovery, append windows and revocation. Four domain applications add 8 end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for commands and boundaries.
 
 `bash scripts/package.sh` produces `.local/releases/fyrlet-client-0.1.0.tgz`; another project can install it with `npm install /absolute/path/fyrlet-client-0.1.0.tgz`. `bash scripts/install_smoke.sh` installs the package into a consumer outside the repository and imports both the main and server entry points. See [installation](../../docs/INSTALL.md) for distribution and version boundaries.

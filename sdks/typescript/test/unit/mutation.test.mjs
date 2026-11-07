@@ -5,6 +5,54 @@ import { response, TestWebSocket, until } from "../helpers.mjs";
 
 const identity = { project_id: "project", subject_id: "alice" };
 
+for (const [label, receipt] of [
+  ["a completed read", { outcome: "completed", data: "read result" }],
+  ["an unknown outcome with data", { outcome: "unknown", data: { id: "one" } }],
+  ["a receipt without an outcome", { data: { id: "one" } }],
+  ["a receipt without data", { outcome: "committed" }],
+]) {
+  test(`recovery rejects ${label}, preserves uncertainty and allows a later valid lookup`, async (context) => {
+    let lookups = 0;
+    let writes = 0;
+    const keys = [];
+    const instance = client(context, {
+      fetch: async (url, init) => {
+        if (url.endsWith("/identity")) return response(identity);
+        keys.push(init.headers["idempotency-key"]);
+        if (!url.endsWith("/recover")) { writes++; throw new Error("response lost"); }
+        return ++lookups === 1 ? new Response(JSON.stringify(receipt)) : response({ id: "one" });
+      },
+    });
+    const mutation = instance.mutate("records.add", {}, { idempotencyKey: "durable-key" });
+    await assert.rejects(mutation.result, OutcomeUnknownError);
+    const unknown = mutation.getState();
+    await assert.rejects(mutation.recover(), { code: "PROTOCOL_ERROR" });
+    assert.equal(mutation.getState(), unknown);
+    assert.deepEqual(await mutation.recover(), { status: "committed", data: { id: "one" } });
+    assert.equal(writes, 1);
+    assert.equal(lookups, 2);
+    assert.deepEqual(keys, ["durable-key", "durable-key", "durable-key"]);
+  });
+}
+
+test("recovery of an accepted run publishes the original run identifier without another write", async (context) => {
+  let writes = 0;
+  const instance = client(context, {
+    fetch: async (url) => {
+      if (url.endsWith("/identity")) return response(identity);
+      if (!url.endsWith("/recover")) { writes++; throw new Error("accepted response lost"); }
+      return response({ run_id: "accepted-run" }, 200, "accepted");
+    },
+  });
+  const mutation = instance.mutate("runs.start", {});
+  await assert.rejects(mutation.result, OutcomeUnknownError);
+  const recovered = await mutation.recover();
+  assert.deepEqual(recovered, { status: "accepted", data: { run_id: "accepted-run" } });
+  assert.equal(mutation.getState(), recovered);
+  assert.equal(await mutation.recover(), recovered);
+  assert.equal(writes, 1);
+});
+
 function client(context, options = {}) {
   const instance = createClient({
     endpoint: "http://localhost:4000", projectId: "project", getToken: () => "rts_test",

@@ -199,6 +199,7 @@ Node 已通过真实集成测试。浏览器与 React Native 不需要导入 ser
 npm --prefix sdks/typescript run generate
 npm --prefix sdks/typescript run build
 npm --prefix sdks/typescript test
+npm --prefix sdks/typescript run test:coverage
 npm --prefix sdks/typescript run typecheck
 bash scripts/integration.sh
 DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
@@ -206,6 +207,6 @@ DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 
 命令从仓库根目录执行。生成器支持当前受限契约，拒绝不支持的 schema；输入默认字段生成可选属性，输出按 required 字段生成。生成类型提供编译期约束，服务端仍对所有输入输出进行运行时校验。
 
-单元测试 132 个，真实服务端集成 18 个，覆盖操作结果分类、提交后丢失响应的回执恢复、并发请求取消、认证刷新期间的总超时、通道间故障隔离、乐观写入乱序完成，以及 Run 幂等、信号、主体/项目隔离、重启恢复、append 窗口与撤销。四个领域应用另有 8 个端到端场景，命令与验收边界见[验收记录](../../docs/zh/ACCEPTANCE.md)。
+单元测试 203 个，覆盖操作结果分类、提交后丢失响应的回执恢复、异常恢复回执、并发请求取消、认证刷新期间的总超时与竞争、操作通道加入失败、通道间故障隔离、畸形增量、乐观写入乱序完成，以及服务端会话签发与撤销、凭证和端点校验、响应格式错误与请求取消。`test:coverage` 使用 Node 内置覆盖率工具统计 SDK 运行时代码。真实服务端集成 18 个，覆盖 Run 幂等、信号、主体/项目隔离、重启恢复、append 窗口与撤销。四个领域应用另有 8 个端到端场景，命令与验收边界见[验收记录](../../docs/zh/ACCEPTANCE.md)。
 
 执行 `bash scripts/package.sh` 生成 `.local/releases/fyrlet-client-0.1.0.tgz`，其他项目可用 `npm install /绝对路径/fyrlet-client-0.1.0.tgz` 安装。`bash scripts/install_smoke.sh` 会在仓库外创建 consumer，实际安装并导入主入口与 `@fyrlet/client/server`；分发和版本边界见 [INSTALL.md](../../docs/zh/INSTALL.md)。

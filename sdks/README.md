@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`sdks/` contains client SDKs organized by language. Each SDK builds, tests and releases independently. Only the [TypeScript SDK](typescript/README.md) is currently implemented, with local package name `@fyrlet/client`. The package has not been published, and availability of the npm scope has not been confirmed.
+`sdks/` contains client SDKs organized by language. Each SDK builds, tests and releases independently. The [TypeScript SDK](typescript/README.md) (local package `@fyrlet/client`) is the most complete. The [Python](python/README.md) (`fyrlet`), [Go](go/README.md) (`github.com/wsafight/fyrlet/sdks/go`), [Swift](swift/README.md) (`Fyrlet`), [.NET](dotnet/README.md) (`Fyrlet`), [Rust](rust/README.md) (`fyrlet`), [Java](java/README.md) (`com.fyrlet:fyrlet`) and [Kotlin](kotlin/README.md) (`com.fyrlet:fyrlet-kotlin`) SDKs cover session exchange, operations with idempotency and recovery, and recoverable subscriptions; Runs, append, presence, optimistic writes and Socket RPC are TypeScript-only for now. None of the packages has been published, and availability of the npm scope has not been confirmed.
 
 ## Directory conventions
 
@@ -15,9 +15,16 @@ sdks/
     examples/
     test/
     package.json
+  python/        pyproject.toml, src/, tests/, examples/
+  go/            go.mod, *.go, examples/
+  swift/         Package.swift, Sources/, Tests/, Examples/
+  dotnet/        Fyrlet.sln, src/, tests/, examples/
+  rust/          Cargo.toml, src/, tests/, examples/
+  java/          pom.xml, src/, examples/
+  kotlin/        pom.xml, src/, examples/
 ```
 
-Add directories such as `dart/`, `swift/`, `kotlin/` or `python/` when an implementation actually begins. There are no empty SDKs or promised delivery order. Each language controls its dependencies, version and package manager. The server stays at the repository root.
+Add directories such as `dart/` or `flutter/` when an implementation actually begins. There are no empty SDKs or promised delivery order. Each language controls its dependencies, version and package manager. The server stays at the repository root.
 
 React adapters build on the TypeScript core and may use `typescript/packages/` if independent releases are needed. React Native also reuses that core, adding lifecycle, network recovery and token storage integration. Flutter, native iOS and native Android SDKs belong in their corresponding language directories.
 

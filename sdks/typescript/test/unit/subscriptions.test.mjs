@@ -84,6 +84,109 @@ function sendSnapshot(target, data, seq = 2) {
   target.send("snapshot", { ...target.snapshot, data, seq });
 }
 
+for (const [label, delta] of [
+  ["a missing sequence", (generation) => ({ g: generation, b: 2, p: {} })],
+  ["an unsafe sequence", (generation) => ({ g: generation, s: Number.MAX_SAFE_INTEGER + 1, b: 2, p: {} })],
+  ["a nonconsecutive base", (generation) => ({ g: generation, s: 3, b: 1, p: {} })],
+  ["a zero base", (generation) => ({ g: generation, s: 1, b: 0, p: {} })],
+  ["a patch for a missing record", (generation) => ({ g: generation, s: 3, b: 2, p: { c: [["missing", {}]] } })],
+  ["an unknown patch operation", (generation) => ({ g: generation, s: 3, b: 2, p: { unknown: [] } })],
+]) {
+  test(`a delta with ${label} fails only its subscription without acknowledging invalid data`, async (context) => {
+    const instance = client(context);
+    const subscription = instance.subscribe("records.recent", {});
+    const sibling = instance.subscribe("records.other", {});
+    const socket = await ready(subscription, sibling);
+    const target = channel(socket, "subscription:");
+    sendSnapshot(target, [{ id: "a", text: "before" }]);
+    const acknowledgements = target.messages("ack").length;
+    target.send("delta", delta(target.snapshot.generation));
+
+    assert.equal(subscription.getState().status, "error");
+    assert.equal(subscription.getState().error.code, "PROTOCOL_ERROR");
+    assert.equal(subscription.getState().data, undefined);
+    assert.equal(target.messages("ack").length, acknowledgements);
+    assert.equal(sibling.getState().status, "ready");
+    sendSnapshot(channel(socket, "subscription:", 1), ["still live"]);
+    assert.deepEqual(sibling.getState().data, ["still live"]);
+  });
+}
+
+for (const payload of [null, 42]) {
+  test(`a non-object delta payload (${payload}) fails the transport without acknowledging either channel`, async (context) => {
+    const instance = client(context);
+    const first = instance.subscribe("records.recent", {});
+    const second = instance.subscribe("records.other", {});
+    const socket = await ready(first, second);
+    const acknowledgements = socket.messages.filter((message) => message.event === "ack").length;
+    channel(socket, "subscription:").send("delta", payload);
+
+    for (const subscription of [first, second]) {
+      assert.equal(subscription.getState().status, "error");
+      assert.equal(subscription.getState().error.code, "PROTOCOL_ERROR");
+      assert.equal(subscription.getState().data, undefined);
+    }
+    assert.equal(socket.messages.filter((message) => message.event === "ack").length, acknowledgements);
+  });
+}
+
+test("a client that disabled delta delivery rejects an unnegotiated patch", async (context) => {
+  const instance = client(context, { delta: false });
+  const subscription = instance.subscribe("records.recent", {});
+  const socket = await ready(subscription);
+  const target = channel(socket, "subscription:");
+  sendSnapshot(target, [{ id: "a" }]);
+  target.send("delta", { g: target.snapshot.generation, s: 3, b: 2, p: {} });
+
+  assert.equal(subscription.getState().status, "error");
+  assert.equal(subscription.getState().error.code, "PROTOCOL_ERROR");
+});
+
+for (const [event, payload, code] of [
+  ["status", { error: { code: "FORBIDDEN", message: "Access revoked" } }, "FORBIDDEN"],
+  ["status", {}, "PROTOCOL_ERROR"],
+  ["phx_close", {}, "SUBSCRIPTION_CLOSED"],
+]) {
+  test(`${event} ${code} closes one subscription while a sibling remains live`, async (context) => {
+    const instance = client(context);
+    const subscription = instance.subscribe("records.recent", {});
+    const sibling = instance.subscribe("records.other", {});
+    const socket = await ready(subscription, sibling);
+    channel(socket, "subscription:").send(event, payload);
+
+    assert.equal(subscription.getState().status, "error");
+    assert.equal(subscription.getState().error.code, code);
+    assert.equal(subscription.getState().data, undefined);
+    sendSnapshot(channel(socket, "subscription:", 1), ["still live"]);
+    assert.deepEqual(sibling.getState().data, ["still live"]);
+  });
+}
+
+test("an authentication status clears all cached data before waiting for refreshed credentials", async (context) => {
+  const fresh = Promise.withResolvers();
+  const refreshes = [];
+  const instance = client(context, {
+    getToken: ({ forceRefresh }) => { refreshes.push(forceRefresh); return forceRefresh ? fresh.promise : "rts_initial"; },
+  });
+  const first = instance.subscribe("records.recent", {});
+  const second = instance.subscribe("records.other", {});
+  const socket = await ready(first, second);
+  const generation = first.getState().generation;
+  channel(socket, "subscription:").send("status", {
+    error: { code: "UNAUTHENTICATED", message: "Expired", retryable: false },
+  });
+
+  for (const subscription of [first, second]) {
+    assert.equal(subscription.getState().status, "recovering");
+    assert.equal(subscription.getState().data, undefined);
+  }
+  await until(() => refreshes.length === 2);
+  fresh.resolve("rts_fresh");
+  await ready(first, second);
+  assert.notEqual(first.getState().generation, generation);
+  assert.deepEqual(refreshes, [false, true]);
+});
+
 for (const append of [false, true]) {
   for (const [label, changes] of [
     ["wrong protocol version", { protocol_version: 2 }],
