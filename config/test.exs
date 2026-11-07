@@ -24,6 +24,9 @@ config :logger, level: :warning
 # Many tests rewrite contracts, plugins and definitions at run time.
 config :fyrlet, runtime_cache: false
 config :fyrlet, batch_session_checks: false
+
+# Most tests exercise the durable fallback job; test/fyrlet/invalidation_mode_test.exs covers both modes.
+config :fyrlet, durable_invalidation: true
 # Runs are enabled in tests; the recovery scanner is driven explicitly, not on a timer.
 config :fyrlet,
   capabilities: %{

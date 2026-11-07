@@ -25,6 +25,12 @@ defmodule Fyrlet.Bench.QueryCounts do
     Process.sleep(60)
     :telemetry.detach(id)
     queries = drain([])
+
+    if System.get_env("VERBOSE") do
+      for q <- queries,
+          do: IO.puts("    #{String.slice(String.replace(q, ~r/\s+/, " "), 0, 150)}")
+    end
+
     kinds = Enum.frequencies_by(queries, &kind/1) |> Enum.sort_by(fn {_, n} -> -n end)
 
     IO.puts(

@@ -18,6 +18,7 @@ Earlier raw run data is in `.local/fair/` on the local machine (ignored by versi
 | Configurable idempotency retention period | Done, default unchanged | Estimate |
 | Private view state embedded in Channel; encoded cache released | Implemented | Channel/process A/B: 200 private views use 200 instead of 400 processes; 64 KiB idle retained memory −45.3% |
 | Contract snapshot budgets and node-wide Channel cap | Implemented | Startup validation and runtime regression tests; no capacity claim |
+| Per-write fallback invalidation job | **Off by default** (`durable_invalidation`) | A B B A, 4 runs per side at 1000 writes/s, 1 vCPU: CPU −8%, anon memory −14%, ranges do not overlap; P95 and completed writes only directionally better |
 | Channel and SDK duplication | Simplified | Production source −131 physical / −115 nonblank lines; lifecycle and handle-ownership regression tests |
 
 ## 1. Oban pruner capacity
@@ -294,7 +295,7 @@ The end-to-end A/B follows the script approach of section 10 (images, the same s
 - **Advancing one step still has duplicate reads**: the same step row is read with a lock 3–4 times in one advance, and the Run row twice. They are all necessary reads (row locks) in their own transactions; merging them requires restructuring the transaction boundaries of `Engine`, and this module is guarded by fault-injection tests of the state-machine invariants, so the gain (a few index lookups) does not outweigh the risk.
 - **The Run is loaded twice when reading a view** (once for `run_authorize/4`, once for the view). One load could be saved by passing the already loaded Run through the call chain, but that would change the interface between authorization and the view, for a small gain.
 - **Session re-checks of append subscriptions**: now every subscriber is re-checked before every send (with batching shards), which is the main marginal cost remaining after the fan-out; lowering it further requires a trade-off in the authorization semantics and needs a separate review. (The member re-checks of shared `identical` subscriptions are a different matter, and were made batched in section 11.)
-- **BEAM VM parameters** (such as `+sbwt none`: in a 1 vCPU cgroup, scheduler busy-waiting consumes CPU quota): there is no reproducible container environment on the local machine, and no changes are made on speculation.
+- **BEAM VM parameters**: `+sbwt none +sbwtdcpu none +sbwtdio none` was measured in section 16 and gave no gain; nothing else was tried.
 - End-to-end throughput and the comparison under cgroup limits require re-running the external load tests of "Comparison results" in [PERFORMANCE.md](PERFORMANCE.md); none of the changes above has yet been re-tested in that environment.
 
 ### Directions decided against
@@ -353,3 +354,35 @@ The TypeScript client also shares the readiness, success, error and timeout hand
 The baseline is the working tree at the start of this pass, after section 13. Across `lib/**/*.ex` and `sdks/typescript/src/**/*.ts`, physical lines fell from 13,448 to 13,317; nonblank lines fell from 11,332 to 11,217 (−115). These counts include the new helper and exclude tests, documentation and benchmark code. The reduction comes from removing repeated implementations; line count alone does not establish quality or runtime performance.
 
 Nine new Elixir regressions exercise malformed identifiers, a shared node budget across all three subscription Channel kinds, slot release on leave, expiry and timer cleanup. Three new SDK regressions cover Presence handle ownership, stale handles, readiness, error/timeout replies and preserving the last acknowledged Presence meta after failed updates. Final suite results are recorded in [ACCEPTANCE.md](ACCEPTANCE.md).
+
+## 15. Per-write fallback job off by default (2026-11-07)
+
+**Finding.** With the sharded generator (`bench/fair/`) and a stack sampler (`bench/fair/profile.exs`), a 1000 writes/s run on 1 vCPU showed the write handlers (`OperationChannel`) at 67% of reductions, and 89% of their on-CPU samples inside socket calls to PostgreSQL (`port_command`, `recv`, `port_control`; 132 samples, so the split is indicative). Counting statements (`test/bench/query_counts.exs`, `VERBOSE=1` prints them) showed 16 for one write plus one subscriber delivery, of which 5–6 came from the Oban fallback invalidation job inserted in every write: insert, Oban's insert notice, the fetch (begin, select, commit) and the completion update.
+
+**Change.** `durable_invalidation` (env `FYRLET_DURABLE_INVALIDATION`), default `false`: the Operation write path no longer inserts the fallback job. The broadcast is still sent right after commit with a random negative identifier (`InvalidationWorker.transient/2`), which only de-duplicates deliveries. `AfterCommit.invalidate/3` (Runs) is unchanged and always durable. A write nested in a `Fyrlet.Transaction` registers its broadcast (with the committed change) with `AfterCommit`, which sends it only after the outer commit and drops it on rollback; a write nested in a plain `Repo.transaction` has no commit hook, so it keeps the durable job even in the default mode. **Guarantee trade-off:** if the node dies after the commit and before the broadcast, no job re-broadcasts it; subscribers catch up at their next reconciliation (30 s by default). `durable_invalidation: true` restores the previous behavior; the test suite runs in that mode and `test/fyrlet/invalidation_mode_test.exs` covers both.
+
+**Evidence** (`bench/fair/abba.sh 1000 2`, 4 runs per side, alternating A B B A; 1000 users × 2 devices, 20 s, 1 vCPU / 1 GiB, 4 generator shards):
+
+| | Previous | Now |
+| --- | --- | --- |
+| App CPU seconds | 27.1–27.6 (median 27.3) | 24.5–25.2 (median 25.1) |
+| Anon memory peak, MiB | 735–746 | 626–638 |
+| Propagation P95 ms, median (range) | 78 (55–104) | 34 (8–74) |
+| Completed writes of 20 000, median (range) | 18 537 (17 113–19 488) | 19 559 (18 451–19 944) |
+
+CPU and memory ranges do not overlap. P95 and completed writes overlap, so only the direction is supported. An earlier run of the same idea (job skipped in a scratch copy) gave the same direction with a larger P95 gap (median 68 → 24 ms), also 4 runs per side. Not measured: rates above 1000 writes/s, more than one node, and the crash window itself.
+
+**Not done.** A transactional `pg_notify` with a listener on every node would keep "committed implies notified" with one statement instead of about five. It needs a listener, de-duplication against the direct broadcast and a decision on cross-node delivery, and was not measured.
+
+## 16. Scheduler busy-wait flags: no gain (2026-11-07)
+
+Hypothesis: in a 1 vCPU cgroup, scheduler threads that spin before sleeping consume quota that requests could use. Test: the same image with and without `ERL_AFLAGS="+sbwt none +sbwtdcpu none +sbwtdio none"` (`bench/fair/abba.sh`, A B B A, 4 runs per side, 1000 writes/s, 1000 users × 2 devices, 20 s, 1 vCPU / 1 GiB).
+
+| | Default | No busy-wait |
+| --- | --- | --- |
+| App CPU seconds, median (range) | 24.2 (23.0–25.9) | 24.4 (23.3–25.2) |
+| Completed writes of 20 000, median (range) | 19 952 (16 636–19 974) | 19 817 (19 690–19 960) |
+| Propagation P95 ms, median (range) | 8.1 (4.9–131) | 10.3 (6.2–38) |
+| Throttled periods, median | 1 | 3 |
+
+All ranges overlap and the medians do not favor the flags, so nothing is changed. One default run (16 636 writes, P95 131 ms) is an outlier of the kind that PERFORMANCE.md warns about. The flags may still matter at lower CPU quotas, or with more than one scheduler; that was not tested.

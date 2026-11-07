@@ -33,10 +33,23 @@ defmodule Fyrlet.AfterCommit do
     :ok
   end
 
+  @doc """
+  Broadcasts a job that was not persisted once the managed transaction commits, with the
+  committed change when there is one. Only valid inside `Fyrlet.Transaction.run/1`; a rollback
+  discards it.
+  """
+  def broadcast_later({%Oban.Job{} = job, change}) do
+    Process.put(@jobs, Map.put(Process.get(@jobs, %{}), {:transient, job.id}, {job, change}))
+    :ok
+  end
+
   def flush do
-    for {_key, job} <- Process.get(@jobs, %{}) do
+    for {_key, pending} <- Process.get(@jobs, %{}) do
       try do
-        InvalidationWorker.broadcast(job)
+        case pending do
+          {%Oban.Job{} = job, change} -> InvalidationWorker.broadcast(job, change)
+          %Oban.Job{} = job -> InvalidationWorker.broadcast(job)
+        end
       rescue
         _error -> Logger.warning("Invalidation broadcast failed; the durable job will retry")
       end
