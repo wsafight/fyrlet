@@ -11,6 +11,7 @@ defmodule Fyrlet.RuntimeConfig do
   Supported variables: `DATABASE_URL`, `POOL_SIZE`, `PORT`, `PHX_SERVER`,
   `CORS_ORIGINS`, `SECRET_KEY_BASE` and `ALLOWED_ORIGINS` (both required in `:prod`),
   `FYRLET_OBSERVER_HIBERNATE_AFTER_MS` and
+  `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` (the node-wide channel ceiling),
   `FYRLET_IDEMPOTENCY_TTL_SECONDS`, `FYRLET_CLUSTER_NODES` (comma-separated name@host peers),
   and the per-project defaults `FYRLET_PROJECT_READS_PER_SECOND`, `FYRLET_PROJECT_WRITES_PER_SECOND`
   and `FYRLET_PROJECT_MAX_SUBSCRIPTIONS` (see `Fyrlet.Quota`), `FYRLET_INGEST_RETENTION_SECONDS`
@@ -36,6 +37,8 @@ defmodule Fyrlet.RuntimeConfig do
     compact(
       observer_hibernate_after: hibernate(get_env),
       idempotency_ttl: integer(get_env, "FYRLET_IDEMPOTENCY_TTL_SECONDS", 1),
+      max_subscriptions_per_node:
+        integer(get_env, "FYRLET_MAX_SUBSCRIPTIONS_PER_NODE", 1, 1_000_000),
       cluster_nodes: cluster_nodes(get_env.("FYRLET_CLUSTER_NODES")),
       quotas: quotas(get_env),
       retention: retention(get_env),

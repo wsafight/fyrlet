@@ -40,6 +40,26 @@ defmodule Fyrlet.RuntimeConfigTest do
            ] == 500
   end
 
+  test "the node subscription ceiling is explicit and bounded" do
+    assert RuntimeConfig.settings(
+             :prod,
+             env(%{
+               "DATABASE_URL" => "ecto://test",
+               "SECRET_KEY_BASE" => "test",
+               "ALLOWED_ORIGINS" => "//test",
+               "FYRLET_MAX_SUBSCRIPTIONS_PER_NODE" => "50000"
+             })
+           )[:max_subscriptions_per_node] == 50_000
+
+    refute Keyword.has_key?(RuntimeConfig.settings(:test, env(%{})), :max_subscriptions_per_node)
+
+    for value <- ["0", "-1", "1.5", "1000001", "many"] do
+      assert_raise ArgumentError, ~r/FYRLET_MAX_SUBSCRIPTIONS_PER_NODE/, fn ->
+        RuntimeConfig.settings(:test, env(%{"FYRLET_MAX_SUBSCRIPTIONS_PER_NODE" => value}))
+      end
+    end
+  end
+
   test "production binds publicly and requires the database, secret and origins" do
     complete = %{
       "DATABASE_URL" => "ecto://u:p@db/x",

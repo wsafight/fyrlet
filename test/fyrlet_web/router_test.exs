@@ -110,7 +110,7 @@ defmodule FyrletWeb.RouterTest do
     conn =
       api(alice, project)
       |> put_req_header("idempotency-key", Ecto.UUID.generate())
-      |> post("/api/v1/operations/inbox.add", %{})
+      |> post("/api/v1/operations/records.add", %{})
 
     assert json_response(conn, 422)["error"]["code"] == "VALIDATION_FAILED"
   end

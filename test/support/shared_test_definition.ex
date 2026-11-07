@@ -117,4 +117,7 @@ defmodule Fyrlet.SharedTestDefinition do
 
   @impl true
   def policy_version(_name), do: Application.get_env(:fyrlet, :room_policy_version, "1")
+
+  @impl true
+  def definition_version(_name), do: Application.get_env(:fyrlet, :room_definition_version, "1")
 end

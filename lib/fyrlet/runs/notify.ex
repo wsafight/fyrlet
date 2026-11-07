@@ -3,9 +3,7 @@ defmodule Fyrlet.Runs.Notify do
   Tells subscribers a run changed: a durable invalidation job is inserted in the same
   transaction as the change, and broadcast immediately after it commits.
   """
-  alias Fyrlet.InvalidationWorker
-  require Logger
-  @key :fyrlet_run_notify
+  alias Fyrlet.AfterCommit
 
   def scopes(project_id, subject_id, run_id) do
     [
@@ -14,52 +12,20 @@ defmodule Fyrlet.Runs.Notify do
     ]
   end
 
-  @events :fyrlet_run_events
-
-  def reset do
-    Process.put(@events, [])
-    Process.put(@key, %{})
-  end
+  defdelegate reset(), to: AfterCommit
 
   @doc "Queues a telemetry event; it is emitted only if the transaction commits."
-  def emit(event, measurements, metadata),
-    do: Process.put(@events, [{event, measurements, metadata} | Process.get(@events, [])])
+  defdelegate emit(event, measurements, metadata), to: AfterCommit
 
   @doc "Call inside the transaction that changes the run. One job per run per transaction."
   def mark(run) do
-    pending = Process.get(@key, %{})
-
-    if Map.has_key?(pending, run.id) do
-      :ok
-    else
-      job =
-        %{
-          "scopes" => scopes(run.project_id, run.subject_id, run.id),
-          "project_id" => run.project_id
-        }
-        |> InvalidationWorker.new()
-        |> Oban.insert!()
-
-      Process.put(@key, Map.put(pending, run.id, job))
-      :ok
-    end
+    AfterCommit.invalidate(
+      {:run, run.id},
+      run.project_id,
+      scopes(run.project_id, run.subject_id, run.id)
+    )
   end
 
   @doc "Call after the transaction committed."
-  def flush do
-    for {_id, job} <- Process.get(@key, %{}) do
-      try do
-        InvalidationWorker.broadcast(job)
-      rescue
-        _error -> Logger.warning("Run notification failed; the durable job will retry")
-      end
-    end
-
-    for {event, measurements, metadata} <- Enum.reverse(Process.get(@events, [])),
-        do: :telemetry.execute(event, measurements, metadata)
-
-    Process.delete(@key)
-    Process.delete(@events)
-    :ok
-  end
+  defdelegate flush(), to: AfterCommit
 end

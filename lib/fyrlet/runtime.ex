@@ -3,6 +3,75 @@ defmodule Fyrlet.Runtime do
   require Logger
   alias Fyrlet.{Auth, CommittedChange, Error, Idempotency, Registry, Repo, Schema}
   alias Fyrlet.Subscriptions.View
+  alias Fyrlet.Subscriptions.Limits
+
+  def call_with_outcome(actor, name, input, key, options \\ []) do
+    with {:ok, _module, specification} <- Registry.fetch("operations", name),
+         {:ok, data} <- call(actor, name, input, key, options) do
+      {:ok, %{"outcome" => operation_outcome(specification["kind"]), "data" => data}}
+    end
+  end
+
+  def recover(actor, name, input, key, options \\ []) do
+    safely(fn ->
+      with {:ok, module, specification} <- Registry.fetch("operations", name),
+           :ok <- anonymous_operation(actor, specification),
+           :ok <- require_capability(specification, options),
+           :ok <- recoverable(specification),
+           :ok <- validate_key(key),
+           :ok <- Fyrlet.Quota.check(actor.project_id, :read),
+           {:ok, normalized} <- validate_input(specification, input),
+           {:ok, current_actor} <- Auth.revalidate(actor),
+           :ok <- module.authorize(name, current_actor, normalized) do
+        cached =
+          Repo.one(
+            from(result in Idempotency,
+              where:
+                result.project_id == ^actor.project_id and result.subject_id == ^actor.subject_id and
+                  result.operation == ^name and result.key == ^key
+            )
+          )
+
+        with {:ok, receipt} <- recovered(cached, normalized, specification),
+             {:ok, _actor} <- Auth.revalidate(current_actor),
+             do: {:ok, receipt}
+      end
+    end)
+  end
+
+  defp recoverable(%{"kind" => kind}) when kind in ["write", "run"], do: :ok
+
+  defp recoverable(_specification),
+    do:
+      {:error,
+       Error.new("UNSUPPORTED_CAPABILITY", "Only write and run outcomes can be recovered")}
+
+  defp recovered(nil, _input, _specification), do: {:ok, %{"outcome" => "unknown", "data" => nil}}
+
+  defp recovered(cached, input, specification) do
+    cond do
+      DateTime.compare(cached.expires_at, Auth.now()) != :gt ->
+        recovered(nil, input, specification)
+
+      cached.input_hash != input_hash(input) ->
+        {:error, Error.new("CONFLICT", "The idempotency key was used with different input")}
+
+      true ->
+        {:ok,
+         %{"outcome" => operation_outcome(specification["kind"]), "data" => cached.result["data"]}}
+    end
+  end
+
+  defp operation_outcome("read"), do: "completed"
+  defp operation_outcome("write"), do: "committed"
+  defp operation_outcome(_run_or_ingest), do: "accepted"
+
+  defp validate_key(key) when is_binary(key) and byte_size(key) in 1..200, do: :ok
+
+  defp validate_key(_key),
+    do:
+      {:error,
+       Error.new("VALIDATION_FAILED", "A write requires an Idempotency-Key of 1 to 200 bytes")}
 
   def call(actor, name, input, idempotency_key \\ nil, options \\ []) do
     started = System.monotonic_time()
@@ -148,11 +217,8 @@ defmodule Fyrlet.Runtime do
              {:ok, snapshot} <-
                subscription_view(current_actor, subscription, previous, change),
              {:ok, _actor} <- Auth.revalidate(current_actor) do
-          if snapshot.bytes <= Application.fetch_env!(:fyrlet, :max_snapshot_bytes) do
-            {:ok, snapshot}
-          else
-            {:error, Error.new("LIMIT_EXCEEDED", "The snapshot exceeds the response size limit")}
-          end
+          with :ok <- Limits.check_snapshot(snapshot.bytes, subscription.specification),
+               do: {:ok, snapshot}
         end
 
       :telemetry.execute(
@@ -180,11 +246,8 @@ defmodule Fyrlet.Runtime do
             with {:ok, checked} <- validate_output(subscription.specification["output"], data) do
               view = View.reset(previous, checked, view_context)
 
-              if view.bytes <= Application.fetch_env!(:fyrlet, :max_snapshot_bytes),
-                do: {:ok, view},
-                else:
-                  {:error,
-                   Error.new("LIMIT_EXCEEDED", "The snapshot exceeds the response size limit")}
+              with :ok <- Limits.check_snapshot(view.bytes, subscription.specification),
+                   do: {:ok, view}
             end
 
           {:error, %Error{} = error} ->
@@ -202,10 +265,7 @@ defmodule Fyrlet.Runtime do
   end
 
   defp write(actor, module, name, input, specification, key) do
-    if not is_binary(key) or byte_size(key) not in 1..200 do
-      {:error,
-       Error.new("VALIDATION_FAILED", "A write requires an Idempotency-Key of 1 to 200 bytes")}
-    else
+    with :ok <- validate_key(key) do
       nested = Repo.in_transaction?()
 
       result =
@@ -214,7 +274,7 @@ defmodule Fyrlet.Runtime do
           unwrap_authorization!(module.authorize(name, current_actor, input))
           lock_key = Enum.join([actor.project_id, actor.subject_id, name, key], ":")
           Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock_key])
-          input_hash = Auth.hash(IO.iodata_to_binary(canonical(input)))
+          input_hash = input_hash(input)
 
           query =
             from(result in Idempotency,
@@ -432,6 +492,7 @@ defmodule Fyrlet.Runtime do
     do: ["[", Enum.intersperse(Enum.map(value, &canonical/1), ","), "]"]
 
   defp canonical(value), do: Jason.encode!(value)
+  defp input_hash(input), do: Auth.hash(IO.iodata_to_binary(canonical(input)))
   defp unwrap!({:ok, value}), do: value
   defp unwrap!({:error, error}), do: Repo.rollback(error)
   defp unwrap_authorization!(:ok), do: :ok

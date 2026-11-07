@@ -83,30 +83,33 @@ defmodule Fyrlet.MetricsTest do
     alice: alice
   } do
     enable()
-    series = ~s(fyrlet_operations_total{name="inbox.add",result="ok"})
+    series = ~s(fyrlet_operations_total{name="records.add",result="ok"})
     before = sample(scrape().resp_body, series)
 
     for n <- 1..3,
         do:
           {:ok, _} =
-            Runtime.call(alice.actor, "inbox.add", %{"text" => "m#{n}"}, Ecto.UUID.generate())
+            Runtime.call(alice.actor, "records.add", %{"text" => "m#{n}"}, Ecto.UUID.generate())
 
     body = scrape().resp_body
     assert sample(body, series) == before + 3
     assert body =~ "# TYPE fyrlet_operation_duration_seconds histogram"
 
-    count = sample(body, ~s(fyrlet_operation_duration_seconds_count{name="inbox.add"}))
+    count = sample(body, ~s(fyrlet_operation_duration_seconds_count{name="records.add"}))
 
-    assert sample(body, ~s(fyrlet_operation_duration_seconds_bucket{le="+Inf",name="inbox.add"})) ==
+    assert sample(
+             body,
+             ~s(fyrlet_operation_duration_seconds_bucket{le="+Inf",name="records.add"})
+           ) ==
              count
 
-    assert sample(body, ~s(fyrlet_operation_duration_seconds_sum{name="inbox.add"})) > 0
+    assert sample(body, ~s(fyrlet_operation_duration_seconds_sum{name="records.add"})) > 0
 
     # Buckets are cumulative: never decreasing as the bound grows.
     counts =
       for line <- String.split(body, "\n"),
           line =~ ~s(fyrlet_operation_duration_seconds_bucket{le=),
-          line =~ ~s(name="inbox.add"),
+          line =~ ~s(name="records.add"),
           do: line |> String.split(" ") |> List.last() |> String.to_integer()
 
     assert counts == Enum.sort(counts) and length(counts) == 13
@@ -132,7 +135,7 @@ defmodule Fyrlet.MetricsTest do
     before = sample(scrape().resp_body, ~s(fyrlet_quota_rejected_total{class="write"}))
 
     for n <- 1..6,
-        do: Runtime.call(alice.actor, "inbox.add", %{"text" => "q#{n}"}, Ecto.UUID.generate())
+        do: Runtime.call(alice.actor, "records.add", %{"text" => "q#{n}"}, Ecto.UUID.generate())
 
     body = scrape().resp_body
     assert sample(body, ~s(fyrlet_quota_rejected_total{class="write"})) > before

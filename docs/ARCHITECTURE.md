@@ -25,6 +25,22 @@ Ordinary reads, writes and subscriptions do not need to create a Run. Every opti
 
 The protocol is defined by the core, which is not the same as the implementation having to live in the core. Run/Effect can be organized independently and loaded on demand, but once enabled they must obey the same state machine, authorization and compatibility rules.
 
+## Code and test boundaries
+
+`lib/fyrlet` contains framework logic, `lib/fyrlet_web` contains HTTP and Channel entry points, `packages` contains extensions, `examples` contains domain applications, and `sdks` contains clients. Internal modules are separated by responsibility. Before launch, interfaces may be replaced with coordinated changes to the server, SDK and examples.
+
+`Fyrlet.Definition` remains the application behaviour and documents optional callbacks by feature. `Fyrlet.Definition.Validation` owns startup contract and feature validation; `Fyrlet.Registry` owns indexing, lookup and export. Shared subscriptions and Runs both read definition versions through `Fyrlet.Definition.current_version/2`, so shared subscriptions do not depend on the Run implementation resolver.
+
+`Fyrlet.Transaction` and `Fyrlet.AfterCommit` own the common transaction boundary. Invalidation jobs are persisted within the transaction; immediate broadcasts and telemetry are released after the outermost managed transaction commits. Rollbacks clear pending work. `Fyrlet.Runs.Notify` builds Run notification scopes and delegates to the core, so common transaction handling does not depend on Runs.
+
+In the TypeScript SDK, `client.ts` owns identity, connections and channel lifecycles; `requests.ts` owns request deadlines, cancellation and one authentication refresh; `subscription.ts` owns snapshot, delta, append, Presence and optimistic state. Subscription state handling returns requests for ACKs, refreshes or reconnection, and the client performs the network operations.
+
+`FyrletWeb.ChannelSupport` owns shared Channel mechanics: identifier validation, error envelopes, anonymous capability checks, quota claims, timer scheduling and cleanup, and snapshot serialization. Each Channel keeps its authorization order, event handling and backpressure policy. The SDK shares the acknowledged push path for refresh and Presence updates; Presence extends its registered subscription handle so ownership checks and optimistic updates use the same handle.
+
+`Fyrlet.Subscriptions.Observation` maintains the subscription state machine. A private subscription embeds it in its Channel process; explicitly shared subscriptions host the same state machine in an Observer process. Private channels keep the normalized View for incremental updates and discard serialized snapshot bodies after delivery. Shared Observers cache encoded bodies for reuse across members. Each view retains authorization checks, revision, reconciliation and notification deduplication; each Channel retains its generation, sequence and ACK deadline.
+
+The root `mix test` uses dedicated definitions, records and migrations under `test/support` without compiling example sources. Inbox archive, pagination and incremental window tests run under `examples/inbox/test` and are maintained separately. `scripts/test_all.sh` runs the framework, example and extension suites in sequence. Run SDK checks separately with `npm --prefix sdks/typescript test` and `npm --prefix sdks/typescript run typecheck`.
+
 ## Authentication boundaries
 
 "Authentication" is not a module that can be placed as a whole. Putting it entirely in the core or entirely in capability packages would both be wrong, so it is split into four parts:

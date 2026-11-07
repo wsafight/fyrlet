@@ -20,7 +20,7 @@ defmodule Fyrlet.Bench.RevalidateCallers do
       socket(FyrletWeb.UserSocket, "sessions:" <> alice.actor.session_id, %{actor: alice.actor})
       |> subscribe_and_join("subscription:" <> Ecto.UUID.generate(), %{
         "protocol_version" => 1,
-        "name" => "inbox.recent",
+        "name" => "records.recent",
         "params" => %{"limit" => 50}
       })
 

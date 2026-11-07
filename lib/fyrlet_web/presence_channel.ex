@@ -20,7 +20,7 @@ defmodule FyrletWeb.PresenceChannel do
     hibernate_after: Application.compile_env(:fyrlet, :channel_hibernate_after, 15_000)
 
   alias Fyrlet.{Auth, Capabilities, Error, Presence, Registry, Schema}
-  alias Fyrlet.Subscriptions.Tracker
+  import FyrletWeb.ChannelSupport
 
   @no_meta %{"type" => "object", "properties" => %{}, "additionalProperties" => false}
 
@@ -33,7 +33,7 @@ defmodule FyrletWeb.PresenceChannel do
       when is_binary(name) do
     actor = socket.assigns.actor
 
-    with {:ok, _uuid} <- Ecto.UUID.cast(identifier),
+    with {:ok, _uuid} <- identifier(identifier, "presence"),
          {:ok, capabilities} <- Capabilities.negotiate(options["capabilities"]),
          :ok <- Capabilities.require(capabilities, "presence"),
          :ok <- not_anonymous(actor),
@@ -43,15 +43,13 @@ defmodule FyrletWeb.PresenceChannel do
          {:ok, current} <- Auth.revalidate(actor),
          :ok <- module.authorize(name, current, normalized),
          topic = room_topic(current, module.scope(name, current, normalized)),
-         :ok <- Tracker.claim(socket.transport_pid, self(), nil, current.project_id),
+         :ok <- claim(socket, current),
          :ok <- Phoenix.PubSub.subscribe(Fyrlet.PubSub, topic),
          :ok <- room_capacity(topic, current.subject_id),
          joined_at = DateTime.to_iso8601(Auth.now()),
          {:ok, _ref} <-
            Presence.track(self(), topic, current.subject_id, meta(data, joined_at)),
          {:ok, _actor} <- Auth.revalidate(current) do
-      remaining = max(DateTime.diff(current.expires_at, Auth.now(), :millisecond), 1)
-
       socket =
         assign(socket,
           actor: current,
@@ -62,8 +60,8 @@ defmodule FyrletWeb.PresenceChannel do
           topic_key: topic,
           joined_at: joined_at,
           update_window: {0, 0},
-          expiry_timer: Process.send_after(self(), :expired, remaining),
-          recheck_timer: schedule_recheck()
+          expiry_timer: expiry_timer(current),
+          recheck_timer: reconcile_timer(:recheck)
         )
 
       {:ok,
@@ -75,24 +73,11 @@ defmodule FyrletWeb.PresenceChannel do
          "state" => wire(Presence.list(topic))
        }, socket}
     else
-      :error ->
-        {:error,
-         %{"error" => Error.to_map(Error.new("VALIDATION_FAILED", "Invalid presence identifier"))}}
-
-      {:error, error} ->
-        {:error, %{"error" => Error.to_map(error)}}
+      {:error, error} -> reject(error)
     end
   end
 
-  def join(_topic, _parameters, _socket) do
-    {:error,
-     %{
-       "error" =>
-         Error.to_map(
-           Error.new("UNSUPPORTED_VERSION", "Expected protocol_version 1, name and params")
-         )
-     }}
-  end
+  def join(_topic, _parameters, _socket), do: unsupported()
 
   @impl true
   def handle_in("update", %{"meta" => raw}, socket) do
@@ -108,16 +93,15 @@ defmodule FyrletWeb.PresenceChannel do
       {:reply, {:ok, %{}}, assign(socket, update_window: bump(socket.assigns.update_window))}
     else
       {:error, %Error{} = error} ->
-        {:reply, {:error, %{"error" => Error.to_map(error)}},
-         assign(socket, update_window: bump(socket.assigns.update_window))}
+        {:reply, reject(error), assign(socket, update_window: bump(socket.assigns.update_window))}
 
       {:error, _presence} ->
-        {:reply, {:error, %{"error" => Error.to_map(Error.not_found())}}, socket}
+        {:reply, reject(Error.not_found()), socket}
     end
   end
 
   def handle_in(_event, _parameters, socket),
-    do: {:reply, {:error, %{"error" => Error.to_map(Error.not_found())}}, socket}
+    do: {:reply, reject(Error.not_found()), socket}
 
   @impl true
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: diff}, socket) do
@@ -133,7 +117,7 @@ defmodule FyrletWeb.PresenceChannel do
     with {:ok, actor} <- Auth.revalidate(assigns.actor),
          :ok <-
            assigns.module.authorize(assigns.presence_name, actor, assigns.presence_parameters) do
-      {:noreply, assign(socket, recheck_timer: schedule_recheck())}
+      {:noreply, assign(socket, recheck_timer: reconcile_timer(:recheck))}
     else
       {:error, error} -> stop(socket, error)
     end
@@ -142,14 +126,7 @@ defmodule FyrletWeb.PresenceChannel do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
-  def terminate(_reason, socket) do
-    for key <- [:expiry_timer, :recheck_timer],
-        reference = socket.assigns[key],
-        is_reference(reference),
-        do: Process.cancel_timer(reference)
-
-    :ok
-  end
+  def terminate(_reason, socket), do: cancel_timers(socket, [:expiry_timer, :recheck_timer])
 
   # ---- helpers --------------------------------------------------------------------------
 
@@ -206,18 +183,5 @@ defmodule FyrletWeb.PresenceChannel do
   defp bump({second, count}) do
     now = System.monotonic_time(:second)
     if second == now, do: {now, count + 1}, else: {now, 1}
-  end
-
-  defp schedule_recheck,
-    do:
-      Process.send_after(
-        self(),
-        :recheck,
-        Application.fetch_env!(:fyrlet, :reconciliation_interval)
-      )
-
-  defp stop(socket, error) do
-    push(socket, "status", %{"state" => "closed", "error" => Error.to_map(error)})
-    {:stop, :normal, socket}
   end
 end

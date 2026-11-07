@@ -6,7 +6,7 @@ defmodule Fyrlet.Transaction do
   only after that transaction commits. Use this as the outer boundary instead of wrapping
   it in a separate `Repo.transaction/1`.
   """
-  alias Fyrlet.{Repo, Runs.Notify}
+  alias Fyrlet.{AfterCommit, Repo}
   @owner :fyrlet_transaction_owner
 
   def run(callback) when is_function(callback, 0) do
@@ -14,12 +14,12 @@ defmodule Fyrlet.Transaction do
       callback.()
     else
       Process.put(@owner, true)
-      Notify.reset()
+      AfterCommit.reset()
 
       try do
         case Repo.transaction(callback) do
           {:ok, result} ->
-            Notify.flush()
+            AfterCommit.flush()
             result
 
           {:error, reason} ->
@@ -27,7 +27,7 @@ defmodule Fyrlet.Transaction do
         end
       after
         Process.delete(@owner)
-        Notify.reset()
+        AfterCommit.reset()
       end
     end
   end

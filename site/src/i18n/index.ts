@@ -6,7 +6,7 @@ export const gh = `https://github.com/${repo}`;
 export const href = (lang: Lang, path = "") => `${base}${lang === "zh" ? "/zh" : ""}${path}` || "/";
 
 export const groups: { id: string; en: string; zh: string; slugs: string[] }[] = [
-  { id: "start", en: "Start here", zh: "入门", slugs: ["product", "tutorial", "install", "status"] },
+  { id: "start", en: "Start here", zh: "入门", slugs: ["product", "roadmap", "tutorial", "install", "status"] },
   { id: "build", en: "Build", zh: "开发", slugs: ["server", "sdk", "sdk-overview", "protocol", "auth", "database"] },
   { id: "examples", en: "Examples", zh: "示例应用", slugs: ["examples", "example-inbox", "example-notify", "example-flow", "example-agent", "example-chat"] },
   { id: "caps", en: "Capabilities", zh: "能力", slugs: ["runs", "effects", "streams", "sharing", "plugins"] },
@@ -15,6 +15,7 @@ export const groups: { id: string; en: string; zh: string; slugs: string[] }[] =
 
 export const desc: Record<string, { en: string; zh: string }> = {
   product: { en: "What Fyrlet is, who it is for, and the product model.", zh: "Fyrlet 是什么、适合谁、产品模型。" },
+  roadmap: { en: "Planned milestones, priorities, dependencies and completion criteria.", zh: "后续阶段、优先级、依赖与完成条件。" },
   install: { en: "Install the server and SDK, and the public interface.", zh: "安装服务端与 SDK，以及对外接口。" },
   tutorial: { en: "Connect a business definition, session endpoint and browser client.", zh: "串起业务定义、会话接口与浏览器客户端。" },
   sdk: { en: "Typed calls, subscriptions, recovery, optimistic writes and presence.", zh: "类型化调用、订阅、恢复、乐观写入与在线状态。" },

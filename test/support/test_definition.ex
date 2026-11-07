@@ -59,7 +59,7 @@ defmodule Fyrlet.TestDefinition do
 
   @impl true
   def execute("test.bad_output", actor, _input) do
-    Fyrlet.Repo.insert!(%InboxExample.Item{
+    Fyrlet.Repo.insert!(%Fyrlet.TestRecord{
       project_id: actor.project_id,
       subject_id: actor.subject_id,
       text: "rolled back",

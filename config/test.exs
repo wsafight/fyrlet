@@ -10,7 +10,7 @@ config :fyrlet, reconciliation_interval: 100
 
 config :fyrlet,
   definitions: [
-    InboxExample.Inbox,
+    Fyrlet.TestRecords,
     Fyrlet.TestDefinition,
     Fyrlet.RunsTestDefinition,
     Fyrlet.IngestTestDefinition,
@@ -18,7 +18,7 @@ config :fyrlet,
     Fyrlet.AppendTestDefinition,
     Fyrlet.PresenceTestDefinition
   ],
-  migration_paths: ["examples/inbox/priv/repo/migrations"]
+  migration_paths: ["test/support/migrations"]
 
 config :logger, level: :warning
 # Many tests rewrite contracts, plugins and definitions at run time.

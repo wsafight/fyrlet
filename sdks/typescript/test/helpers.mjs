@@ -10,8 +10,8 @@ export async function until(check, timeout = 5000) {
   throw new Error("Condition did not become true within the timeout");
 }
 
-export function response(data, status = 200) {
-  return new Response(JSON.stringify(status < 400 ? { request_id: "test-request", data } : { request_id: "test-request", error: data }), {
+export function response(data, status = 200, outcome = "committed") {
+  return new Response(JSON.stringify(status < 400 ? { request_id: "test-request", outcome, data } : { request_id: "test-request", error: data }), {
     status, headers: { "content-type": "application/json" },
   });
 }
@@ -59,7 +59,7 @@ export class TestWebSocket {
     } else if (event === "ack") {
       return;
     } else if (event === "call") {
-      queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: { data: payload } }]));
+      queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: { outcome: "committed", data: payload } }]));
     } else {
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]));
     }

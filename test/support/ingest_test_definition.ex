@@ -1,5 +1,5 @@
 defmodule Fyrlet.IngestTestDefinition do
-  @moduledoc "Ingests `{n, text}` items as inbox rows, so a handler's database writes can be observed."
+  @moduledoc "Ingests `{n, text}` items as test records, so a handler's database writes can be observed."
   @behaviour Fyrlet.Definition
   alias Fyrlet.{Error, Schema}
   alias Fyrlet.Features.Ingest
@@ -35,7 +35,7 @@ defmodule Fyrlet.IngestTestDefinition do
 
   @impl true
   def ingest("events.ingest", actor, %{"n" => n, "text" => text}) do
-    Fyrlet.Repo.insert!(%InboxExample.Item{
+    Fyrlet.Repo.insert!(%Fyrlet.TestRecord{
       project_id: actor.project_id,
       subject_id: actor.subject_id,
       text: text,

@@ -23,6 +23,16 @@ export function asApiError(error: unknown): ApiError {
   return new ApiError({ code: "NETWORK_ERROR", message: "The service could not be reached", retryable: true });
 }
 
+export class OutcomeUnknownError extends ApiError {
+  readonly outcome = "unknown";
+
+  constructor(readonly operation: string, readonly idempotencyKey: string, override readonly cause: unknown) {
+    const error = asApiError(cause);
+    super({ code: error.code, message: "The operation outcome is unknown", details: error.details, retryable: false }, error.status, error.requestId);
+    this.name = "OutcomeUnknownError";
+  }
+}
+
 export function channelError(payload: unknown): ApiError {
   if (payload && typeof payload === "object" && "error" in payload) {
     const error = payload.error;

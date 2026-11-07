@@ -20,17 +20,57 @@ defmodule FyrletWeb.HTTPTest do
     conn =
       authorized(session)
       |> put_req_header("idempotency-key", "http-key")
-      |> post("/api/v1/operations/inbox.add", %{"input" => %{"text" => "from http"}})
+      |> post("/api/v1/operations/records.add", %{"input" => %{"text" => "from http"}})
 
     assert json_response(conn, 200)["data"]["text"] == "from http"
+    assert json_response(conn, 200)["outcome"] == "committed"
     assert get_resp_header(conn, "cache-control") == ["no-store"]
 
     conn =
       authorized(session)
-      |> post("/api/v1/operations/inbox.add", %{"input" => %{"text" => "missing key"}})
+      |> post("/api/v1/operations/records.add", %{"input" => %{"text" => "missing key"}})
 
     assert json_response(conn, 422)["error"]["code"] == "VALIDATION_FAILED"
     conn = build_conn() |> get("/api/v1/contract")
+    assert json_response(conn, 401)["error"]["code"] == "UNAUTHENTICATED"
+  end
+
+  test "HTTP recovery returns a receipt without replaying and respects ownership" do
+    project = project()
+    alice = user(project, "alice")
+    bob = user(project, "bob")
+    session = %{"token" => alice.token, "project_id" => project.project.id}
+    input = %{"input" => %{"text" => "recover"}}
+
+    written =
+      authorized(session)
+      |> put_req_header("idempotency-key", "recover")
+      |> post("/api/v1/operations/records.add", input)
+      |> json_response(200)
+
+    recovered =
+      authorized(session)
+      |> put_req_header("idempotency-key", "recover")
+      |> post("/api/v1/operations/records.add/recover", input)
+      |> json_response(200)
+
+    assert recovered["outcome"] == "committed"
+    assert recovered["data"] == written["data"]
+    assert recovered["request_id"]
+
+    unknown =
+      authorized(%{"token" => bob.token, "project_id" => project.project.id})
+      |> put_req_header("idempotency-key", "recover")
+      |> post("/api/v1/operations/records.add/recover", input)
+      |> json_response(200)
+
+    assert unknown["outcome"] == "unknown"
+    assert unknown["data"] == nil
+    assert Repo.aggregate(TestRecord, :count) == 1
+
+    conn = authorized(session) |> post("/api/v1/operations/records.add/recover", input)
+    assert json_response(conn, 422)["error"]["code"] == "VALIDATION_FAILED"
+    conn = build_conn() |> post("/api/v1/operations/records.add/recover", input)
     assert json_response(conn, 401)["error"]["code"] == "UNAUTHENTICATED"
   end
 

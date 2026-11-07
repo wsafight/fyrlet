@@ -6,7 +6,7 @@ defmodule Fyrlet.DataCase do
       import Ecto.Query
       import Fyrlet.Fixtures
       alias Fyrlet.{Auth, Error, Repo, Runtime}
-      alias InboxExample.Item, as: InboxItem
+      alias Fyrlet.TestRecord
     end
   end
 

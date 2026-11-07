@@ -73,14 +73,14 @@ defmodule Fyrlet.AnonymousTest do
   test "it reads only what the contract marks public", %{anon: anon} do
     assert {:ok, "public:anonymous"} = Fyrlet.Runtime.call(anon, "test.public_read", %{})
 
-    for name <- ["test.echo", "test.public_write", "test.revoke", "inbox.history", "inbox.add"] do
+    for name <- ["test.echo", "test.public_write", "test.revoke", "records.list", "records.add"] do
       assert {:error, %Error{code: "FORBIDDEN"}} = Fyrlet.Runtime.call(anon, name, %{}, key()),
              name
     end
 
     assert {:ok, _} = Fyrlet.Runtime.prepare_subscription(anon, "test.public_feed", %{})
 
-    for name <- ["test.private_feed", "inbox.recent", "fyrlet.runs.recent"] do
+    for name <- ["test.private_feed", "records.recent", "fyrlet.runs.recent"] do
       assert {:error, %Error{code: "FORBIDDEN"}} =
                Fyrlet.Runtime.prepare_subscription(anon, name, %{}),
              name

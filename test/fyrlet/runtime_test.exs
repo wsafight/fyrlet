@@ -11,19 +11,19 @@ defmodule Fyrlet.RuntimeTest do
     alice: alice
   } do
     key = Ecto.UUID.generate()
-    assert {:ok, item} = Runtime.call(alice.actor, "inbox.add", %{"text" => "hello"}, key)
+    assert {:ok, item} = Runtime.call(alice.actor, "records.add", %{"text" => "hello"}, key)
     assert item["version"] == 1
     assert item["content_type"] == "text"
 
     assert {:ok, ^item} =
              Runtime.call(
                alice.actor,
-               "inbox.add",
+               "records.add",
                %{"content_type" => "text", "text" => "hello"},
                key
              )
 
-    assert Repo.aggregate(InboxItem, :count) == 1
+    assert Repo.aggregate(TestRecord, :count) == 1
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 1
 
     assert_enqueued worker: Fyrlet.InvalidationWorker,
@@ -32,14 +32,14 @@ defmodule Fyrlet.RuntimeTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
 
     assert {:error, %Error{code: "CONFLICT"}} =
-             Runtime.call(alice.actor, "inbox.add", %{"text" => "different"}, key)
+             Runtime.call(alice.actor, "records.add", %{"text" => "different"}, key)
   end
 
   test "the prune worker removes only expired idempotency results", %{alice: alice} do
     assert {:ok, _item} =
              Runtime.call(
                alice.actor,
-               "inbox.add",
+               "records.add",
                %{"content_type" => "text", "text" => "keep"},
                "prune-keep"
              )
@@ -47,7 +47,7 @@ defmodule Fyrlet.RuntimeTest do
     assert {:ok, _item} =
              Runtime.call(
                alice.actor,
-               "inbox.add",
+               "records.add",
                %{"content_type" => "text", "text" => "old"},
                "prune-old"
              )
@@ -66,7 +66,7 @@ defmodule Fyrlet.RuntimeTest do
   test "missing keys, schema violations, unknown operations and denied operations have no writes",
        %{alice: alice} do
     assert {:error, %Error{code: "VALIDATION_FAILED"}} =
-             Runtime.call(alice.actor, "inbox.add", %{"text" => "hello"})
+             Runtime.call(alice.actor, "records.add", %{"text" => "hello"})
 
     for input <- [
           %{},
@@ -74,7 +74,7 @@ defmodule Fyrlet.RuntimeTest do
           %{"text" => "hello", "subject_id" => alice.actor.subject_id}
         ] do
       assert {:error, %Error{code: "VALIDATION_FAILED"}} =
-               Runtime.call(alice.actor, "inbox.add", input, "key")
+               Runtime.call(alice.actor, "records.add", input, "key")
     end
 
     assert {:error, %Error{code: "NOT_FOUND"}} = Runtime.call(alice.actor, "unknown.op", %{})
@@ -82,7 +82,7 @@ defmodule Fyrlet.RuntimeTest do
     assert {:error, %Error{code: "FORBIDDEN"}} =
              Runtime.call(alice.actor, "test.denied", %{}, "denied")
 
-    assert Repo.aggregate(InboxItem, :count) == 0
+    assert Repo.aggregate(TestRecord, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
@@ -90,7 +90,7 @@ defmodule Fyrlet.RuntimeTest do
     assert {:error, %Error{code: "INTERNAL_ERROR"}} =
              Runtime.call(alice.actor, "test.bad_output", %{}, "bad")
 
-    assert Repo.aggregate(InboxItem, :count) == 0
+    assert Repo.aggregate(TestRecord, :count) == 0
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
@@ -104,17 +104,17 @@ defmodule Fyrlet.RuntimeTest do
     {:ok, item} = add(alice.actor)
     {:ok, _item} = add(bob.actor, "private bob")
     {:ok, _item} = add(other.actor, "other project")
-    {:ok, result} = Runtime.call(alice.actor, "inbox.history", %{})
+    {:ok, result} = Runtime.call(alice.actor, "records.list", %{})
     assert result["items"] == [item]
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     assert {:ok, [^item]} = Runtime.snapshot(alice.actor, subscription)
-    refute subscription.scope == InboxExample.Inbox.scope("inbox.recent", bob.actor, %{})
+    refute subscription.scope == Fyrlet.TestRecords.scope("records.recent", bob.actor, %{})
     assert project.project.id == alice.actor.project_id
 
     assert {:error, %Error{code: "NOT_FOUND"}} =
              Runtime.call(
                bob.actor,
-               "inbox.update",
+               "records.update",
                %{"id" => item["id"], "text" => "hacked", "expected_version" => 1},
                "foreign"
              )
@@ -122,95 +122,20 @@ defmodule Fyrlet.RuntimeTest do
     assert {:error, %Error{code: "NOT_FOUND"}} =
              Runtime.call(
                other.actor,
-               "inbox.delete",
+               "records.delete",
                %{"id" => item["id"], "expected_version" => 1},
                "foreign"
              )
   end
 
-  test "optimistic updates, archive and delete change the bounded list", %{alice: alice} do
-    {:ok, item} = add(alice.actor)
-
-    {:ok, updated} =
-      Runtime.call(
-        alice.actor,
-        "inbox.update",
-        %{"id" => item["id"], "expected_version" => 1, "text" => "edited"},
-        "update"
-      )
-
-    assert updated["version"] == 2
-
-    assert {:error, %Error{code: "CONFLICT"}} =
-             Runtime.call(
-               alice.actor,
-               "inbox.archive",
-               %{"id" => item["id"], "expected_version" => 1},
-               "stale"
-             )
-
-    assert {:ok, %{"archived" => true, "version" => 3}} =
-             Runtime.call(
-               alice.actor,
-               "inbox.archive",
-               %{"id" => item["id"], "expected_version" => 2},
-               "archive"
-             )
-
-    assert {:ok, %{"items" => []}} = Runtime.call(alice.actor, "inbox.history", %{})
-
-    assert {:ok, %{"items" => [_item]}} =
-             Runtime.call(alice.actor, "inbox.history", %{"include_archived" => true})
-
-    assert {:ok, %{"deleted" => true}} =
-             Runtime.call(
-               alice.actor,
-               "inbox.delete",
-               %{"id" => item["id"], "expected_version" => 3},
-               "delete"
-             )
-
-    assert Repo.aggregate(InboxItem, :count) == 0
-  end
-
-  test "keyset history has no duplicate records even with identical timestamps", %{alice: alice} do
-    for index <- 1..5, do: add(alice.actor, "item #{index}")
-    time = Auth.now()
-    Repo.update_all(InboxItem, set: [inserted_at: time])
-    {:ok, first} = Runtime.call(alice.actor, "inbox.history", %{"limit" => 2})
-
-    {:ok, second} =
-      Runtime.call(alice.actor, "inbox.history", %{"limit" => 2, "cursor" => first["next_cursor"]})
-
-    {:ok, third} =
-      Runtime.call(alice.actor, "inbox.history", %{
-        "limit" => 2,
-        "cursor" => second["next_cursor"]
-      })
-
-    identifiers = Enum.map(first["items"] ++ second["items"] ++ third["items"], & &1["id"])
-    assert length(Enum.uniq(identifiers)) == 5
-    assert third["next_cursor"] == nil
-
-    assert {:error, %Error{code: "VALIDATION_FAILED"}} =
-             Runtime.call(alice.actor, "inbox.history", %{"cursor" => "invalid"})
-
-    malformed =
-      Jason.encode!(%{"time" => 123, "id" => Ecto.UUID.generate()})
-      |> Base.url_encode64(padding: false)
-
-    assert {:error, %Error{code: "VALIDATION_FAILED"}} =
-             Runtime.call(alice.actor, "inbox.history", %{"cursor" => malformed})
-  end
-
   test "expired idempotency windows may execute again", %{alice: alice} do
-    {:ok, first} = Runtime.call(alice.actor, "inbox.add", %{"text" => "again"}, "expired")
+    {:ok, first} = Runtime.call(alice.actor, "records.add", %{"text" => "again"}, "expired")
 
     Repo.update_all(Fyrlet.Idempotency,
       set: [expires_at: DateTime.add(Auth.now(), -1, :second)]
     )
 
-    {:ok, second} = Runtime.call(alice.actor, "inbox.add", %{"text" => "again"}, "expired")
+    {:ok, second} = Runtime.call(alice.actor, "records.add", %{"text" => "again"}, "expired")
     refute first["id"] == second["id"]
   end
 
@@ -220,26 +145,26 @@ defmodule Fyrlet.RuntimeTest do
   } do
     key = "shared-key"
 
-    assert {:ok, alice_item} = Runtime.call(alice.actor, "inbox.add", %{"text" => "a"}, key)
+    assert {:ok, alice_item} = Runtime.call(alice.actor, "records.add", %{"text" => "a"}, key)
 
     assert {:ok, bob_item} =
-             Runtime.call(bob.actor, "inbox.add", %{"text" => "b"}, key)
+             Runtime.call(bob.actor, "records.add", %{"text" => "b"}, key)
 
     assert {:ok, other_item} =
-             Runtime.call(alice.actor, "inbox.add", %{"text" => "a"}, "another-key")
+             Runtime.call(alice.actor, "records.add", %{"text" => "a"}, "another-key")
 
     assert length(Enum.uniq([alice_item["id"], bob_item["id"], other_item["id"]])) == 3
-    assert Repo.aggregate(InboxItem, :count) == 3
+    assert Repo.aggregate(TestRecord, :count) == 3
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 3
   end
 
   test "write idempotency keys must be short non-empty strings", %{alice: alice} do
     for key <- [nil, "", String.duplicate("k", 201), :atom, 123] do
       assert {:error, %Error{code: "VALIDATION_FAILED"}} =
-               Runtime.call(alice.actor, "inbox.add", %{"text" => "x"}, key)
+               Runtime.call(alice.actor, "records.add", %{"text" => "x"}, key)
     end
 
-    assert Repo.aggregate(InboxItem, :count) == 0
+    assert Repo.aggregate(TestRecord, :count) == 0
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
@@ -248,19 +173,19 @@ defmodule Fyrlet.RuntimeTest do
     alice: alice
   } do
     assert {:ok, subscription} =
-             Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+             Runtime.prepare_subscription(alice.actor, "records.recent", %{})
 
-    assert subscription.name == "inbox.recent"
-    assert subscription.parameters == %{"limit" => 50, "include_archived" => false}
-    assert subscription.module == InboxExample.Inbox
-    assert subscription.scope == InboxExample.Inbox.scope("inbox.recent", alice.actor, %{})
+    assert subscription.name == "records.recent"
+    assert subscription.parameters == %{"limit" => 50}
+    assert subscription.module == Fyrlet.TestRecords
+    assert subscription.scope == Fyrlet.TestRecords.scope("records.recent", alice.actor, %{})
 
     assert {:error, %Error{code: "NOT_FOUND"}} =
-             Runtime.prepare_subscription(alice.actor, "inbox.unknown", %{})
+             Runtime.prepare_subscription(alice.actor, "records.unknown", %{})
 
     for parameters <- [%{"limit" => 0}, %{"limit" => 101}, %{"unexpected" => 1}] do
       assert {:error, %Error{code: "VALIDATION_FAILED"}} =
-               Runtime.prepare_subscription(alice.actor, "inbox.recent", parameters)
+               Runtime.prepare_subscription(alice.actor, "records.recent", parameters)
     end
 
     assert {:error, %Error{code: "FORBIDDEN"}} =
@@ -269,7 +194,7 @@ defmodule Fyrlet.RuntimeTest do
 
   test "snapshots revalidate the session before returning data", %{alice: alice} do
     {:ok, item} = add(alice.actor)
-    assert {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    assert {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     assert {:ok, [^item]} = Runtime.snapshot(alice.actor, subscription)
 
     {:ok, _revoked} = Auth.revoke_own_session(alice.actor)
@@ -293,7 +218,7 @@ defmodule Fyrlet.RuntimeTest do
     assert {:error, %Error{code: "INTERNAL_ERROR"}} =
              Runtime.call(alice.actor, "test.raise", %{}, "raising")
 
-    assert Repo.aggregate(InboxItem, :count) == 0
+    assert Repo.aggregate(TestRecord, :count) == 0
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
   end

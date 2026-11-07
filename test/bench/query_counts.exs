@@ -69,7 +69,7 @@ defmodule Fyrlet.Bench.QueryCounts do
 
     join_params = %{
       "protocol_version" => 1,
-      "name" => "inbox.recent",
+      "name" => "records.recent",
       "params" => %{"limit" => 50}
     }
 

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
-import { createClient } from "../dist/index.js";
+import { createClient, OutcomeUnknownError } from "../dist/index.js";
 import { createSessionService } from "../dist/server.js";
 
 const path = process.env.FYRLET_PROJECT_FILE ?? new URL("../../../.local/project.json", import.meta.url);
@@ -16,10 +16,27 @@ const client = createClient({ endpoint, projectId: project.project_id, getToken:
 } });
 
 const text = process.argv.slice(2).join(" ");
+
+async function save(text) {
+  const mutation = client.mutate("inbox.add", { text });
+  try {
+    return await mutation.result;
+  } catch (error) {
+    if (error instanceof OutcomeUnknownError) {
+      console.error(`结果未知，幂等键：${mutation.idempotencyKey}`);
+      const recovered = await mutation.recover();
+      if (recovered.status === "committed") return recovered.data;
+    }
+    throw error;
+  }
+}
+
 if (text) {
   try {
-    const item = await client.call("inbox.add", { text });
-    console.log(JSON.stringify(item, null, 2));
+    const result = process.env.FYRLET_RECOVER_KEY
+      ? await client.recover("inbox.add", { text }, { idempotencyKey: process.env.FYRLET_RECOVER_KEY })
+      : await save(text);
+    console.log(JSON.stringify(result, null, 2));
   } finally { client.close(); }
 } else {
   const subscription = client.subscribe("inbox.recent", { limit: 20 });
@@ -37,7 +54,7 @@ if (text) {
     for await (const line of input) {
       if (line === "/quit") break;
       if (line.trim()) {
-        try { await client.call("inbox.add", { text: line }); }
+        try { await save(line); }
         catch (error) { console.error(`${error.code ?? "ERROR"}: ${error.message}`); }
       }
     }

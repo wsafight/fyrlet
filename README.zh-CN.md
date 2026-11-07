@@ -12,7 +12,7 @@
 
 状态：已验证单节点、Node SDK、四个领域应用和同机双节点；**尚未发布到 Hex / npm**，生产容量未验证（见[验收记录](docs/zh/ACCEPTANCE.md)）。
 
-文档入口：[接入教程](docs/zh/TUTORIAL.md) · [文档索引](docs/zh/README.md) · [安装](docs/zh/INSTALL.md) · [服务端开发](docs/zh/SERVER.md) · [协议](docs/zh/PROTOCOL.md) · [TypeScript SDK](sdks/typescript/README.zh-CN.md) · [产品文档](docs/zh/PRODUCT.md) · [运维](docs/zh/OPERATIONS.md) · [示例应用](examples/README.zh-CN.md) · [问题排查](docs/zh/TROUBLESHOOTING.md)
+文档入口：[接入教程](docs/zh/TUTORIAL.md) · [文档索引](docs/zh/README.md) · [安装](docs/zh/INSTALL.md) · [服务端开发](docs/zh/SERVER.md) · [协议](docs/zh/PROTOCOL.md) · [TypeScript SDK](sdks/typescript/README.zh-CN.md) · [产品文档](docs/zh/PRODUCT.md) · [路线图](docs/zh/ROADMAP.md) · [运维](docs/zh/OPERATIONS.md) · [示例应用](examples/README.zh-CN.md) · [问题排查](docs/zh/TROUBLESHOOTING.md)
 
 ## 快速开始
 

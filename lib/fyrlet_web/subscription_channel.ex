@@ -6,7 +6,8 @@ defmodule FyrletWeb.SubscriptionChannel do
 
   alias Fyrlet.{Auth, Capabilities, Error, Runtime}
   alias Fyrlet.Subscriptions.Observer
-  alias Fyrlet.Subscriptions.Tracker
+  alias Fyrlet.Subscriptions.Observation
+  import FyrletWeb.ChannelSupport
 
   @impl true
   def join(
@@ -16,24 +17,16 @@ defmodule FyrletWeb.SubscriptionChannel do
       ) do
     delivery = if options["delivery"] == "delta-v1", do: "delta-v1", else: "snapshot"
 
-    with {:ok, _uuid} <- Ecto.UUID.cast(identifier),
+    with {:ok, _uuid} <- identifier(identifier),
          {:ok, capabilities} <- Capabilities.negotiate(options["capabilities"]),
          :ok <- anonymous_entry(socket.assigns.actor, capabilities),
          {:ok, subscription} <-
            Runtime.prepare_subscription(socket.assigns.actor, name, parameters),
          :ok <- require_capability(subscription, capabilities),
          :ok <- not_append(subscription),
-         :ok <-
-           Tracker.claim(
-             socket.transport_pid,
-             self(),
-             subscription_limit(socket.assigns.actor),
-             socket.assigns.actor.project_id
-           ),
-         {:ok, observer, revision, encoded} <-
-           Observer.attach(socket.assigns.actor, subscription, delivery) do
-      remaining = max(DateTime.diff(socket.assigns.actor.expires_at, Auth.now(), :millisecond), 1)
-
+         :ok <- claim(socket, socket.assigns.actor),
+         {:ok, observer, revision, encoded, observation} <-
+           attach(socket.assigns.actor, subscription, delivery) do
       socket =
         socket
         |> assign(
@@ -43,52 +36,23 @@ defmodule FyrletWeb.SubscriptionChannel do
           delivery: delivery,
           generation: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
           observer: observer,
-          observer_monitor: Process.monitor(observer),
+          observation: observation,
+          observer_monitor: if(observer != self(), do: Process.monitor(observer)),
           revision: revision,
           seq: 1,
           awaiting: 1,
           ack_timer: nil,
-          expiry_timer: Process.send_after(self(), :expired, remaining)
+          expiry_timer: expiry_timer(socket.assigns.actor)
         )
         |> awaiting(1)
 
       {:ok, envelope(socket, encoded), socket}
     else
-      :error ->
-        {:error,
-         %{
-           "error" =>
-             Error.to_map(Error.new("VALIDATION_FAILED", "Invalid subscription identifier"))
-         }}
-
-      {:error, error} ->
-        {:error, %{"error" => Error.to_map(error)}}
+      {:error, error} -> reject(error)
     end
   end
 
-  def join(_topic, _parameters, _socket) do
-    {:error,
-     %{
-       "error" =>
-         Error.to_map(
-           Error.new("UNSUPPORTED_VERSION", "Expected protocol_version 1, name and params")
-         )
-     }}
-  end
-
-  # An anonymous principal connects only after negotiating `anonymous_read`, so a client that did
-  # not ask for it can never be handed public-only data by accident.
-  defp anonymous_entry(actor, capabilities) do
-    if Fyrlet.Features.Anonymous.anonymous?(actor),
-      do: Capabilities.require(capabilities, Fyrlet.Features.Anonymous.capability()),
-      else: :ok
-  end
-
-  defp subscription_limit(actor),
-    do:
-      if(Fyrlet.Features.Anonymous.anonymous?(actor),
-        do: Fyrlet.Features.Anonymous.max_subscriptions()
-      )
+  def join(_topic, _parameters, _socket), do: unsupported()
 
   defp require_capability(%{specification: %{"capability" => name}}, capabilities),
     do: Capabilities.require(capabilities, name)
@@ -103,24 +67,45 @@ defmodule FyrletWeb.SubscriptionChannel do
 
   defp not_append(_subscription), do: :ok
 
+  defp attach(actor, subscription, delivery) do
+    if subscription.specification["shared"] == true or
+         subscription.specification["sharing"] == "identical" do
+      with {:ok, observer, revision, encoded} <- Observer.attach(actor, subscription, delivery),
+           do: {:ok, observer, revision, encoded, nil}
+    else
+      Observation.attach_local(actor, subscription, delivery)
+    end
+  end
+
+  defp observation_cast(%{assigns: %{observation: nil}} = socket, message) do
+    GenServer.cast(socket.assigns.observer, message)
+    socket
+  end
+
+  defp observation_cast(socket, message) do
+    {:noreply, observation} = Observation.handle_cast(message, socket.assigns.observation)
+    assign(socket, observation: observation)
+  end
+
   @impl true
   def handle_in("ack", %{"g" => generation, "s" => sequence}, socket) do
     if is_integer(sequence) and sequence > 0 and generation == socket.assigns.generation and
          sequence == socket.assigns.awaiting do
-      Observer.ready(socket.assigns.observer, socket.assigns.revision)
-      {:noreply, assign(socket, awaiting: nil)}
+      {:noreply,
+       socket
+       |> observation_cast({:ready, self(), socket.assigns.revision})
+       |> assign(awaiting: nil)}
     else
       {:noreply, socket}
     end
   end
 
   def handle_in("refresh", _parameters, socket) do
-    Observer.refresh(socket.assigns.observer)
-    {:reply, {:ok, %{"accepted" => true}}, socket}
+    {:reply, {:ok, %{"accepted" => true}}, observation_cast(socket, {:refresh, self()})}
   end
 
   def handle_in(_event, _parameters, socket),
-    do: {:reply, {:error, %{"error" => Error.to_map(Error.not_found())}}, socket}
+    do: {:reply, reject(Error.not_found()), socket}
 
   @impl true
   def handle_info(
@@ -184,35 +169,49 @@ defmodule FyrletWeb.SubscriptionChannel do
         stop(socket, Error.new("LIMIT_EXCEEDED", "The snapshot was not acknowledged in time"))
 
       true ->
-        {:noreply, arm_ack_timer(socket)}
+        {:noreply, arm_ack_timer(socket, :ack_timeout, socket.assigns.ack_deadline)}
     end
   end
 
   def handle_info(:expired, socket), do: stop(socket, Error.unauthorized())
 
-  def handle_info(message, socket) when message in [:invalidated, :reconcile] do
-    Observer.invalidate(socket.assigns.observer, message)
-    {:noreply, socket}
-  end
+  def handle_info(message, socket) when message in [:invalidated, :reconcile, :refresh],
+    do: observation_message(message, socket)
 
   def handle_info({:invalidated, _identifier} = message, socket) do
-    Observer.invalidate(socket.assigns.observer, message)
-    {:noreply, socket}
+    observation_message(message, socket)
   end
 
   def handle_info({:invalidated, _identifier, _change} = message, socket) do
-    Observer.invalidate(socket.assigns.observer, message)
-    {:noreply, socket}
+    observation_message(message, socket)
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
+  defp observation_message(message, %{assigns: %{observation: nil}} = socket) do
+    Observer.invalidate(socket.assigns.observer, message)
+    {:noreply, socket}
+  end
+
+  defp observation_message(message, socket) do
+    case Observation.handle_info(message, socket.assigns.observation) do
+      {:noreply, observation} ->
+        {:noreply, assign(socket, observation: observation)}
+
+      {:stop, %Error{} = error, observation} ->
+        stop(assign(socket, observation: observation), error)
+
+      {:stop, reason, observation} ->
+        {:stop, reason, assign(socket, observation: observation)}
+    end
+  end
+
   @impl true
   def terminate(_reason, socket) do
-    for key <- [:ack_timer, :expiry_timer],
-        reference = socket.assigns[key],
-        is_reference(reference),
-        do: Process.cancel_timer(reference)
+    cancel_timers(socket, [:ack_timer, :expiry_timer])
+
+    if socket.assigns[:observation],
+      do: Observation.terminate(:normal, socket.assigns.observation)
 
     :ok
   end
@@ -226,42 +225,11 @@ defmodule FyrletWeb.SubscriptionChannel do
             Application.fetch_env!(:fyrlet, :snapshot_ack_timeout)
       )
 
-    if socket.assigns.ack_timer, do: socket, else: arm_ack_timer(socket)
+    if socket.assigns.ack_timer,
+      do: socket,
+      else: arm_ack_timer(socket, :ack_timeout, socket.assigns.ack_deadline)
   end
 
-  defp arm_ack_timer(socket) do
-    remaining = max(socket.assigns.ack_deadline - System.monotonic_time(:millisecond), 1)
-    assign(socket, ack_timer: Process.send_after(self(), :ack_timeout, remaining))
-  end
-
-  defp stop(socket, error) do
-    push(socket, "status", %{"state" => "closed", "error" => Error.to_map(error)})
-    {:stop, :normal, socket}
-  end
-
-  defp envelope(socket, encoded) do
-    :telemetry.execute([:fyrlet, :subscription, :snapshot], %{bytes: byte_size(encoded)}, %{
-      name: socket.assigns.subscription.name
-    })
-
-    envelope = %{
-      "protocol_version" => Capabilities.protocol_version(),
-      "capabilities" => socket.assigns.capabilities,
-      "subscription_id" => socket.assigns.subscription_id,
-      "generation" => socket.assigns.generation,
-      "seq" => socket.assigns.seq,
-      "project_id" => socket.assigns.actor.project_id,
-      "subject_id" => socket.assigns.actor.subject_id,
-      "delivery" => socket.assigns.delivery,
-      "data" => fragment(socket, encoded)
-    }
-
-    envelope
-  end
-
-  defp fragment(socket, encoded) do
-    if socket.serializer == Phoenix.Socket.V2.JSONSerializer and Phoenix.json_library() == Jason,
-      do: Jason.Fragment.new(encoded),
-      else: Jason.decode!(encoded)
-  end
+  defp envelope(socket, encoded),
+    do: snapshot(socket, encoded, %{"delivery" => socket.assigns.delivery})
 end

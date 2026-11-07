@@ -8,7 +8,7 @@ defmodule Fyrlet.MigratorTest do
     assert Migrator.core_path() in paths
     assert Enum.all?(paths, &File.dir?/1), "every configured migration path must exist"
 
-    assert Enum.any?(paths, &String.ends_with?(&1, "examples/inbox/priv/repo/migrations"))
+    assert Enum.any?(paths, &String.ends_with?(&1, "test/support/migrations"))
     assert Enum.any?(paths, &String.ends_with?(&1, "plugins/counter/migrations"))
   end
 
@@ -26,15 +26,15 @@ defmodule Fyrlet.MigratorTest do
     previous = Application.fetch_env!(:fyrlet, :migration_paths)
 
     Application.put_env(:fyrlet, :migration_paths, [
-      "examples/inbox/priv/repo/migrations",
-      Path.join(["examples", "inbox", "priv", "repo", "migrations"])
+      "test/support/migrations",
+      Path.join(["test", "support", "migrations"])
     ])
 
     on_exit(fn -> Application.put_env(:fyrlet, :migration_paths, previous) end)
 
     resolved =
       Migrator.paths()
-      |> Enum.filter(&String.ends_with?(&1, "examples/inbox/priv/repo/migrations"))
+      |> Enum.filter(&String.ends_with?(&1, "test/support/migrations"))
 
     assert length(resolved) == 2
     assert Enum.all?(resolved, &(Path.type(&1) == :absolute))

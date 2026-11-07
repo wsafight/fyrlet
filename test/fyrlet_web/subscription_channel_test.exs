@@ -79,7 +79,7 @@ defmodule FyrletWeb.SubscriptionChannelTest do
     push(socket, "ack", ack_payload(initial))
     assert_push "snapshot", snapshot
     assert snapshot["data"] == [item]
-    assert Repo.aggregate(InboxItem, :count) == 1
+    assert Repo.aggregate(TestRecord, :count) == 1
     leave(socket)
   end
 
@@ -256,7 +256,7 @@ defmodule FyrletWeb.SubscriptionChannelTest do
     {:ok, updated} =
       Runtime.call(
         alice.actor,
-        "inbox.update",
+        "records.update",
         %{"id" => item["id"], "text" => "changed", "expected_version" => 1},
         Ecto.UUID.generate()
       )
@@ -288,7 +288,7 @@ defmodule FyrletWeb.SubscriptionChannelTest do
       assert {:ok, _item} =
                Runtime.call(
                  alice.actor,
-                 "inbox.update",
+                 "records.update",
                  %{
                    "id" => item["id"],
                    "text" => "version #{version + 1}",
@@ -431,7 +431,7 @@ defmodule FyrletWeb.SubscriptionChannelTest do
     assert {:ok, updated} =
              Runtime.call(
                alice.actor,
-               "inbox.update",
+               "records.update",
                %{"id" => item["id"], "expected_version" => 1, "text" => "shared"},
                Ecto.UUID.generate()
              )
@@ -492,7 +492,7 @@ defmodule FyrletWeb.SubscriptionChannelTest do
       Map.merge(
         %{
           "protocol_version" => 1,
-          "name" => "inbox.recent",
+          "name" => "records.recent",
           "params" => %{}
         },
         options

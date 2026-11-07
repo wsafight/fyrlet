@@ -22,7 +22,7 @@ defmodule Fyrlet.QuotaTest do
   defp quotas(value), do: Application.put_env(:fyrlet, :quotas, value)
 
   defp write(user, text),
-    do: Runtime.call(user.actor, "inbox.add", %{"text" => text}, Ecto.UUID.generate())
+    do: Runtime.call(user.actor, "records.add", %{"text" => text}, Ecto.UUID.generate())
 
   test "nothing is limited unless configured", %{alice: alice} do
     Application.delete_env(:fyrlet, :quotas)
@@ -56,7 +56,7 @@ defmodule Fyrlet.QuotaTest do
     quotas(default: [writes_per_second: 1, reads_per_second: 50])
     Enum.find(1..20, fn _ -> match?({:error, _}, write(alice, "x")) end)
 
-    for _ <- 1..5, do: assert({:ok, _} = Runtime.call(alice.actor, "inbox.history", %{}))
+    for _ <- 1..5, do: assert({:ok, _} = Runtime.call(alice.actor, "records.list", %{}))
   end
 
   test "projects do not share a budget, and an override replaces the default key by key", %{
@@ -98,7 +98,7 @@ defmodule Fyrlet.QuotaTest do
       |> put_req_header("authorization", "Bearer " <> session["token"])
       |> put_req_header("x-project-id", session["project_id"])
       |> put_req_header("idempotency-key", "k#{n}-#{System.unique_integer([:positive])}")
-      |> post("/api/v1/operations/inbox.add", %{"input" => %{"text" => "t#{n}"}})
+      |> post("/api/v1/operations/records.add", %{"input" => %{"text" => "t#{n}"}})
     end
 
     refused = Enum.find_value(1..10, fn n -> (c = call.(n)).status == 429 && c end)

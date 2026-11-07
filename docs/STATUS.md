@@ -8,6 +8,7 @@ Meaning of the statuses: **Implemented** (has automated tests), **Partial**, **N
 
 | Capability | Content | Status | Main code | Main tests |
 | --- | --- | --- | --- | --- |
+| Operation outcomes and recovery (roadmap 1A) | Mutation lifecycle; read completion, write commit and admission; unknown outcomes; read-only write/run receipt recovery over HTTP/Socket | Implemented; view confirmation 1B pending | `runtime.ex`, `mutation.ts`, `client.ts` | `operation_outcomes_test`, HTTP/Channel tests, SDK unit and real lost-response integration |
 | Capability negotiation and contract export | Capability negotiation; entries that depend on a capability appear in the contract on demand; `UNSUPPORTED_CAPABILITY` | Implemented | `capabilities.ex`, `registry.ex` | `capabilities_test`, `capability_channel_test` |
 | Distribution and installation | Installing applications outside the repository, migration entry point, public interface list | Implemented: pinned source / local source package and npm tgz, with a SHA256 manifest; not yet published to Hex/npm | `migrator.ex`, `runtime_config.ex`, `scripts/package.sh` | `scripts/install_smoke.sh` |
 | Durable Run | Sequential Run, wait and signal, cancellation, lease and execution epoch, recovery, run view | Implemented | `runs/*.ex`, `runs.ex` | `runs_*_test`, `runs/concurrency_test` |

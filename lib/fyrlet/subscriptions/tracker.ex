@@ -12,6 +12,15 @@ defmodule Fyrlet.Subscriptions.Tracker do
   def claim(transport, channel, limit \\ nil, project_id \\ nil),
     do: GenServer.call(__MODULE__, {:claim, transport, channel, limit, project_id})
 
+  def validate! do
+    limit = Application.get_env(:fyrlet, :max_subscriptions_per_node, 10_000)
+
+    unless is_integer(limit) and limit > 0,
+      do: raise(ArgumentError, "max_subscriptions_per_node must be a positive integer")
+
+    :ok
+  end
+
   @impl true
   def init(state), do: {:ok, state}
 
@@ -20,8 +29,17 @@ defmodule Fyrlet.Subscriptions.Tracker do
     count = Map.get(state.counts, transport, 0)
     project_count = Map.get(state.projects, project_id, 0)
     project_limit = project_id && Fyrlet.Quota.max_subscriptions(project_id)
+    node_limit = Application.get_env(:fyrlet, :max_subscriptions_per_node, 10_000)
 
     cond do
+      map_size(state.monitors) >= node_limit ->
+        {:reply,
+         {:error,
+          Fyrlet.Error.new("LIMIT_EXCEEDED", "Too many subscriptions on this node", %{
+            "scope" => "node",
+            "limit" => node_limit
+          })}, state}
+
       count >= (limit || Application.fetch_env!(:fyrlet, :max_subscriptions)) ->
         {:reply,
          {:error,

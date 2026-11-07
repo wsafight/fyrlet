@@ -7,14 +7,8 @@ defmodule Fyrlet.Runs.Resolver do
   pauses the run as `definition_unavailable` instead of silently using newer code.
   """
 
-  @default_version "1"
-
   @doc "The version a definition currently declares for an operation."
-  def current_version(module, operation) do
-    if function_exported?(module, :definition_version, 1),
-      do: to_string(module.definition_version(operation)),
-      else: @default_version
-  end
+  defdelegate current_version(module, operation), to: Fyrlet.Definition
 
   @doc "The registered definition module of a run, or nil."
   def definition(run) do

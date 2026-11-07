@@ -12,7 +12,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     assert {:ok, _item} = add(alice.actor)
 
     assert_receive {:telemetry, [:fyrlet, :operation, :stop], %{duration: duration},
-                    %{name: "inbox.add", result: :ok}}
+                    %{name: "records.add", result: :ok}}
 
     assert is_integer(duration) and duration >= 0
 
@@ -35,12 +35,12 @@ defmodule Fyrlet.RuntimeEdgeTest do
 
   test "snapshot telemetry reports success and errors", %{alice: alice} do
     attach([:fyrlet, :subscription, :query])
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
 
     assert {:ok, []} = Runtime.snapshot(alice.actor, subscription)
 
     assert_receive {:telemetry, [:fyrlet, :subscription, :query], %{duration: duration},
-                    %{name: "inbox.recent", result: :ok}}
+                    %{name: "records.recent", result: :ok}}
 
     assert is_integer(duration)
 
@@ -50,7 +50,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
              Runtime.snapshot(alice.actor, subscription)
 
     assert_receive {:telemetry, [:fyrlet, :subscription, :query], _measurements,
-                    %{name: "inbox.recent", result: :error}}
+                    %{name: "records.recent", result: :error}}
   end
 
   test "snapshot size limits reject oversized results without truncation", %{alice: alice} do
@@ -58,7 +58,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     on_exit(fn -> Application.put_env(:fyrlet, :max_snapshot_bytes, previous) end)
 
     {:ok, item} = add(alice.actor, "snapshot payload")
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
 
     Application.put_env(:fyrlet, :max_snapshot_bytes, 20)
 
@@ -80,11 +80,11 @@ defmodule Fyrlet.RuntimeEdgeTest do
     alice: alice
   } do
     {:ok, item} = add(alice.actor)
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
     input = %{"id" => item["id"], "text" => "changed", "expected_version" => 1}
-    {:ok, updated} = Runtime.call(alice.actor, "inbox.update", input, Ecto.UUID.generate())
-    change = InboxExample.Inbox.change("inbox.update", alice.actor, input, updated)
+    {:ok, updated} = Runtime.call(alice.actor, "records.update", input, Ecto.UUID.generate())
+    change = Fyrlet.TestRecords.change("records.update", alice.actor, input, updated)
     handler = "change-query-#{Ecto.UUID.generate()}"
 
     :telemetry.attach(
@@ -92,7 +92,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
       [:fyrlet, :repo, :query],
       fn _event, _measurements, metadata, owner ->
         if String.starts_with?(metadata.query, "SELECT") and
-             String.contains?(metadata.query, "inbox_items"),
+             String.contains?(metadata.query, "fyrlet_test_records"),
            do: send(owner, :business_query)
       end,
       self()
@@ -136,7 +136,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     on_exit(fn -> Application.put_env(:fyrlet, :idempotency_ttl, previous) end)
     Application.put_env(:fyrlet, :idempotency_ttl, 10)
 
-    assert {:ok, _item} = Runtime.call(alice.actor, "inbox.add", %{"text" => "ttl"}, "ttl-key")
+    assert {:ok, _item} = Runtime.call(alice.actor, "records.add", %{"text" => "ttl"}, "ttl-key")
 
     stored = Repo.get_by!(Fyrlet.Idempotency, key: "ttl-key")
     assert DateTime.diff(stored.expires_at, Auth.now(), :second) in 8..10
@@ -146,11 +146,11 @@ defmodule Fyrlet.RuntimeEdgeTest do
     alice: alice
   } do
     {:ok, item} = add(alice.actor)
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
     input = %{"id" => item["id"], "text" => String.duplicate("更新", 40), "expected_version" => 1}
-    {:ok, updated} = Runtime.call(alice.actor, "inbox.update", input, Ecto.UUID.generate())
-    change = InboxExample.Inbox.change("inbox.update", alice.actor, input, updated)
+    {:ok, updated} = Runtime.call(alice.actor, "records.update", input, Ecto.UUID.generate())
+    change = Fyrlet.TestRecords.change("records.update", alice.actor, input, updated)
     expected_bytes = byte_size(Jason.encode!([updated]))
     limit = Application.fetch_env!(:fyrlet, :max_snapshot_bytes)
     on_exit(fn -> Application.put_env(:fyrlet, :max_snapshot_bytes, limit) end)
@@ -171,15 +171,15 @@ defmodule Fyrlet.RuntimeEdgeTest do
   end
 
   test "committed writes notify immediately and idempotent replays do not notify", %{alice: alice} do
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     Phoenix.PubSub.subscribe(Fyrlet.PubSub, subscription.scope)
     key = Ecto.UUID.generate()
 
-    assert {:ok, item} = Runtime.call(alice.actor, "inbox.add", %{"text" => "fast"}, key)
+    assert {:ok, item} = Runtime.call(alice.actor, "records.add", %{"text" => "fast"}, key)
     assert_receive {:invalidated, identifier, %Fyrlet.CommittedChange{}}
     assert_enqueued worker: Fyrlet.InvalidationWorker
 
-    assert {:ok, ^item} = Runtime.call(alice.actor, "inbox.add", %{"text" => "fast"}, key)
+    assert {:ok, ^item} = Runtime.call(alice.actor, "records.add", %{"text" => "fast"}, key)
     refute_receive {:invalidated, _identifier, _change}, 20
 
     assert %{success: 1, failure: 0} = Oban.drain_queue(queue: :fyrlet)
@@ -190,11 +190,11 @@ defmodule Fyrlet.RuntimeEdgeTest do
     alice: alice
   } do
     {:ok, item} = add(alice.actor)
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
     Phoenix.PubSub.subscribe(Fyrlet.PubSub, subscription.scope)
     input = %{"id" => item["id"], "text" => "更新\n\"\\", "expected_version" => 1}
-    {:ok, updated} = Runtime.call(alice.actor, "inbox.update", input, Ecto.UUID.generate())
+    {:ok, updated} = Runtime.call(alice.actor, "records.update", input, Ecto.UUID.generate())
     assert_receive {:invalidated, _identifier, %Fyrlet.CommittedChange{} = change}
     expected_bytes = byte_size(Jason.encode!([updated]))
 
@@ -234,11 +234,11 @@ defmodule Fyrlet.RuntimeEdgeTest do
     alice: alice
   } do
     {:ok, item} = add(alice.actor)
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     {:ok, previous} = Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription)
 
     change =
-      InboxExample.Inbox.change("inbox.update", alice.actor, %{"expected_version" => 1}, item)
+      Fyrlet.TestRecords.change("records.update", alice.actor, %{"expected_version" => 1}, item)
 
     assert {:ok, %{data: data, unchanged: true, record_index: indexed, bytes: bytes}} =
              Fyrlet.Fixtures.snapshot_with_metadata(alice.actor, subscription, previous, change)
@@ -249,7 +249,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
   end
 
   test "nested writes defer notifications to the durable job", %{alice: alice} do
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     Phoenix.PubSub.subscribe(Fyrlet.PubSub, subscription.scope)
 
     assert {:ok, {:ok, _item}} =
@@ -265,7 +265,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
   end
 
   test "rolled back writes emit no notification and leave no durable job", %{alice: alice} do
-    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "inbox.recent", %{})
+    {:ok, subscription} = Runtime.prepare_subscription(alice.actor, "records.recent", %{})
     Phoenix.PubSub.subscribe(Fyrlet.PubSub, subscription.scope)
 
     assert {:error, :cancelled} =
@@ -276,7 +276,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
              end)
 
     refute_receive {:invalidated, _identifier}, 20
-    assert Repo.aggregate(InboxItem, :count) == 0
+    assert Repo.aggregate(TestRecord, :count) == 0
     refute_enqueued worker: Fyrlet.InvalidationWorker
 
     assert {:error, %Error{code: "INTERNAL_ERROR"}} =
@@ -292,7 +292,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     results =
       1..8
       |> Task.async_stream(
-        fn _index -> Runtime.call(alice.actor, "inbox.add", %{"text" => "same"}, key) end,
+        fn _index -> Runtime.call(alice.actor, "records.add", %{"text" => "same"}, key) end,
         max_concurrency: 8,
         timeout: 15_000
       )
@@ -301,7 +301,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
     assert Enum.all?(results, &match?({:ok, _item}, &1))
     items = Enum.map(results, fn {:ok, item} -> item end)
     assert length(Enum.uniq_by(items, & &1["id"])) == 1
-    assert Repo.aggregate(InboxItem, :count) == 1
+    assert Repo.aggregate(TestRecord, :count) == 1
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 1
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
@@ -313,7 +313,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
         fn index ->
           Runtime.call(
             alice.actor,
-            "inbox.add",
+            "records.add",
             %{"text" => "item #{index}"},
             Ecto.UUID.generate()
           )
@@ -324,7 +324,7 @@ defmodule Fyrlet.RuntimeEdgeTest do
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.all?(results, &match?({:ok, _item}, &1))
-    assert Repo.aggregate(InboxItem, :count) == 8
+    assert Repo.aggregate(TestRecord, :count) == 8
     assert Repo.aggregate(Fyrlet.Idempotency, :count) == 8
     assert Repo.aggregate(Oban.Job, :count) == 8
   end

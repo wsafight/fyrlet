@@ -5,7 +5,7 @@ import { readFile, open } from "node:fs/promises";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { createClient, ApiError } from "../dist/index.js";
+import { createClient, ApiError, OutcomeUnknownError } from "../dist/index.js";
 import { createSessionService } from "../dist/server.js";
 import { until } from "./helpers.mjs";
 
@@ -68,6 +68,89 @@ test("two SDK devices receive committed snapshots, replay and concurrent duplica
   ]);
   assert.equal(mutations.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(mutations.filter((result) => result.status === "rejected" && result.reason.code === "CONFLICT").length, 1);
+});
+
+test("a committed HTTP response lost in transit is recovered without another write", async (context) => {
+  let writes = 0;
+  const first = await user(context, 0, crypto.randomUUID(), {
+    fetch: async (url, init) => {
+      const result = await fetch(url, init);
+      if (new URL(url).pathname === "/api/v1/operations/inbox.add") {
+        writes++;
+        await result.arrayBuffer();
+        throw new TypeError("Injected response loss after commit");
+      }
+      return result;
+    },
+  });
+  const mutation = first.client.mutate("inbox.add", { text: "lost after commit" });
+  await assert.rejects(mutation.result, OutcomeUnknownError);
+  assert.equal(mutation.getState().status, "unknown");
+  const recovered = await mutation.recover();
+  assert.equal(recovered.status, "committed");
+  assert.equal(recovered.data.text, "lost after commit");
+  assert.equal(writes, 1);
+  const history = await first.client.call("inbox.history", {});
+  assert.equal(history.items.length, 1);
+  assert.equal(history.items[0].id, recovered.data.id);
+
+  const second = await user(context, 0, first.subject);
+  assert.deepEqual(await second.client.recover("inbox.add", { text: "lost after commit" }, { idempotencyKey: mutation.idempotencyKey }),
+    { status: "committed", data: recovered.data });
+  const stranger = await user(context);
+  assert.deepEqual(await stranger.client.recover("inbox.add", { text: "lost after commit" }, { idempotencyKey: mutation.idempotencyKey }),
+    { status: "unknown" });
+});
+
+test("socket mutation receipts distinguish reads from commits and recover without replay", async (context) => {
+  const first = await user(context, 0, crypto.randomUUID(), { operationTransport: "socket" });
+  const mutation = first.client.mutate("inbox.add", { text: "socket receipt" });
+  const item = await mutation.result;
+  assert.equal(mutation.getState().status, "committed");
+  assert.deepEqual(await first.client.recover("inbox.add", { text: "socket receipt" }, { idempotencyKey: mutation.idempotencyKey }),
+    { status: "committed", data: item });
+  const query = first.client.mutate("inbox.history", {});
+  assert.equal((await query.result).items.length, 1);
+  assert.equal(query.getState().status, "completed");
+});
+
+test("a lost socket reply after commit is recovered from the durable receipt", async (context) => {
+  const hidden = new Set();
+  const events = [];
+  let dropped = 0;
+  class DroppingSocket extends WebSocket {
+    constructor(...arguments_) {
+      super(...arguments_);
+      this.addEventListener("message", (event) => {
+        const raw = JSON.parse(String(event.data));
+        const frames = Array.isArray(raw) ? [raw] : raw.batch;
+        if (frames?.some((frame) => frame[2] === "operations" && frame[3] === "phx_reply" && hidden.has(frame[1]))) {
+          dropped++;
+          event.stopImmediatePropagation();
+        }
+      });
+    }
+    send(raw) {
+      const [, ref, topic, event, payload] = JSON.parse(raw);
+      if (topic === "operations" && ["call", "recover"].includes(event) && payload.name === "inbox.add") {
+        events.push(event);
+        if (event === "call") hidden.add(ref);
+      }
+      super.send(raw);
+    }
+  }
+  const first = await user(context, 0, crypto.randomUUID(), {
+    operationTransport: "socket", WebSocket: DroppingSocket, timeoutMs: 700,
+  });
+  const mutation = first.client.mutate("inbox.add", { text: "lost socket reply" });
+  await assert.rejects(mutation.result, (error) => error instanceof OutcomeUnknownError && error.code === "TIMEOUT");
+  assert.equal(dropped, 1);
+  assert.equal(mutation.getState().status, "unknown");
+  const recovered = await mutation.recover();
+  assert.equal(recovered.status, "committed");
+  assert.equal(recovered.data.text, "lost socket reply");
+  assert.deepEqual(events, ["call", "recover"]);
+  assert.equal((await first.client.call("inbox.history", {})).items.length, 1);
 });
 
 test("socket RPC writes produce ordered field deltas and preserve immutable earlier views", async (context) => {
@@ -333,3 +416,42 @@ test("append SDK restores the current window after restart and clears revoked se
   await until(() => subscription.getState().status === "error");
   assert.equal(subscription.getState().data, undefined);
 });
+
+for (const operationTransport of ["http", "socket"]) {
+  test(`${operationTransport} writes coexist with snapshot and append channels after a sibling leaves or fails`, async (context) => {
+    const connections = [];
+    class RecordingSocket extends WebSocket {
+      constructor(...arguments_) { super(...arguments_); connections.push(this); }
+    }
+    const owner = await user(context, 0, crypto.randomUUID(), {
+      operationTransport, capabilities: ["append"], WebSocket: RecordingSocket,
+    });
+    const recent = owner.client.subscribe("inbox.recent", { limit: 10 });
+    const bounded = owner.client.subscribe("inbox.recent", { limit: 1 });
+    const feed = owner.client.subscribeAppend("work.feed", {});
+    await until(() => [recent, bounded, feed].every((subscription) => subscription.getState().status === "ready"));
+    const [item] = await Promise.all([
+      owner.client.call("inbox.add", { text: "first" }),
+      owner.client.call("work.post", { text: "first event" }),
+    ]);
+    await until(() => recent.getState().data?.[0]?.id === item.id && bounded.getState().data?.[0]?.id === item.id && feed.getState().data?.length === 1);
+    assert.equal(connections.length, 1);
+    const previous = recent.getState().data;
+    bounded.unsubscribe();
+    const closed = bounded.getState();
+    const unavailable = owner.client.subscribe("missing.view", {});
+    await until(() => unavailable.getState().status === "error");
+    assert.equal(unavailable.getState().error.code, "NOT_FOUND");
+    const [updated] = await Promise.all([
+      owner.client.call("inbox.update", { id: item.id, expected_version: 1, text: "second" }),
+      owner.client.call("work.post", { text: "second event" }),
+    ]);
+    await until(() => recent.getState().data?.[0]?.version === 2 && feed.getState().data?.length === 2);
+    assert.deepEqual(recent.getState().data, [updated]);
+    assert.deepEqual(feed.getState().data, [{ text: "first event" }, { text: "second event" }]);
+    assert.equal(previous[0].text, "first");
+    assert.ok(Object.isFrozen(previous[0]));
+    assert.equal(bounded.getState(), closed);
+    assert.equal(connections.length, 1);
+  });
+}

@@ -28,7 +28,7 @@ defmodule Fyrlet.RegistryTest do
     end)
   end
 
-  test "the configured production definitions are valid" do
+  test "the configured test definitions are valid" do
     assert :ok = Registry.validate!()
   end
 
@@ -115,21 +115,21 @@ defmodule Fyrlet.RegistryTest do
   end
 
   test "fetch/2 returns the owning module and specification" do
-    assert {:ok, InboxExample.Inbox, specification} = Registry.fetch("operations", "inbox.add")
+    assert {:ok, Fyrlet.TestRecords, specification} = Registry.fetch("operations", "records.add")
     assert specification["kind"] == "write"
 
-    assert {:ok, InboxExample.Inbox, subscription} =
-             Registry.fetch("subscriptions", "inbox.recent")
+    assert {:ok, Fyrlet.TestRecords, subscription} =
+             Registry.fetch("subscriptions", "records.recent")
 
     assert subscription["output"]["type"] == "array"
 
-    assert {:error, %Error{code: "NOT_FOUND"}} = Registry.fetch("operations", "inbox.recent")
-    assert {:error, %Error{code: "NOT_FOUND"}} = Registry.fetch("subscriptions", "inbox.add")
+    assert {:error, %Error{code: "NOT_FOUND"}} = Registry.fetch("operations", "records.recent")
+    assert {:error, %Error{code: "NOT_FOUND"}} = Registry.fetch("subscriptions", "records.add")
     assert {:error, %Error{code: "NOT_FOUND"}} = Registry.fetch("operations", "missing.op")
   end
 
   test "fetch/2 requires a binary name" do
-    assert_raise FunctionClauseError, fn -> Registry.fetch("operations", :inbox_add) end
+    assert_raise FunctionClauseError, fn -> Registry.fetch("operations", :records_add) end
   end
 
   test "export/0 merges operations and subscriptions with protocol metadata" do
@@ -138,12 +138,12 @@ defmodule Fyrlet.RegistryTest do
     assert exported["protocol_version"] == 1
     assert exported["contract_version"] == "0.1.0"
     assert exported["schema_dialect"] == "fyrlet-subset"
-    assert Map.has_key?(exported["operations"], "inbox.add")
+    assert Map.has_key?(exported["operations"], "records.add")
     assert Map.has_key?(exported["operations"], "test.echo")
-    assert Map.has_key?(exported["subscriptions"], "inbox.recent")
+    assert Map.has_key?(exported["subscriptions"], "records.recent")
 
-    assert Map.has_key?(exported["operations"]["inbox.add"], "input")
-    assert Map.has_key?(exported["operations"]["inbox.add"], "output")
+    assert Map.has_key?(exported["operations"]["records.add"], "input")
+    assert Map.has_key?(exported["operations"]["records.add"], "output")
   end
 
   defp valid_operation do

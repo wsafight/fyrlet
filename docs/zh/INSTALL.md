@@ -36,6 +36,8 @@ import Config
 config :fyrlet, Fyrlet.RuntimeConfig.settings(config_env())
 ```
 
+可通过 `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` 设置单节点 Channel 总上限（1–1,000,000，默认 10,000），覆盖普通订阅、append 与 Presence；见[容量限制](OPERATIONS.md)。
+
 环境变量：`DATABASE_URL`、`POOL_SIZE`、`PORT`、`PHX_SERVER`、`CORS_ORIGINS`；数值型变量必须是范围内的整数（`POOL_SIZE` 1–10000，`PORT` 1–65535），否则启动时报错并指出变量名；`ALLOWED_ORIGINS`、`CORS_ORIGINS` 的各项会去掉首尾空格；`:prod` 下 `SECRET_KEY_BASE` 与 `ALLOWED_ORIGINS` 必填。网页与 API 同源时自动放行该来源，其他来源仍需 `CORS_ORIGINS` 明确配置。可选的项目配额默认值 `FYRLET_PROJECT_READS_PER_SECOND`、`FYRLET_PROJECT_WRITES_PER_SECOND`、`FYRLET_PROJECT_MAX_SUBSCRIPTIONS`（见 [OPERATIONS.md](OPERATIONS.md#项目配额fyrletquota)）；可选的摄取数据保留期默认值 `FYRLET_INGEST_RETENTION_SECONDS`（秒数，至少 60，或 `forever`；见 [DATABASE.md](DATABASE.md#按项目配置保留期)）；可选 `FYRLET_METRICS_TOKEN`（启用 `GET /metrics`，见 [OPERATIONS.md](OPERATIONS.md#prometheus-指标fyrletmetrics)）；可选 `FYRLET_CLUSTER_NODES` 为逗号分隔的 `name@host`，最多 32 个；配置后必须启用 Erlang 命名节点并使用相同 cookie。部署方法与调优见 [OPERATIONS.md](OPERATIONS.md)。
 
 ### 共享仓库的约束

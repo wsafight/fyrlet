@@ -85,7 +85,7 @@ defmodule Fyrlet.StaticCacheTest do
 
   test "unknown kinds and names are not found" do
     assert {:error, %{code: "NOT_FOUND"}} = Registry.fetch("operations", "nope.nothing")
-    assert {:error, %{code: "NOT_FOUND"}} = Registry.fetch("tables", "inbox.add")
+    assert {:error, %{code: "NOT_FOUND"}} = Registry.fetch("tables", "records.add")
   end
 
   test "plugins are checked again when the plugin or capability configuration changes" do

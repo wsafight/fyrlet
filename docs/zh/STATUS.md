@@ -8,6 +8,7 @@
 
 | 能力 | 内容 | 状态 | 主要代码 | 主要测试 |
 | --- | --- | --- | --- | --- |
+| 操作结果与恢复（路线图 1A） | mutation 生命周期；读完成、写提交与受理；未知结果；HTTP / Socket 只读查询 write/run 回执 | 已实现；视图确认 1B 待开发 | `runtime.ex`、`mutation.ts`、`client.ts` | `operation_outcomes_test`、HTTP / Channel 测试、SDK 单元与真实丢响应集成 |
 | 能力协商与契约导出 | 能力协商；依赖能力的条目按需出现在契约中；`UNSUPPORTED_CAPABILITY` | 已实现 | `capabilities.ex`、`registry.ex` | `capabilities_test`、`capability_channel_test` |
 | 分发与安装 | 仓库外应用安装、迁移入口、公共接口清单 | 已实现：固定源码 / 本地源码包与 npm tgz，含 SHA256 清单；尚未发布到 Hex/npm | `migrator.ex`、`runtime_config.ex`、`scripts/package.sh` | `scripts/install_smoke.sh` |
 | 持久 Run | 顺序 Run、等待与信号、取消、租约与执行代次、恢复、运行视图 | 已实现 | `runs/*.ex`、`runs.ex` | `runs_*_test`、`runs/concurrency_test` |

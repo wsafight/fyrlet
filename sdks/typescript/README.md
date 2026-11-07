@@ -62,7 +62,9 @@ const client = createClient<Contract>({
 
 Socket calls share one operations channel and the same connection as subscriptions. Calls also work without subscriptions. Transactions, authorization, idempotency and error codes have the same semantics; identity verification still uses HTTP. A disconnect rejects pending calls. Reconnecting does not replay writes. Concurrent calls on one operations channel are processed serially on the server.
 
-`ApiError` exposes `code`, `message`, `details`, `retryable`, `status` and `requestId`. HTTP requests and call waits default to a 10-second timeout, configurable with `timeoutMs`. `AbortSignal` and `close()` cancel client waits. Cancellation or timeout does not prove that the server failed to commit; reuse the idempotency key when retrying a write.
+`ApiError` exposes `code`, `message`, `details`, `retryable`, `status` and `requestId`. HTTP requests and call waits default to a 10-second timeout, configurable with `timeoutMs`. `AbortSignal` and `close()` cancel client waits. An ambiguous failure after dispatch throws `OutcomeUnknownError` with the operation, idempotency key and original cause. Use receipt recovery before deciding whether to submit another business call.
+
+`client.mutate(name, input, options?)` returns a handle with `idempotencyKey`, `result`, `getState()`, `onChange()` and `recover()`. It distinguishes `pending`, read `completed`, write `committed`, Run/ingest `accepted`, definite `failed` and `unknown`. `call` still returns the business result. `mutation.recover()` or `client.recover(name, originalInput, { idempotencyKey })` queries an existing write/run receipt without executing the operation. Missing or expired receipts remain unknown. See [operation outcomes and recovery](../../docs/MUTATIONS.md) for examples, persistence and confirmation boundaries.
 
 ## Subscription states
 
@@ -143,13 +145,13 @@ items.getState().pending;
 
 The update replaces by ID instead of blindly appending, because `current` may already contain the server's change. `data` includes predictions; `pending` counts predictions not yet replaced by server data.
 
-- A failed call immediately rolls back its prediction and throws the original error.
-- A successful prediction remains until the next server snapshot or delta for that subscription, or `optimisticTtlMs` expires (5000 ms by default).
+- A definite failure immediately rolls back its prediction and throws the original error.
+- Success and unknown outcomes keep predictions until the next server snapshot or delta for that subscription, or `optimisticTtlMs` expires (5000 ms by default). Expiry does not resolve an unknown operation.
 - Predictions are reapplied when server data arrives during the write. `update` must be idempotent and return a new value; mutating frozen data throws. A prediction that throws is discarded and reported to `onListenerError` without affecting the call.
 - Only active subscriptions created by the same client are accepted. Invalid subscriptions cause a `TypeError` before sending the request. Subscriptions without data are skipped.
 - Internal state remains the server's truth; overlays are derived only for `getState()` and listeners.
 
-The server does not identify which push includes a particular write, so ending predictions is heuristic. A push computed before the commit can briefly remove a prediction before the actual update arrives. Predictions do not survive page reloads and do not provide an offline queue: disconnected writes still fail and roll back. Append subscriptions are supported, but updates must respect their window semantics. Presence subscriptions are rejected with `TypeError`.
+The server does not identify which push includes a particular write, so ending predictions is heuristic. A push computed before the commit can briefly remove a prediction before the actual update arrives. Predictions do not survive page reloads and do not provide an offline queue. A disconnected call can be failed or unknown depending on whether dispatch began. Append predictions must respect their window semantics; Presence predictions only affect the local roster and do not publish meta.
 
 ## Presence
 
@@ -198,6 +200,6 @@ DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 
 Run these commands from the repository root. The generator supports the current restricted contract dialect and rejects unsupported schemas. Input fields with defaults become optional; output fields follow `required`. Generated types provide compile-time checks, while the server validates all input and output at runtime.
 
-The recorded verification includes 63 unit tests and 13 real-server integration scenarios, covering Run idempotency, signals, cancellation, subject/project isolation, restart recovery, append windows and revocation. Four domain applications add 8 end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for the commands and verification boundaries.
+The recorded verification includes 132 unit tests and 18 real-server integration scenarios, covering mutation outcomes, receipt recovery after lost committed responses, concurrent request cancellation, authorization refresh deadlines, channel isolation, optimistic write ordering, Run idempotency, signals, subject/project isolation, restart recovery, append windows and revocation. Four domain applications add 8 end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for commands and boundaries.
 
 `bash scripts/package.sh` produces `.local/releases/fyrlet-client-0.1.0.tgz`; another project can install it with `npm install /absolute/path/fyrlet-client-0.1.0.tgz`. `bash scripts/install_smoke.sh` installs the package into a consumer outside the repository and imports both the main and server entry points. See [installation](../../docs/INSTALL.md) for distribution and version boundaries.
