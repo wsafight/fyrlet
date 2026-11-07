@@ -12,7 +12,9 @@ defmodule Fyrlet.RuntimeConfig do
   `CORS_ORIGINS`, `SECRET_KEY_BASE` and `ALLOWED_ORIGINS` (both required in `:prod`),
   `FYRLET_OBSERVER_HIBERNATE_AFTER_MS` and
   `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` (the node-wide channel ceiling),
-  `FYRLET_IDEMPOTENCY_TTL_SECONDS`, `FYRLET_CLUSTER_NODES` (comma-separated name@host peers),
+  `FYRLET_IDEMPOTENCY_TTL_SECONDS`, `FYRLET_DURABLE_INVALIDATION` (`true` persists a fallback
+  invalidation job in every write transaction; default off, see `Fyrlet.Runtime`),
+  `FYRLET_CLUSTER_NODES` (comma-separated name@host peers),
   and the per-project defaults `FYRLET_PROJECT_READS_PER_SECOND`, `FYRLET_PROJECT_WRITES_PER_SECOND`
   and `FYRLET_PROJECT_MAX_SUBSCRIPTIONS` (see `Fyrlet.Quota`), `FYRLET_INGEST_RETENTION_SECONDS`
   (seconds, or `forever`; see `Fyrlet.Retention`) and `FYRLET_METRICS_TOKEN`
@@ -37,6 +39,7 @@ defmodule Fyrlet.RuntimeConfig do
     compact(
       observer_hibernate_after: hibernate(get_env),
       idempotency_ttl: integer(get_env, "FYRLET_IDEMPOTENCY_TTL_SECONDS", 1),
+      durable_invalidation: boolean(get_env, "FYRLET_DURABLE_INVALIDATION"),
       max_subscriptions_per_node:
         integer(get_env, "FYRLET_MAX_SUBSCRIPTIONS_PER_NODE", 1, 1_000_000),
       cluster_nodes: cluster_nodes(get_env.("FYRLET_CLUSTER_NODES")),
@@ -76,6 +79,15 @@ defmodule Fyrlet.RuntimeConfig do
 
   defp required(get_env, name),
     do: get_env.(name) || raise("environment variable #{name} is missing")
+
+  defp boolean(get_env, name) do
+    case get_env.(name) do
+      nil -> nil
+      value when value in ["true", "1"] -> true
+      value when value in ["false", "0"] -> false
+      _other -> raise "environment variable #{name} must be true or false"
+    end
+  end
 
   defp hibernate(get_env) do
     case get_env.("FYRLET_OBSERVER_HIBERNATE_AFTER_MS") do

@@ -15,7 +15,7 @@ export function configuration(arguments_) {
     "target", "scenario", "profile", "endpoint", "fixtures", "out", "users", "devices", "writes",
     "rows", "payload-bytes", "warmup", "repeats", "concurrency", "timeout-ms", "idle-ms", "delay-ms",
     "interval-ms", "app-pid", "database-pid", "port", "startup-timeout-ms", "label",
-    "duration-ms", "rate", "settle-ms", "app-worker-pid", "sessions",
+    "duration-ms", "rate", "settle-ms", "app-worker-pid", "sessions", "shard", "start-at",
   ].map((name) => [name, { type: "string" }]));
   options.help = { type: "boolean", short: "h" };
   options["keep-data"] = { type: "boolean" };
@@ -44,8 +44,18 @@ export function configuration(arguments_) {
     users: integer("users", smoke ? Math.min(scenarios[name].users, 2) : scenarios[name].users, 1, 5000),
     devices: integer("devices", smoke ? Math.min(scenarios[name].devices, 2) : scenarios[name].devices, 1, 100),
   }));
+  // --shard I/N: this process drives users whose position in the fixture is congruent to I modulo N and
+  // offers its share of --rate. The shards of one run are combined with bench/merge.mjs.
+  let shard = null;
+  if (values.shard !== undefined) {
+    const match = /^(\d+)\/(\d+)$/.exec(values.shard);
+    const [index, count] = match ? [Number(match[1]), Number(match[2])] : [NaN, NaN];
+    if (!match || count < 2 || count > 64 || index >= count) throw new Error("shard must be I/N with 0 <= I < N <= 64 and N >= 2");
+    shard = { index, count };
+  }
   const config = {
-    target, profile, sessions, scenarios: selectedScenarios,
+    target, profile, sessions, scenarios: selectedScenarios, shard,
+    startAt: integer("start-at", 0, 0, Number.MAX_SAFE_INTEGER),
     endpoint: values.endpoint,
     fixtures: values.fixtures,
     out: values.out,
@@ -94,6 +104,8 @@ Options:
   --concurrency N --timeout-ms N --interval-ms N --idle-ms N --delay-ms N
   --duration-ms N --rate N --settle-ms N    soak: paced global writes/s; no catch-up bursts
   --sessions shared|device       shared token per user, or independent writer/device sessions
+  --shard I/N --start-at EPOCH_MS  drive one of N generator processes; all shards wait for the same start time
+                                   (use scripts in bench/fair; combine results with bench/merge.mjs)
   --repeats N --label TEXT --out DIRECTORY --keep-data
   --app-pid PID --app-worker-pid PID --database-pid PID --port N --startup-timeout-ms N
 Local runs use dedicated benchmark data. Results contain no session or service tokens.

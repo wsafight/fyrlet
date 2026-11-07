@@ -295,7 +295,8 @@ defmodule Fyrlet.Runtime do
                   input,
                   specification,
                   key,
-                  input_hash
+                  input_hash,
+                  nested
                 )
               else
                 if cached.input_hash == input_hash,
@@ -314,14 +315,21 @@ defmodule Fyrlet.Runtime do
                 input,
                 specification,
                 key,
-                input_hash
+                input_hash,
+                nested
               )
           end
         end)
 
       case result do
         {:ok, {data, job}} ->
-          if job && not nested, do: notify_after_commit(job)
+          cond do
+            is_nil(job) -> :ok
+            not nested -> notify_after_commit(job)
+            transient?(job) -> Fyrlet.AfterCommit.broadcast_later(job)
+            true -> :ok
+          end
+
           {:ok, data}
 
         {:error, error} ->
@@ -330,7 +338,7 @@ defmodule Fyrlet.Runtime do
     end
   end
 
-  defp execute_write(module, name, actor, input, specification, key, input_hash) do
+  defp execute_write(module, name, actor, input, specification, key, input_hash, nested) do
     {data, scopes} =
       if specification["kind"] == "run" do
         Fyrlet.Runs.create(module, name, actor, input, specification)
@@ -356,10 +364,7 @@ defmodule Fyrlet.Runtime do
 
     job =
       if scopes != [] do
-        %{"scopes" => Enum.uniq(scopes), "project_id" => actor.project_id}
-        |> Fyrlet.InvalidationWorker.new()
-        |> Oban.insert()
-        |> unwrap!()
+        invalidation_job(Enum.uniq(scopes), actor.project_id, nested)
       end
 
     change =
@@ -379,13 +384,36 @@ defmodule Fyrlet.Runtime do
     {checked, if(job, do: {job, change})}
   end
 
+  # With `durable_invalidation: true` every write persists a fallback job in its transaction, which
+  # re-broadcasts if the node dies between commit and broadcast. Without it the broadcast is sent
+  # right after commit and a lost one is recovered by the periodic reconciliation of each subscription.
+  # The job costs about five statements per write (insert, insert notice, fetch, completion).
+  #
+  # A write nested in someone else's transaction can only skip the job when that transaction is a
+  # `Fyrlet.Transaction`, whose commit flushes the pending broadcast. In a plain `Repo.transaction`
+  # nothing would ever broadcast, so the job stays the only notice.
+  defp invalidation_job(scopes, project_id, nested) do
+    if Application.get_env(:fyrlet, :durable_invalidation, false) or
+         (nested and not Fyrlet.Transaction.managed?()) do
+      %{"scopes" => scopes, "project_id" => project_id}
+      |> Fyrlet.InvalidationWorker.new()
+      |> Oban.insert()
+      |> unwrap!()
+    else
+      Fyrlet.InvalidationWorker.transient(scopes, project_id)
+    end
+  end
+
+  defp transient?({%Oban.Job{id: id}, _change}), do: id < 0
+
   defp notify_after_commit({job, change}) do
     Fyrlet.InvalidationWorker.broadcast(job, change)
   rescue
-    _error -> Logger.warning("Immediate invalidation failed; the durable job will retry")
+    _error ->
+      Logger.warning("Immediate invalidation failed; durable job or reconciliation will catch up")
   catch
     _kind, _reason ->
-      Logger.warning("Immediate invalidation failed; the durable job will retry")
+      Logger.warning("Immediate invalidation failed; durable job or reconciliation will catch up")
   end
 
   defp subscription_view(actor, subscription, previous, change) do

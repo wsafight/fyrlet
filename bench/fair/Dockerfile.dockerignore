@@ -1,0 +1,12 @@
+**/_build
+**/deps
+**/node_modules
+.local
+sdks
+bench
+.git
+packages
+test
+docs
+examples/notify
+examples/flow

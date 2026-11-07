@@ -30,6 +30,7 @@ project 输出文件权限为 0600，已有文件会拒绝覆盖。prune 可由�
 每次写入都会产生一行幂等结果（含完整返回值）和一条 Oban 兜底作业。按 500 writes/s 粗估（在小表上实测每行约 1 KB，含索引，实际会有出入）：幂等结果保留 24 小时时稳态约 4300 万行、约 40 GB；Oban 作业保留 1 小时约 180 万行。请按业务的重试窗口选择保留期：
 
 - `idempotency_ttl`（秒，默认 86400）或环境变量 `FYRLET_IDEMPOTENCY_TTL_SECONDS`：幂等结果保留时长，等于客户端可安全重试同一个 Idempotency-Key 的窗口。缩短它会缩小表，但超过窗口的重试会被当成新请求重新执行。
+- `durable_invalidation`（默认 `false`）或环境变量 `FYRLET_DURABLE_INVALIDATION=true`：每次 Operation 写入是否在事务内持久化一个兜底失效作业。关闭时，提交后立即广播，每次写入少约五条语句（插入、插入通知、取作业、完成更新）。取舍：节点在提交之后、广播之前崩溃时没有作业补发，订阅者在下一次周期对账（`reconciliation_interval`，默认 30 秒）时追上。更看重这个窗口而不是写入吞吐时再开启。通过 `Fyrlet.AfterCommit` 触发的失效（例如 Runs）始终是持久的，嵌套在普通 `Repo.transaction` 里的写入也是（改用 `Fyrlet.Transaction.run/1` 才能走更便宜的路径）。
 - 过期幂等结果和过期超过 24 小时的会话由 `Fyrlet.PruneWorker` 每 10 分钟分批清理（每批 5000 行）；`mix fyrlet.prune` 仍可手动执行。
 - Oban 已完成作业由 `pruner` 清理：保留 1 小时、每 10 秒最多删 50000 条。Oban 默认每 30 秒最多删 10000 条，持续写入超过约 333 次/秒时清理会跟不上，所以这里调高了。
 - `POOL_SIZE` 设置数据库连接池大小（默认 10，范围 1–10000）。写入事务会在整个事务期间占用连接。实测（800 writes/s、应用 1 vCPU、各 6 次）10 与 30 的完成写入、CPU、P95 没有可测差别，见 [OPTIMIZATIONS.md](OPTIMIZATIONS.md) 的“连接池大小”一节；更高写入速率或更慢的数据库下是否变化没有测，出现连接排队时再调大。

@@ -9,6 +9,9 @@ defmodule Fyrlet.Transaction do
   alias Fyrlet.{AfterCommit, Repo}
   @owner :fyrlet_transaction_owner
 
+  @doc "True inside `run/1`, whose commit flushes `Fyrlet.AfterCommit`."
+  def managed?, do: Process.get(@owner) == true
+
   def run(callback) when is_function(callback, 0) do
     if Process.get(@owner) do
       callback.()

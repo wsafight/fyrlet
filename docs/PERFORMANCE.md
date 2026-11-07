@@ -51,6 +51,8 @@ Reading:
 
 ### Why higher rates were not tested
 
+*Update (sharded generator):* the generator can now be split across processes (`GENERATORS=N`, see [`bench/fair/`](../bench/fair/README.md)). In one pair of runs at 1000 writes/s, 1 vCPU, a single generator process dropped 5204 of 20000 ticks itself, while 4 shards dropped 271, so the generator is no longer the first limit at this rate. This does **not** establish the server's capacity: repeated runs of the same 4-shard configuration completed anywhere from 70% to 99% of the offered writes (13.9k/20k, 26.9k/30k, 28.1k/30k, 19.9k/20k), and 1000 writes/s sits at the edge of what one vCPU sustains. Capacity needs a rate sweep with at least 3 alternating repetitions per point. The rest of this section describes the earlier single-generator runs.
+
 When the target rate was raised to 900 and 1300 writes/s, it was the **load generator** (single-threaded Node) that first dropped ticks (`generatorDropped`), while Fyrlet's cgroup throttling was 0. Under the rules in FAIRNESS.md, a point where the generator drops ticks cannot demonstrate the server's capacity limit, so this comparison cannot give Fyrlet's capacity limit.
 
 ## Conditions that are not aligned
@@ -73,7 +75,7 @@ The remaining candidates on the write path (merging the session check with the a
 
 ## Reproduction and current state
 
-The Dockerfile and run scripts used for the comparison currently exist only in `.local/fair/` on the local machine, contain local absolute paths and a temporary `docker` wrapper script, and **have not yet been turned into a reusable tool**. Reproduction requires:
+The **Fyrlet side** is now reproducible with the scripts in [`bench/fair/`](../bench/fair/README.md) (limited PostgreSQL, release image, single run, A B B A alternation, sharded generator). The **Meteor side** (Dockerfile, MongoDB replica set, runner) still exists only in `.local/fair/` on the local machine with local absolute paths, and has not been turned into a reusable tool. The original reproduction steps were:
 
 1. Build the Fyrlet image with `mix release` (the runtime layer must match the build layer's glibc version; this run used `debian:trixie-slim`); build the Meteor bundle with `meteor build --server-only --architecture os.linux.aarch64` and put it into `node:24.22.1`.
 2. In a Linux virtual machine, start the application, database and generator containers with `--cpus`, `--memory`, `--memory-swap` and `--cpuset-cpus`, and raise the file descriptor limit to 65536.

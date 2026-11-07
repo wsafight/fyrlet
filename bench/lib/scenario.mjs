@@ -29,6 +29,11 @@ export async function runScenario(adapter, fixture, config, scenario, repetition
   let paced;
   let setupDurationMs;
   const runtimeStats = {};
+  // With --shard I/N this process drives every N-th user and its proportional share of the offered rate.
+  const shard = config.shard ?? { index: 0, count: 1 };
+  const shardUsers = fixture.users.slice(0, scenario.users).filter((_user, position) => position % shard.count === shard.index);
+  const shardRate = Math.floor(config.rate / shard.count) + (shard.index < config.rate % shard.count ? 1 : 0);
+  if (!shardUsers.length || !shardRate) throw new Error("Shard has no users or no share of the rate; use fewer shards");
   const setupStarted = performance.now();
   const windowAt = (time) => {
     const index = Math.floor((time - measurementStarted) / 10000);
@@ -125,7 +130,7 @@ export async function runScenario(adapter, fixture, config, scenario, repetition
   };
   try {
     setupSampler = await resourceSampler(config);
-    await pool(fixture.users.slice(0, scenario.users), config.concurrency, async (user) => {
+    await pool(shardUsers, config.concurrency, async (user) => {
       const writer = await openActor(user, false);
       const observers = await pool(Array.from({ length: scenario.devices }), config.concurrency, (_unused, index) =>
         openActor(config.sessions === "device" ? { ...user, token: user.observer_tokens[index] } : user, true));
@@ -147,10 +152,15 @@ export async function runScenario(adapter, fixture, config, scenario, repetition
     }
     if (scenario.name === "slow") for (const group of groups) group.observers.at(-1).network.slow(config.delayMs);
     for (const actor of actors) actor.network.reset();
+    if (config.startAt) {
+      const wait = config.startAt - Date.now();
+      if (wait < 0) throw new Error(`Setup finished ${-wait} ms after --start-at; use a later start time`);
+      await delay(wait, undefined, { signal: config.signal });
+    }
     sampler = await resourceSampler(config);
     measurementStarted = performance.now();
     if (scenario.mode === "paced") {
-      paced = await pacedLoad({ items: groups, rate: config.rate, durationMs: config.durationMs,
+      paced = await pacedLoad({ items: groups, rate: shardRate, durationMs: config.durationMs,
         concurrency: config.concurrency, signal: config.signal, task: (group) => update(group, true, true) });
     } else if (scenario.mode === "idle") await delay(config.idleMs, undefined, { signal: config.signal });
     else if (scenario.mode === "reconnect") {
@@ -227,8 +237,9 @@ export async function runScenario(adapter, fixture, config, scenario, repetition
     ...result, measurementValidity, completedWrites, expectedDeliveries, observedDeliveries: propagation.count,
     unobservedIntermediateDeliveries: expectedDeliveries - propagation.count,
     deliveryCoverage: expectedDeliveries ? propagation.count / expectedDeliveries : null,
-    connections: { writers: scenario.users, observers: scenario.users * scenario.devices,
-      total: scenario.users * (scenario.devices + 1), opened: actors.length },
+    connections: { writers: shardUsers.length, observers: shardUsers.length * scenario.devices,
+      total: shardUsers.length * (scenario.devices + 1), opened: actors.length },
+    shard: config.shard,
     setupDurationMs, setupResources, postCloseResources, runtimeStats, pacedLoad: paced,
     windows: [...windows.values()].sort((left, right) => left.index - right.index).map((window) => ({
       index: window.index, startedAtMs: window.index * 10000,

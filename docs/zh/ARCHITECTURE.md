@@ -31,7 +31,7 @@ Fyrlet 的中心抽象是：
 
 `Fyrlet.Definition` 保留统一的应用接入行为，按能力说明可选回调。`Fyrlet.Definition.Validation` 负责启动时的契约与能力校验，`Fyrlet.Registry` 负责索引、查找和导出。共享订阅与 Run 都通过 `Fyrlet.Definition.current_version/2` 读取定义版本，共享订阅不依赖 Run 的实现解析器。
 
-通用事务边界由 `Fyrlet.Transaction` 与 `Fyrlet.AfterCommit` 管理。失效任务在事务内持久化，立即广播与遥测在最外层受管事务提交后释放；回滚时清理待处理内容。`Fyrlet.Runs.Notify` 只组织 Run 的通知范围并委托基础层处理，基础事务不依赖 Run 模块。
+通用事务边界由 `Fyrlet.Transaction` 与 `Fyrlet.AfterCommit` 管理。经 `AfterCommit` 触发的失效任务在事务内持久化；Operation 写入路径仅在 `durable_invalidation: true` 时这样做（见 [OPERATIONS.md](OPERATIONS.md)）。立即广播与遥测在最外层受管事务提交后释放；回滚时清理待处理内容。`Fyrlet.Runs.Notify` 只组织 Run 的通知范围并委托基础层处理，基础事务不依赖 Run 模块。
 
 TypeScript SDK 的 `client.ts` 管理身份、连接和通道生命周期，`requests.ts` 管理请求时限、取消和一次认证刷新，`subscription.ts` 管理快照、增量、追加、Presence 与乐观更新的状态。订阅状态处理返回 ACK、刷新或重连请求，由客户端执行网络操作。
 
