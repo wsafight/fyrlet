@@ -1,8 +1,8 @@
-# 运维与容量
+# Operations and capacity
 
-部署、配置项与环境变量见 [INSTALL.md](INSTALL.md)。本文覆盖运维入口、容量与保留、配额、可观测性、故障恢复和多节点部署。
+For deployment, configuration options and environment variables see [INSTALL.md](INSTALL.md). This document covers operations entry points, capacity and retention, quotas, observability, failure recovery and multi-node deployment.
 
-## 运维命令
+## Operations commands
 
 ```sh
 mix fyrlet.project --output .local/project.json "My App"
@@ -11,28 +11,28 @@ mix fyrlet.revoke_key KEY_ID
 mix fyrlet.prune
 ```
 
-project 输出文件权限为 0600，已有文件会拒绝覆盖。prune 可由部署环境定时执行。密钥管理命令属于受信任控制面，目前不开放 HTTP 管理项目或密钥接口。
+The project output file has permissions 0600, and an existing file is refused rather than overwritten. prune can be run on a schedule by the deployment environment. Key management commands belong to the trusted control plane; no HTTP interface for managing projects or keys is currently exposed.
 
-当前配置中的关键限制包括 max_subscriptions、max_snapshot_bytes、max_channel_queue（当前检查 Observer 邮箱）、snapshot_ack_timeout、reconciliation_interval、socket_batch_max_messages、socket_batch_max_bytes、idempotency_ttl。单个数据库语句超时由 Repo 的 PostgreSQL statement_timeout 控制；任意 Elixir CPU 任务没有通用强制隔离超时，业务回调应保持短小。
+The key limits in the current configuration include max_subscriptions, max_snapshot_bytes, max_channel_queue (currently checked against the Observer mailbox), snapshot_ack_timeout, reconciliation_interval, socket_batch_max_messages, socket_batch_max_bytes and idempotency_ttl. The timeout of a single database statement is controlled by the PostgreSQL statement_timeout of the Repo; there is no general enforced isolation timeout for arbitrary Elixir CPU tasks, so business callbacks should stay short.
 
-- `mix fyrlet.runs`：停滞的运行；`mix fyrlet.effects`：未知、等待人工或超期未派发的副作用；`mix fyrlet.plugins`：插件、能力与迁移状态。
-- 恢复扫描器（`Fyrlet.Runs.Recovery`）修复过期租约、漏发的唤醒、等待超时、取消期限、运行到期、授权失效、定义缺失；它只看数据库，不依赖进程存活或一次通知。启用 `runs` 能力时自动随应用启动。
-- 清理任务（每 10 分钟）会删除过期幂等记录、过期会话、过期匿名主体、超期的终态运行和 webhook 去重记录；**不会**删除活跃运行、仍有未决副作用的运行及其必要事实。
+- `mix fyrlet.runs`: stalled runs; `mix fyrlet.effects`: side effects that are unknown, awaiting manual action, or overdue for dispatch; `mix fyrlet.plugins`: plugin, capability and migration status.
+- The recovery scanner (`Fyrlet.Runs.Recovery`) repairs expired leases, missed wake-ups, wait timeouts, cancellation deadlines, run expiry, authorization revocation and missing definitions; it reads only the database and does not depend on a process being alive or on a single notification. It starts automatically with the application when the `runs` capability is enabled.
+- The cleanup job (every 10 minutes) deletes expired idempotency records, expired sessions, expired anonymous principals, terminal runs past their retention period, and webhook deduplication records; it **does not** delete active runs, runs that still have pending side effects, or their necessary facts.
 
-## 数据保留与容量
+## Data retention and capacity
 
-各表由谁清理、保留多久见 [DATABASE.md](DATABASE.md#清理与保留)；摄取数据的保留期可按项目设置，见[按项目配置保留期](DATABASE.md#按项目配置保留期)。
+For which job cleans each table and how long rows are kept, see [DATABASE.md](DATABASE.md#cleanup-and-retention); the retention period of ingested data can be set per project, see [Per-project retention](DATABASE.md#per-project-retention).
 
-每次写入都会产生一行幂等结果（含完整返回值）和一条 Oban 兜底作业。按 500 writes/s 粗估（在小表上实测每行约 1 KB，含索引，实际会有出入）：幂等结果保留 24 小时时稳态约 4300 万行、约 40 GB；Oban 作业保留 1 小时约 180 万行。请按业务的重试窗口选择保留期：
+Every write produces one idempotency result row (including the complete return value) and one Oban fallback job. At a rough 500 writes/s (measured on a small table at about 1 KB per row including indexes; actual numbers will differ): with idempotency results kept for 24 hours the steady state is about 43 million rows and about 40 GB; with Oban jobs kept for 1 hour it is about 1.8 million rows. Choose the retention period according to the retry window of your application:
 
-- `idempotency_ttl`（秒，默认 86400）或环境变量 `FYRLET_IDEMPOTENCY_TTL_SECONDS`：幂等结果保留时长，等于客户端可安全重试同一个 Idempotency-Key 的窗口。缩短它会缩小表，但超过窗口的重试会被当成新请求重新执行。
-- 过期幂等结果和过期超过 24 小时的会话由 `Fyrlet.PruneWorker` 每 10 分钟分批清理（每批 5000 行）；`mix fyrlet.prune` 仍可手动执行。
-- Oban 已完成作业由 `pruner` 清理：保留 1 小时、每 10 秒最多删 50000 条。Oban 默认每 30 秒最多删 10000 条，持续写入超过约 333 次/秒时清理会跟不上，所以这里调高了。
-- `POOL_SIZE` 设置数据库连接池大小（默认 10，范围 1–10000）。写入事务会在整个事务期间占用连接。实测（800 writes/s、应用 1 vCPU、各 6 次）10 与 30 的完成写入、CPU、P95 没有可测差别，见 [OPTIMIZATIONS.md](OPTIMIZATIONS.md) 的“连接池大小”一节；更高写入速率或更慢的数据库下是否变化没有测，出现连接排队时再调大。
+- `idempotency_ttl` (seconds, default 86400) or the environment variable `FYRLET_IDEMPOTENCY_TTL_SECONDS`: how long idempotency results are kept, which equals the window in which a client can safely retry the same Idempotency-Key. Shortening it shrinks the table, but a retry beyond the window is treated as a new request and executed again.
+- Expired idempotency results and sessions expired for more than 24 hours are cleaned in batches (5000 rows per batch) by `Fyrlet.PruneWorker` every 10 minutes; `mix fyrlet.prune` can still be run manually.
+- Completed Oban jobs are cleaned by the `pruner`: kept for 1 hour, at most 50000 deleted every 10 seconds. Oban's default is at most 10000 deleted every 30 seconds, so cleanup cannot keep up once sustained writes exceed about 333 per second; this is why the value was raised here.
+- `POOL_SIZE` sets the database connection pool size (default 10, range 1–10000). A write transaction holds a connection for the entire transaction. Measured (800 writes/s, application at 1 vCPU, 6 runs each), 10 and 30 showed no measurable difference in completed writes, CPU or P95; see the “Connection pool size” section of [OPTIMIZATIONS.md](OPTIMIZATIONS.md). Whether this changes at higher write rates or with a slower database was not tested; increase it when connection queuing appears.
 
-## 项目配额（`Fyrlet.Quota`）
+## Project quotas (`Fyrlet.Quota`)
 
-按项目限制操作调用速率和同时打开的订阅数。**默认不限制**，不配置时行为与之前完全一致。
+Limits the operation call rate and the number of simultaneously open subscriptions per project. **Unlimited by default**; when not configured, behavior is exactly as before.
 
 ```elixir
 config :fyrlet,
@@ -42,124 +42,124 @@ config :fyrlet,
   ]
 ```
 
-- 键为 `reads_per_second`、`writes_per_second`、`max_subscriptions`，值为 `nil`（不限）或正整数；项目条目按键覆盖默认值。拼写错误、非正数会让应用启动失败。
-- 默认值也可由环境变量给出：`FYRLET_PROJECT_READS_PER_SECOND`、`FYRLET_PROJECT_WRITES_PER_SECOND`、`FYRLET_PROJECT_MAX_SUBSCRIPTIONS`（范围 1–1000000）。按项目的覆盖只能写在应用配置里。
-- **读写分开计数**：`kind: "read"` 的操作算读，写入、Run、摄取算写。检查发生在派发之前，所以超限的调用不会校验输入、不会占用数据库连接，也不会产生幂等记录。
-- 超限返回 HTTP 429、`LIMIT_EXCEEDED`、`retryable: true`，`details` 带 `scope`、`class`、`limit` 和 `retry_after_ms`；HTTP 响应同时带 `Retry-After`（秒，向上取整）。被拒绝的调用同样计数，所以无视提示的客户端会一直被拒绝。每次拒绝发出 `[:fyrlet, :quota, :rejected]` 遥测事件（metadata 含 `project_id`、`class`）。
-- 订阅上限由 `Tracker` 计数，与每连接上限（`max_subscriptions`）叠加；达到项目上限时返回不可重试的 `LIMIT_EXCEEDED`，关闭订阅后立即释放。
+- The keys are `reads_per_second`, `writes_per_second` and `max_subscriptions`; values are `nil` (unlimited) or a positive integer; a project entry overrides the default key by key. A misspelled key or a non-positive number makes the application fail to start.
+- Defaults can also be given through environment variables: `FYRLET_PROJECT_READS_PER_SECOND`, `FYRLET_PROJECT_WRITES_PER_SECOND`, `FYRLET_PROJECT_MAX_SUBSCRIPTIONS` (range 1–1000000). Per-project overrides can only be written in the application configuration.
+- **Reads and writes are counted separately**: operations with `kind: "read"` count as reads; writes, Runs and ingestion count as writes. The check happens before dispatch, so a call over the limit does not validate input, does not occupy a database connection and does not produce an idempotency record.
+- Exceeding a limit returns HTTP 429, `LIMIT_EXCEEDED`, `retryable: true`, with `details` carrying `scope`, `class`, `limit` and `retry_after_ms`; the HTTP response also carries `Retry-After` (seconds, rounded up). Rejected calls are counted too, so a client that ignores the hint keeps being rejected. Each rejection emits a `[:fyrlet, :quota, :rejected]` telemetry event (metadata includes `project_id` and `class`).
+- The subscription limit is counted by the `Tracker` and stacks with the per-connection limit (`max_subscriptions`); reaching the project limit returns a non-retryable `LIMIT_EXCEEDED`, and the slot is released immediately when a subscription is closed.
 
-**限制，请按需评估：**
+**Limitations, evaluate as needed:**
 
-- 速率按**一秒固定窗口**计数。客户端在一秒末尾和下一秒开头各发满额度，这两秒交界处最多通过两倍额度；任意完整的一秒内不会超过上限。
-- 所有计数都是**单节点内**的。多节点部署时，一个项目在每个节点上各有一份额度，总额度约为节点数乘以上限。
-- 没有对读取订阅快照的字节量、Run 之外的存储量做限制。
+- Rates are counted in a **fixed one-second window**. If a client sends its full allowance at the end of one second and again at the start of the next, up to twice the allowance passes across that boundary; within any complete second the limit is not exceeded.
+- All counts are **within a single node**. In a multi-node deployment a project has its own allowance on each node, so the total allowance is about the number of nodes times the limit.
+- There is no limit on the byte size of read subscription snapshots, nor on storage outside Runs.
 
-## 可观测性
+## Observability
 
-### 遥测事件
+### Telemetry events
 
-Telemetry 事件包括 fyrlet.operation.stop、fyrlet.subscription.query、fyrlet.subscription.snapshot、fyrlet.subscription.delta 和 fyrlet.subscription.count，另有 Ecto / Oban 自身事件。duration 为 monotonic native 单位，snapshot 的 bytes 为完整数据 JSON 字节，delta 的 bytes 为 patch JSON 字节（不含事件外壳），active 为当前本节点订阅数。默认关闭 Phoenix 连接参数及 channel 参数日志，业务异常只记录异常类型，客户端得到统一错误。
+Telemetry events include fyrlet.operation.stop, fyrlet.subscription.query, fyrlet.subscription.snapshot, fyrlet.subscription.delta and fyrlet.subscription.count, plus the events of Ecto / Oban themselves. duration is in monotonic native units, bytes for a snapshot is the JSON byte size of the complete data, bytes for a delta is the JSON byte size of the patch (excluding the event envelope), and active is the number of subscriptions currently on this node. Logging of Phoenix connection parameters and channel parameters is off by default, business exceptions are logged by exception type only, and the client receives a uniform error.
 
-fyrlet.auth.batch 事件包含 duration、requests（本批请求数）与 sessions（去重后会话数），metadata.result 表示查询成功或失败。fyrlet.transport.batch 包含 messages 与 bytes（被聚合的 Phoenix 帧字节之和，不含 batch 外壳）。默认 Phoenix JSON serializer 配合 Jason 时，快照和 delta 可复用 Observer 已编码的 JSON；其他 serializer 或 JSON 库保留普通数据推送路径。
+The fyrlet.auth.batch event contains duration, requests (number of requests in the batch) and sessions (number of sessions after deduplication); metadata.result indicates whether the query succeeded or failed. fyrlet.transport.batch contains messages and bytes (the sum of the bytes of the aggregated Phoenix frames, excluding the batch envelope). With the default Phoenix JSON serializer and Jason, snapshots and deltas can reuse the JSON already encoded by the Observer; other serializers or JSON libraries keep the ordinary data push path.
 
-Run、Effect 与插件的事件：
+Events for Runs, Effects and plugins:
 
-| 事件 | 关键字段 |
+| Event | Key fields |
 | --- | --- |
-| `fyrlet.run.stop` | operation、status、duration、steps |
-| `fyrlet.run.step` | name、status、attempt、duration |
-| `fyrlet.run.recovery` | reason、expired_leases、rescheduled、stale_results |
-| `fyrlet.run.signal` | accepted / consumed / duplicate / rejected、wait_age |
-| `fyrlet.run.cancel` | confirmed / fenced_timeout、duration |
-| `fyrlet.effect.stop` | adapter、status、attempt、unknown |
-| `fyrlet.effect.reconcile` | adapter、age、outcome、resolution_required |
-| `fyrlet.run.queue` | 队列年龄（最老待领取 Step）、排队数、按项目聚合的并发占用 |
-| `fyrlet.run.wait` | 超期未到达信号的等待节点数、`definition_unavailable` 数量 |
-| `fyrlet.delta.snapshot_fallback` | name、reason（gap / overflow / refresh） |
-| `fyrlet.scope.shared` | members，元数据 name、mode |
-| `fyrlet.subscription.serialize` | 快照数据实际编码的 duration、bytes，元数据 name、mode；不含每连接的协议封套编码 |
+| `fyrlet.run.stop` | operation, status, duration, steps |
+| `fyrlet.run.step` | name, status, attempt, duration |
+| `fyrlet.run.recovery` | reason, expired_leases, rescheduled, stale_results |
+| `fyrlet.run.signal` | accepted / consumed / duplicate / rejected, wait_age |
+| `fyrlet.run.cancel` | confirmed / fenced_timeout, duration |
+| `fyrlet.effect.stop` | adapter, status, attempt, unknown |
+| `fyrlet.effect.reconcile` | adapter, age, outcome, resolution_required |
+| `fyrlet.run.queue` | queue age (oldest Step awaiting claim), queued count, concurrency in use aggregated per project |
+| `fyrlet.run.wait` | number of wait nodes whose signal is overdue, `definition_unavailable` count |
+| `fyrlet.delta.snapshot_fallback` | name, reason (gap / overflow / refresh) |
+| `fyrlet.scope.shared` | members, metadata name, mode |
+| `fyrlet.subscription.serialize` | duration and bytes of the actual snapshot data encoding, metadata name, mode; excludes the per-connection protocol envelope encoding |
 
-另有 `fyrlet.subscription.append`（追加批次的字节与条目数）、`fyrlet.ops.status`（`alerts`、`stuck_runs`、`queue_age_seconds`、`unresolved_effects`）和 `fyrlet.ops.alert`（`firing` 1/0，元数据 `name`、`severity`）。`fyrlet_ops` 的告警只在状态转换时通知（`FyrletOps.AlertHandler`），告警内容不含 Run/Effect ID。`fyrlet.run.queue` 在恢复扫描时按全局和单项目最大租约数发出，不含 Run ID 之类的高基数标签。
+There are also `fyrlet.subscription.append` (bytes and item count of an append batch), `fyrlet.ops.status` (`alerts`, `stuck_runs`, `queue_age_seconds`, `unresolved_effects`) and `fyrlet.ops.alert` (`firing` 1/0, metadata `name`, `severity`). `fyrlet_ops` alerts notify only on state transitions (`FyrletOps.AlertHandler`), and the alert content does not include Run/Effect IDs. `fyrlet.run.queue` is emitted during the recovery scan according to the global and per-project maximum lease counts, and carries no high-cardinality labels such as Run IDs.
 
-必须能定位：Run 停在哪个 Step、副作用处于哪个状态、追加订阅是否发生过快照回退。
+It must be possible to locate: which Step a Run is stopped at, what state a side effect is in, and whether an append subscription has ever fallen back to a snapshot.
 
-### Prometheus 指标（`Fyrlet.Metrics`）
+### Prometheus metrics (`Fyrlet.Metrics`)
 
-`GET /metrics` 输出 Prometheus 文本格式。**默认关闭**：只有配置了令牌才会启动、记录并开放该路由（`config :fyrlet, metrics: [token: "…"]` 或环境变量 `FYRLET_METRICS_TOKEN`，至少 16 字节，否则启动失败）。抓取时带 `Authorization: Bearer <token>`，令牌用常量时间比较；未启用、缺令牌、令牌错误都返回同样的 404，不泄露端点是否存在。路由和业务端口相同，生产环境请再用网关限制来源。
+`GET /metrics` outputs the Prometheus text format. **Off by default**: the route is started, recorded and exposed only when a token is configured (`config :fyrlet, metrics: [token: "…"]` or the environment variable `FYRLET_METRICS_TOKEN`, at least 16 bytes, otherwise startup fails). Scrape with `Authorization: Bearer <token>`; the token is compared in constant time; when not enabled, or the token is missing or wrong, the same 404 is returned, so the existence of the endpoint is not disclosed. The route shares the business port, so in production also restrict the source with a gateway.
 
-记录方式是在发出事件的进程里做一次 ETS 原子更新，没有消息、没有锁。计数都是**单节点内**的，由 Prometheus 跨节点求和。**标签有界**：操作名只在契约里注册过才使用，否则记为 `_unknown`（`operation.stop` 的名字来自客户端请求，不做限制会被随机名撑爆内存）；没有项目或用户标签。
+Recording is a single atomic ETS update in the process that emits the event, with no messages and no locks. All counts are **within a single node** and are summed across nodes by Prometheus. **Labels are bounded**: an operation name is used only if it is registered in the contract, otherwise it is recorded as `_unknown` (the name in `operation.stop` comes from the client request, and without this limit random names would exhaust memory); there are no project or user labels.
 
-| 指标 | 类型 | 说明 |
+| Metric | Type | Description |
 | --- | --- | --- |
-| `fyrlet_operations_total{name,result}` | counter | 操作调用 |
-| `fyrlet_operation_duration_seconds{name}` | histogram | 操作耗时 |
-| `fyrlet_subscription_queries_total{name,result}`、`…_query_duration_seconds{name}` | counter / histogram | 订阅取数 |
-| `fyrlet_snapshots_total`、`fyrlet_snapshot_bytes_total`、`fyrlet_deltas_total`、`fyrlet_delta_bytes_total`（`{name}`） | counter | 下发的快照与增量 |
-| `fyrlet_append_batches_total`、`fyrlet_append_items_total`（`{name}`） | counter | 追加批次 |
-| `fyrlet_snapshot_serializations_total{name,mode}` | counter | Observer 完整快照编码次数 |
-| `fyrlet_snapshot_fallbacks_total{name}` | counter | 回退为完整快照 |
-| `fyrlet_subscriptions_active` | gauge | 本节点打开的订阅数 |
-| `fyrlet_observers` | gauge | 本节点运行的 Observer 数 |
-| `fyrlet_session_check_batch_size`、`…_duration_seconds` | histogram | 批量会话检查的批大小与耗时 |
-| `fyrlet_transport_batches_total`、`fyrlet_transport_batched_messages_total` | counter | Socket 多帧批处理 |
-| `fyrlet_quota_rejected_total{class}` | counter | 项目配额拒绝 |
-| `fyrlet_db_queue_seconds`、`fyrlet_db_query_seconds` | histogram | 数据库连接池排队与查询耗时 |
-| `fyrlet_vm_processes`、`fyrlet_vm_memory_bytes`、`fyrlet_vm_run_queue` | gauge | BEAM 状态 |
+| `fyrlet_operations_total{name,result}` | counter | Operation calls |
+| `fyrlet_operation_duration_seconds{name}` | histogram | Operation duration |
+| `fyrlet_subscription_queries_total{name,result}`, `…_query_duration_seconds{name}` | counter / histogram | Subscription data fetches |
+| `fyrlet_snapshots_total`, `fyrlet_snapshot_bytes_total`, `fyrlet_deltas_total`, `fyrlet_delta_bytes_total` (`{name}`) | counter | Snapshots and deltas delivered |
+| `fyrlet_append_batches_total`, `fyrlet_append_items_total` (`{name}`) | counter | Append batches |
+| `fyrlet_snapshot_serializations_total{name,mode}` | counter | Number of complete snapshot encodings by the Observer |
+| `fyrlet_snapshot_fallbacks_total{name}` | counter | Fallbacks to a complete snapshot |
+| `fyrlet_subscriptions_active` | gauge | Subscriptions open on this node |
+| `fyrlet_observers` | gauge | Observers running on this node |
+| `fyrlet_session_check_batch_size`, `…_duration_seconds` | histogram | Batch size and duration of batched session checks |
+| `fyrlet_transport_batches_total`, `fyrlet_transport_batched_messages_total` | counter | Socket multi-frame batching |
+| `fyrlet_quota_rejected_total{class}` | counter | Project quota rejections |
+| `fyrlet_db_queue_seconds`, `fyrlet_db_query_seconds` | histogram | Database connection pool queue time and query time |
+| `fyrlet_vm_processes`, `fyrlet_vm_memory_bytes`, `fyrlet_vm_run_queue` | gauge | BEAM state |
 
-建议关注的信号（阈值需按自己的负载定，这里没有经过验证的默认值）：
+Signals worth watching (thresholds must be set for your own load; there are no verified defaults here):
 
-- `fyrlet_db_queue_seconds` 的高分位上升：连接池不够用，才是调大 `POOL_SIZE` 的依据。
-- `fyrlet_session_check_batch_size` 长期为 1：批处理没有生效，会话检查在逐个发往数据库。
-- `fyrlet_snapshot_fallbacks_total` 增长：增量协商失败或窗口溢出，下行流量会变大。
-- `fyrlet_quota_rejected_total` 增长：某个项目在撞配额，需要调额度或排查客户端。
-- `fyrlet_vm_run_queue` 持续大于 0：调度器饱和。
+- A rising high percentile of `fyrlet_db_queue_seconds`: the connection pool is insufficient; this, not guesswork, is the basis for increasing `POOL_SIZE`.
+- `fyrlet_session_check_batch_size` staying at 1: batching is not taking effect, and session checks are going to the database one by one.
+- `fyrlet_snapshot_fallbacks_total` growing: delta negotiation failed or the window overflowed, and downstream traffic will grow.
+- `fyrlet_quota_rejected_total` growing: a project is hitting its quota; adjust the quota or investigate the client.
+- `fyrlet_vm_run_queue` staying above 0: the schedulers are saturated.
 
-## 运行限额与数据保护
+## Run limits and data protection
 
-均可用 `config :fyrlet, runs: […]` 覆盖：单运行节点数 50、节点输入输出与信号负载 64 KiB、单步骤尝试 3 次、租约 60 秒、恢复扫描 30 秒、运行默认有效期 7 天（最长 30 天）、终态运行保留 30 天、信号去重保留 7 天、信号收件箱 50、每项目排队 1000 / 并发 100、每运行每分钟信号 60、Effect 每项目派发 50 次/秒、摄取待处理 10000。
+All can be overridden with `config :fyrlet, runs: […]`: 50 nodes per run, 64 KiB for node input/output and signal payloads, 3 attempts per step, 60 seconds lease, 30 seconds recovery scan, 7 days default run validity (30 days at most), 30 days retention of terminal runs, 7 days retention of signal deduplication, signal inbox of 50, 1000 queued / 100 concurrent per project, 60 signals per run per minute, Effect dispatch of 50 per second per project, 10000 pending ingestions.
 
-运行要求：
+Requirements for runs:
 
-- 每项目限制并发 Run/Step、排队数量与 Effect 派发速率；单 Run 限制节点数、输入输出大小、信号收件箱、事件速率与总存储预算。达到上限应拒绝、暂停或标记截断，不能无限增长。
-- 运行事件支持批量落盘和有界读取；高频日志不应逐 token 触发完整 Run 快照。日志节流不允许丢弃状态转换、信号回执或 Effect 尝试事实。
-- Run 的 `input`/`output`、信号 `payload` 与 Effect `payload`/`result` 可能含个人或业务敏感数据：定义可声明字段级脱敏（日志与事件不含原文）、可选的静态加密，并支持按保留期或按主体请求清除；清除不得破坏幂等键、`payload_hash` 与审计所需的非敏感事实。
-- 通过 request/run/step/attempt/effect 标识关联结构化日志；凭据与敏感负载不进入日志，Run ID 等高基数字段不直接作为常驻指标标签。
-- 独立配置运行期限、终态历史保留期、信号去重期、Effect 对账期限及事件归档。`mix fyrlet.prune` 不得删除活跃 Run、未解决 Effect、仍需去重的逻辑键及其必要关联记录。
-- 恢复、对账、归档任务都要有队列年龄、失败与容量告警；可选 `fyrlet_ops` 提供状态快照与告警，基本背压和上限由对应运行模块负责。
+- Concurrent Runs/Steps, queue size and Effect dispatch rate are limited per project; for a single Run, the node count, input/output size, signal inbox, event rate and total storage budget are limited. On reaching a limit, reject, pause or mark as truncated; growth must not be unbounded.
+- Run events support batched persistence and bounded reads; high-frequency logs must not trigger a complete Run snapshot per token. Log throttling must not drop state transitions, signal receipts or Effect attempt facts.
+- A Run's `input`/`output`, a signal's `payload`, and an Effect's `payload`/`result` may contain personal or business-sensitive data: a definition can declare field-level redaction (logs and events do not contain the original text) and optional encryption at rest, and supports purging by retention period or by subject request; purging must not break idempotency keys, `payload_hash` or the non-sensitive facts needed for auditing.
+- Structured logs are correlated through request/run/step/attempt/effect identifiers; credentials and sensitive payloads do not enter logs, and high-cardinality fields such as Run IDs are not used directly as persistent metric labels.
+- Run deadline, terminal history retention period, signal deduplication period, Effect reconciliation deadline and event archiving are configured independently. `mix fyrlet.prune` must not delete active Runs, unresolved Effects, logical keys that still need deduplication, or their necessary associated records.
+- Recovery, reconciliation and archiving jobs all need alerts on queue age, failures and capacity; the optional `fyrlet_ops` provides status snapshots and alerts, while basic back-pressure and limits are the responsibility of the corresponding run module.
 
-## 传输批处理与故障恢复
+## Transport batching and failure recovery
 
-SocketTransport 保持单帧为标准 Phoenix 五元素数组；多帧出站消息包装为 `{"batch":[...]}`，保留帧顺序。只聚合同轮 transport mailbox 已有的推送，通过自发送 flush 消息提交，不设置等待凑批定时器。socket_batch_max_messages 默认 64 且硬上限为 64；socket_batch_max_bytes 默认 256 KiB，是聚合预算，单条超预算消息单独发送，不截断。入站 Socket 帧 64 KiB 限制与出站批处理预算不同。批处理可混合不同 topic，不提供跨订阅事务或原子可见性；自写客户端必须支持此包装，不能假定原生 Phoenix decoder 即可处理。
+SocketTransport keeps a single frame as the standard Phoenix five-element array; a multi-frame outbound message is wrapped as `{"batch":[...]}`, preserving frame order. It aggregates only pushes already in the transport mailbox in the same round, and commits them through a self-sent flush message, with no timer waiting to fill a batch. socket_batch_max_messages defaults to 64 and has a hard limit of 64; socket_batch_max_bytes defaults to 256 KiB and is an aggregation budget: a single message over budget is sent alone, not truncated. The 64 KiB limit on inbound Socket frames is separate from the outbound batching budget. A batch may mix different topics; no cross-subscription transaction or atomic visibility is provided; a hand-written client must support this wrapping and must not assume that a native Phoenix decoder can handle it.
 
-channel 监控 Observer，运行中的 Observer 退出时发送 retryable 的 INTERNAL_ERROR；会话检查 worker 故障或超时也返回 retryable 内部错误，不绕过认证。SDK 收到 retryable status 后重建连接和订阅，以新 generation 的完整快照恢复，不重放未确认的业务写入。attach 遇到 Observer 调用退出会内部重试一次，仍失败则返回 retryable 错误；SDK 对首次加入返回的 retryable 错误也会自动恢复：该订阅进入 recovering，由 Phoenix 通道按退避重新加入（连续失败超过 10 次才报告 error），连接上的其他订阅不受影响；UNAUTHENTICATED 仍重建整个连接，不可重试的 join 错误立即失败。
+The channel monitors the Observer, and when a running Observer exits it sends a retryable INTERNAL_ERROR; a failure or timeout of the session-check worker also returns a retryable internal error and does not bypass authentication. After receiving a retryable status the SDK rebuilds the connection and subscriptions and recovers with a complete snapshot of a new generation; it does not replay unacknowledged business writes. When attach hits an Observer call exit it retries once internally and returns a retryable error if it still fails; the SDK also recovers automatically from a retryable error returned on the first join: that subscription enters recovering and is rejoined by the Phoenix channel with backoff (an error is reported only after more than 10 consecutive failures), and other subscriptions on the connection are unaffected; UNAUTHENTICATED still rebuilds the whole connection, and a non-retryable join error fails immediately.
 
-## 运行时调优
+## Runtime tuning
 
-早期在本机 M3 Pro 的低负载实时推送测试中，下面的可选配置降低过累计 CPU 消耗。该历史对照报告已移除，**没有在同限额环境中复测**，请把它当作待验证的可选项：
+In an early low-load realtime push test on a local M3 Pro, the optional configuration below reduced cumulative CPU consumption. That historical comparison report has been removed, and it was **not re-tested in an environment with the same limits**, so treat it as an option still to be verified:
 
 ```sh
 ERL_FLAGS='+S 4:4 +sbwt none +sbwtdcpu none +sbwtdio none' \
 MIX_ENV=prod mix phx.server
 ```
 
-此配置需要已有的生产数据库、密钥与其他环境变量。它没有写入全局默认值；调度器数量应结合部署 CPU 预算和实际负载重新测试。当前结果不能证明最大吞吐提升，低负载延迟也没有随 CPU 消耗同比下降。最新的同资源测试使用容器 cgroup 限额，BEAM 自动只启用 1 个调度器，没有使用上述手动配置。
+This configuration requires an existing production database, keys and the other environment variables. It has not been written into the global defaults; the scheduler count should be re-tested against the deployment CPU budget and actual load. The current results cannot show an improvement in maximum throughput, and low-load latency did not fall in proportion to CPU consumption. The latest same-resource test used container cgroup limits, under which the BEAM automatically enabled only 1 scheduler, and did not use the manual configuration above.
 
-## 可选双节点部署
+## Optional two-node deployment
 
-默认保持单节点。`FYRLET_CLUSTER_NODES` 为逗号分隔的静态 Erlang 节点名，例如 `fyrlet_b@node-b.internal`；最多 32 个，每个不超过 255 字节，只允许字母、数字、点、下划线、短横线与一个 `@`。配置后启动 `Fyrlet.Cluster`，每秒尝试连接尚未连接的对端；未命名节点会明确拒绝启动。节点名与 cookie 由 Erlang/发行版管理，不由 HTTP 请求设置。
+A single node remains the default. `FYRLET_CLUSTER_NODES` is a comma-separated list of static Erlang node names, for example `fyrlet_b@node-b.internal`; at most 32, each no longer than 255 bytes, allowing only letters, digits, dots, underscores, hyphens and one `@`. When configured, `Fyrlet.Cluster` is started and tries every second to connect to peers that are not yet connected; an unnamed node is explicitly refused at startup. The node name and cookie are managed by Erlang/the release, not set by HTTP requests.
 
-使用 Mix 在本机验证时，先让两个应用使用相同数据库、定义、插件与迁移，然后分别运行（`<本机短主机名>` 替换为相同的实际主机名，cookie 通过环境提供）：
+To verify locally with Mix, first have the two applications use the same database, definitions, plugins and migrations, then run the following separately (replace `<local short hostname>` with the same actual hostname; provide the cookie through the environment):
 
 ```sh
-FYRLET_CLUSTER_NODES="fyrlet_b@<本机短主机名>" PHX_SERVER=true PORT=4200 \
+FYRLET_CLUSTER_NODES="fyrlet_b@<local short hostname>" PHX_SERVER=true PORT=4200 \
   elixir --sname fyrlet_a --cookie "$FYRLET_CLUSTER_COOKIE" -S mix phx.server
-FYRLET_CLUSTER_NODES="fyrlet_a@<本机短主机名>" PHX_SERVER=true PORT=4201 \
+FYRLET_CLUSTER_NODES="fyrlet_a@<local short hostname>" PHX_SERVER=true PORT=4201 \
   elixir --sname fyrlet_b --cookie "$FYRLET_CLUSTER_COOKIE" -S mix phx.server
 ```
 
-发行版用 `RELEASE_DISTRIBUTION=name`、`RELEASE_NODE=fyrlet_a@node-a.internal` 与相同的 `RELEASE_COOKIE`，并在 `FYRLET_CLUSTER_NODES` 写实际对端节点名。节点间须互相解析主机名并允许 Erlang 分布式通信，限制在受信任的内部网络。负载均衡器需支持 WebSocket 和健康检查；已有连接在节点终止后由 SDK 重新连接并恢复订阅，不依赖粘性会话。
+A release uses `RELEASE_DISTRIBUTION=name`, `RELEASE_NODE=fyrlet_a@node-a.internal` and the same `RELEASE_COOKIE`, and writes the actual peer node names in `FYRLET_CLUSTER_NODES`. Nodes must resolve each other's hostnames and allow Erlang distribution traffic, restricted to a trusted internal network. The load balancer must support WebSocket and health checks; after a node terminates, existing connections are reconnected by the SDK and subscriptions are restored, without relying on sticky sessions.
 
-共享数据与执行事实仍持久化到同一 PostgreSQL；共享 Observer 与追加读取缓存只在各节点本地共享，跨节点通过 PubSub 传播失效，没有全局内存缓存。`Fyrlet.Diagnostics.cluster/0` 返回本节点、配置对端与实际已连接节点，供可信运维代码使用。`FYRLET_CLUSTER_NODES` 未设置时不启动发现进程；宿主已有节点发现机制时也可继续由宿主连接。
+Shared data and execution facts are still persisted in the same PostgreSQL; shared Observers and the append read cache are shared only locally within each node, invalidation propagates across nodes through PubSub, and there is no global in-memory cache. `Fyrlet.Diagnostics.cluster/0` returns this node, the configured peers and the actually connected nodes, for use by trusted operations code. When `FYRLET_CLUSTER_NODES` is not set, no discovery process is started; if the host already has a node discovery mechanism, the host can also keep connecting the nodes.
 
-`bash scripts/cluster.sh` 已验同机两节点的幂等、共享/append、普通失效下的成员撤销、SIGKILL 后切换、节点重入、持久审批、会话续期与资源清理。详细结果见 [ACCEPTANCE.md](ACCEPTANCE.md)；多主机网络分区、生产容量与 24 小时稳定性尚未验证。
-- 新增配置：`FYRLET_IDEMPOTENCY_TTL_SECONDS`、`POOL_SIZE`、`FYRLET_CHANNEL_HIBERNATE_MS`（构建期）。
+`bash scripts/cluster.sh` has verified, on two nodes on the same machine: idempotency, shared/append, membership revocation under ordinary invalidation, failover after SIGKILL, node rejoin, durable approval, session renewal and resource cleanup. For detailed results see [ACCEPTANCE.md](ACCEPTANCE.md); multi-host network partitions, production capacity and 24-hour stability have not been verified.
+- New configuration: `FYRLET_IDEMPOTENCY_TTL_SECONDS`, `POOL_SIZE`, `FYRLET_CHANNEL_HIBERNATE_MS` (build time).

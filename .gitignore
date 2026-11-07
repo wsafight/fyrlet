@@ -17,3 +17,8 @@
 /examples/*/cover/
 /packages/_build/
 /packages/*/cover/
+
+# Official website (Astro)
+/site/node_modules/
+/site/dist/
+/site/.astro/

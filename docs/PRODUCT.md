@@ -1,372 +1,372 @@
-# Fyrlet 产品文档
+# Fyrlet product documentation
 
-Fyrlet 是基于 Phoenix 的实时应用框架。本文说明产品定位、范围、功能需求和承诺；文档索引见 [README.md](README.md)，当前实现状态与验收矩阵见 [STATUS.md](STATUS.md)。
+Fyrlet is a realtime application framework built on Phoenix. This document describes the product positioning, scope, functional requirements and commitments. For the documentation index, see [README.md](README.md); for the current implementation status and acceptance matrices, see [STATUS.md](STATUS.md).
 
-## 产品定位
+## Product positioning
 
-构建一套基于 Phoenix 的实时应用框架，让开发者在服务端定义业务操作、数据订阅和访问权限，再通过统一协议接入 Web、移动端或其他客户端。
+Build a realtime application framework on Phoenix that lets developers define business operations, data subscriptions and access permissions on the server, and then expose them to web, mobile or other clients through a unified protocol.
 
-借鉴 Meteor 将业务调用、数据订阅和客户端状态管理连接起来的开发体验。采用 Phoenix / Elixir 运行服务端，客户端通过 SDK 使用数据协议，各端自行构建界面。
+It borrows the development experience of Meteor, which connects business calls, data subscriptions and client state management. The server runs on Phoenix / Elixir, clients use the data protocol through an SDK, and each client builds its own UI.
 
-产品首先用于作者自己的应用：一个可集成到 Phoenix 项目的服务端框架，加上若干参考应用，以实际复用效果决定抽象与扩展。
+The product is first used for the author's own applications: a server framework that can be integrated into a Phoenix project, plus several reference applications, with actual reuse deciding the abstractions and extensions.
 
-一句话目标：**定义业务一次，让多个客户端通过相同契约调用业务，并在数据变化、连接中断和恢复后获得正确的可见数据。**
+One-sentence goal: **define the business once, let multiple clients call it through the same contract, and give them correct visible data after data changes, connection interruptions and recovery.**
 
-基础模型是 **Operation + Subscription**：一次授权查询、一份完整快照、一次事务写入、一个业务结果。需要长时运行的工作、外部副作用、持续追加的输出、多人群组或公开入口的产品，通过**可选**的官方模块表达（Run、Effect、追加订阅、共享订阅、在线状态、插件），见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+The base model is **Operation + Subscription**: one authorized query, one complete snapshot, one transactional write, one business result. Products that need long-running work, external side effects, continuously appended output, multi-user groups or public entry points use **optional** official modules (Run, Effect, append subscriptions, shared subscriptions, presence, plugins); see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## 基础决策
+## Foundational decisions
 
-| 项目 | 决策 |
+| Item | Decision |
 | --- | --- |
-| 首要使用者 | 作者本人，其次是使用 Phoenix 开发应用的开发者 |
-| 交付物 | 服务端框架、TypeScript SDK、契约类型生成、参考应用与端到端验证 |
-| 服务端基础 | Phoenix、Ecto、PostgreSQL、Phoenix Channels / PubSub |
-| 持久化通知 | 使用与业务数据处于同一 PostgreSQL 数据库的 Oban 任务 |
-| 调用入口 | HTTP 业务调用接口，以及 Socket 上的同构调用 |
-| 订阅入口 | Phoenix Channels 上的应用层订阅协议 |
-| 同步方式 | 有界查询快照、变更通知触发刷新、重连重新获取快照；可选字段级增量与追加订阅 |
-| SDK 方向 | 目前提供 TypeScript SDK；协议保持跨语言可实现 |
-| 部署方式 | 自托管；同一业务运行时支持多个项目的数据与身份隔离；单节点，另可选同机双节点 |
-| 产品形态 | 可复用的应用框架，也能作为受信任业务的服务端；管理控制台与商业托管不在范围内 |
+| Primary users | The author first, then developers building applications with Phoenix |
+| Deliverables | Server framework, TypeScript SDK, contract type generation, reference applications and end-to-end verification |
+| Server foundation | Phoenix, Ecto, PostgreSQL, Phoenix Channels / PubSub |
+| Durable notification | Oban jobs in the same PostgreSQL database as the business data |
+| Call entry point | An HTTP business call interface, and isomorphic calls over the Socket |
+| Subscription entry point | An application-level subscription protocol on Phoenix Channels |
+| Synchronization | Bounded query snapshots, refresh triggered by change notifications, snapshot re-fetched on reconnect; optional field-level deltas and append subscriptions |
+| SDK direction | A TypeScript SDK is provided today; the protocol stays implementable in other languages |
+| Deployment | Self-hosted; one business runtime supports data and identity isolation for multiple projects; single node, with an optional two-node setup on one machine |
+| Product form | A reusable application framework that can also serve as the server for trusted business logic; an admin console and commercial hosting are out of scope |
 
-**不承诺任意记录级补丁式增量同步、离线写入或断点续传。** 先确保有限范围内的订阅能够正确刷新；字段级增量（`delta-v1`）和追加订阅是有明确适用条件的传输优化，不改变“快照是权威状态”这一点。不能把 WebSocket 自动重连等同于业务数据已经恢复。
+**Record-level patch-style delta synchronization, offline writes and resumable transfer are not promised.** The first goal is to make subscriptions over a bounded range refresh correctly; field-level deltas (`delta-v1`) and append subscriptions are transport optimizations with explicit applicability conditions and do not change the fact that the snapshot is the authoritative state. An automatic WebSocket reconnect must not be equated with business data having been recovered.
 
-## 要解决的问题
+## Problems to solve
 
-开发一个多端实时应用，通常需要反复处理以下工作：
+Building a multi-client realtime application usually means handling the following work over and over:
 
-1. 为业务定义调用接口、输入校验和统一错误格式。
-2. 将身份认证与数据权限接入每一次操作和订阅。
-3. 在数据提交后通知相关客户端，并重新计算其可见数据。
-4. 处理初始读取和后续更新之间的竞态，以及断线后的数据恢复。
-5. 处理客户端重试，避免重复创建业务数据。
-6. 为不同客户端维护一致的输入、输出和协议语义。
+1. Define call interfaces, input validation and a unified error format for the business logic.
+2. Wire authentication and data permissions into every operation and subscription.
+3. Notify the relevant clients after data is committed and recompute the data visible to them.
+4. Handle the race between the initial read and later updates, and data recovery after a disconnect.
+5. Handle client retries without creating duplicate business data.
+6. Keep input, output and protocol semantics consistent across different clients.
 
-框架负责这些重复机制。应用开发者负责业务规则、领域模型、权限策略和界面。
+The framework takes care of these repeated mechanisms. Application developers own the business rules, the domain model, permission policies and the UI.
 
-## 用户与使用场景
+## Users and use cases
 
-### 主要用户
+### Primary users
 
-- 作者本人：使用框架开发个人工具，验证其是否减少第二个应用的重复开发工作。
-- Phoenix 应用开发者：希望通过明确的业务声明获得统一调用和订阅能力。
-- 客户端开发者：通过 TypeScript SDK 或公开协议使用服务端，关注业务数据与连接状态。
+- The author: uses the framework to build personal tools and checks whether it reduces repeated development work for a second application.
+- Phoenix application developers: want unified call and subscription capabilities through explicit business declarations.
+- Client developers: use the server through the TypeScript SDK or the public protocol, and care about business data and connection state.
 
-### 核心使用流程
+### Core usage flow
 
-1. 开发者在现有 Phoenix 应用中接入框架。
-2. 注册业务操作、查询订阅及对应权限。
-3. 客户端完成认证，调用操作或建立订阅。
-4. 服务端验证输入和权限，执行业务并返回结构化结果。
-5. 业务提交后，相关订阅刷新可见数据。
-6. 客户端断线后重新连接、重新授权并获取最新快照。
+1. The developer integrates the framework into an existing Phoenix application.
+2. They register business operations, query subscriptions and the corresponding permissions.
+3. The client authenticates, then calls operations or opens subscriptions.
+4. The server validates input and permissions, runs the business logic and returns a structured result.
+5. After the business change is committed, the relevant subscriptions refresh their visible data.
+6. After a disconnect, the client reconnects, is re-authorized and fetches the latest snapshot.
 
-### 首个参考应用：个人收件箱
+### First reference application: personal inbox
 
-用户可以在不同设备上保存和查看文字、链接与短代码片段。
+Users can save and view text, links and short code snippets on different devices.
 
-- 新增一条收件箱记录。
-- 查看当前用户最近的记录。
-- 编辑文字、归档或删除记录。
-- 在另一个设备中看到更新后的列表。
-- 断线恢复后获得正确的当前列表。
-- 通过历史分页查询获取更早的记录。
+- Add an inbox entry.
+- View the current user's most recent entries.
+- Edit text, archive or delete entries.
+- See the updated list on another device.
+- Get the correct current list after recovering from a disconnect.
+- Fetch older entries through a history pagination query.
 
-参考应用支持多个账号，用于验证用户间的数据隔离。每个用户的收件箱相互独立。
+The reference application supports multiple accounts to verify data isolation between users. Each user's inbox is independent.
 
-图片、文件上传、网页抓取、全文搜索和 AI 整理暂不纳入参考应用，避免示例业务掩盖框架自身的正确性问题。
+Images, file uploads, web page capture, full-text search and AI organization are left out of the reference application for now, so that the example business does not hide correctness problems in the framework itself.
 
-### 适用的产品类别
+### Applicable product categories
 
-| 产品类别 | 依赖的核心能力 | 说明 |
+| Product category | Core capabilities relied on | Notes |
 | --- | --- | --- |
-| 通知与消息投递（Novu 类） | 持久 Run + Effect + 回执 | `examples/notify` 验证，一个外部渠道 |
-| 长任务 / Agent 运行（Trigger.dev、Dify 类） | Run + 等待与恢复 + 运行快照 | `examples/agent` 验证，有限步骤与人工审批 |
-| 工作流执行（n8n 类） | Run + 等待节点 + 运行记录 | `examples/flow` 验证，顺序流程；不含分支与循环 |
-| 实时协作 / 客服会话（Chatwoot 类） | 共享订阅 + 追加订阅 + 匿名入口 | `examples/chat` 验证 |
-| 监控与状态页（Uptime Kuma 类） | 公开只读入口 | 业务调度由应用承担 |
-| 观测与评估（Langfuse 类） | 批量摄取入口 | 聚合分析不属本框架 |
+| Notifications and message delivery (Novu-like) | Durable Run + Effect + receipt | Verified by `examples/notify`, with one external channel |
+| Long-running tasks / agent runs (Trigger.dev, Dify-like) | Run + wait and resume + run snapshot | Verified by `examples/agent`, with a finite number of steps and human approval |
+| Workflow execution (n8n-like) | Run + wait node + run records | Verified by `examples/flow`, sequential flows; no branches or loops |
+| Realtime collaboration / customer support conversations (Chatwoot-like) | Shared subscription + append subscription + anonymous entry point | Verified by `examples/chat` |
+| Monitoring and status pages (Uptime Kuma-like) | Public read-only entry point | Business scheduling is owned by the application |
+| Observability and evaluation (Langfuse-like) | Batch ingestion entry point | Aggregate analytics is outside this framework |
 
-不承诺：连接器生态、可视化画布、完整业务 UI、聚合分析存储。这些由能力包、领域包或外部系统承担。
+Not promised: a connector ecosystem, a visual canvas, a complete business UI, or aggregate analytics storage. These are the responsibility of capability packages, domain packages or external systems.
 
-### 参考项目与能力映射
+### Reference projects and capability mapping
 
-下表说明 Fyrlet 与应用各自承担的部分：
+The table below shows what Fyrlet and the application each take on:
 
-| 参考项目 | Fyrlet 可承接的部分 | 应用或外部系统承担的部分 |
+| Reference project | What Fyrlet can take on | What the application or external systems take on |
 | --- | --- | --- |
-| Chatwoot | `Chat`：会话状态、坐席协作、实时消息订阅、共享订阅 | 渠道接入、分配规则、搜索与客服界面 |
-| Novu | `Notify`：通知 Run、Effect 派发、重试、回执与可查询状态 | 渠道适配、模板、用户偏好与供应商投递语义 |
-| Uptime Kuma | 监控应用：探测结果写入、告警 Effect、公开状态订阅 | 探测调度、协议检查、告警规则与历史统计 |
-| n8n | `Flow`：顺序节点、等待信号、执行记录与恢复 | 流程画布、连接器、流程版本与用户代码执行环境 |
-| Trigger.dev | Run 模块：任务受理、排队、并发限制、重试、取消与恢复；外部执行器协议 | 语言 SDK、用户代码运行环境与进程级检查点机制 |
-| Dify | `Agent`：有限工具步骤、模型调用 Effect、人工审批与运行快照；高频输出用追加订阅 | 文档解析、RAG、模型与工具适配、Agent 业务逻辑 |
-| Langfuse | 观测/评估应用：运行时间线、异步评估 Run、批量摄取 | 埋点 SDK、大规模 Trace 存储、聚合查询与分析界面 |
+| Chatwoot | `Chat`: conversation state, agent collaboration, realtime message subscriptions, shared subscriptions | Channel integration, assignment rules, search and the support UI |
+| Novu | `Notify`: notification Runs, Effect dispatch, retries, receipts and queryable state | Channel adapters, templates, user preferences and provider delivery semantics |
+| Uptime Kuma | A monitoring application: writing probe results, alert Effects, public status subscriptions | Probe scheduling, protocol checks, alert rules and historical statistics |
+| n8n | `Flow`: sequential nodes, waiting for signals, execution records and recovery | The flow canvas, connectors, flow versions and the execution environment for user code |
+| Trigger.dev | The Run module: task acceptance, queueing, concurrency limits, retries, cancellation and recovery; the external executor protocol | Language SDKs, the runtime for user code and process-level checkpointing |
+| Dify | `Agent`: finite tool steps, model-call Effects, human approval and run snapshots; append subscriptions for high-frequency output | Document parsing, RAG, model and tool adapters, agent business logic |
+| Langfuse | An observability/evaluation application: run timelines, asynchronous evaluation Runs, batch ingestion | Instrumentation SDKs, large-scale trace storage, aggregate queries and the analytics UI |
 
-Notify、Flow、Agent、Chat 已实现为带模型、迁移、网页与端到端验收的独立应用（见 [PLUGINS.md](PLUGINS.md#领域包不是插件)）。Agent 仅含确定性的文本工具和审批，Chat 仅含登录与邀请式会话；不把 Dify、Chatwoot 等项目的完整功能集作为交付清单。
+Notify, Flow, Agent and Chat are implemented as standalone applications with models, migrations, web pages and end-to-end verification (see [PLUGINS.md](PLUGINS.md#domain-packages-not-plugins)). Agent contains only deterministic text tools and approval, and Chat contains only login and invitation-based conversations; the full feature sets of projects such as Dify and Chatwoot are not a delivery checklist.
 
-## 范围
+## Scope
 
-### 能力总览
+### Capability overview
 
-| 能力 | 范围 |
+| Capability | Scope |
 | --- | --- |
-| 业务声明 | 命名操作与命名订阅，明确输入、输出、授权和执行逻辑 |
-| 输入输出契约 | 同一份契约用于运行时校验、导出与生成 TypeScript 类型 |
-| 认证 | 项目服务密钥、受信后端交换短期用户令牌、撤销与过期处理 |
-| 项目隔离 | Project / Subject 身份边界，查询过滤、复合外键与越权测试 |
-| TypeScript SDK | 业务调用、订阅状态、断线恢复、令牌更新、资源关闭与服务端鉴权辅助入口 |
-| 权限 | 操作授权、订阅授权、数据范围过滤、有效期与撤销处理 |
-| 业务调用 | HTTP 调用、结构化结果、统一错误、请求标识 |
-| 写入可靠性 | 事务提交、幂等处理、持久化变更通知 |
-| 实时订阅 | 参数化有界查询、初始快照、失效刷新、取消订阅；可选字段级增量、追加订阅、共享订阅、在线状态 |
-| 恢复机制 | 重连后重新授权和读取，手动刷新，周期校验兜底 |
-| 持久任务（可选） | Run、等待与信号、取消、租约与恢复、外部执行器；Effect 与 Outbox |
-| 可观测性 | 请求、操作、订阅和后台任务的关联日志、遥测与 Prometheus 指标 |
-| 扩展 | 能力包 / 插件、领域包、项目配额 |
-| 参考应用 | 个人收件箱，以及 Notify、Flow、Agent、Chat 四个领域应用 |
-| 开发文档 | 接入教程、协议说明、错误说明、测试与启动方式 |
+| Business declarations | Named operations and named subscriptions, with explicit input, output, authorization and execution logic |
+| Input and output contracts | One contract used for runtime validation, export and TypeScript type generation |
+| Authentication | Project service keys, short-lived user tokens exchanged by a trusted backend, revocation and expiry handling |
+| Project isolation | Project / Subject identity boundary, query filtering, composite foreign keys and authorization-bypass tests |
+| TypeScript SDK | Business calls, subscription state, disconnect recovery, token refresh, resource closing and a server-side authentication helper entry point |
+| Permissions | Operation authorization, subscription authorization, data scope filtering, validity period and revocation handling |
+| Business calls | HTTP calls, structured results, unified errors, request identifiers |
+| Write reliability | Transactional commit, idempotent handling, durable change notification |
+| Realtime subscriptions | Parameterized bounded queries, initial snapshot, invalidation refresh, unsubscribe; optional field-level deltas, append subscriptions, shared subscriptions, presence |
+| Recovery | Re-authorization and re-read after reconnect, manual refresh, periodic re-check as a safety net |
+| Durable tasks (optional) | Run, waits and signals, cancellation, leases and recovery, external executors; Effect and Outbox |
+| Observability | Correlated logs, telemetry and Prometheus metrics for requests, operations, subscriptions and background jobs |
+| Extension | Capability packages / plugins, domain packages, project quotas |
+| Reference applications | The personal inbox, plus four domain applications: Notify, Flow, Agent and Chat |
+| Developer documentation | Integration tutorial, protocol description, error description, testing and startup instructions |
 
-### 非目标
+### Non-goals
 
-- Dart、Swift、Kotlin SDK，以及独立的 React / React Native UI 绑定（目前只有 TypeScript SDK）。
-- 面向任意表和任意客户端查询的通用实时数据库协议。
-- 任意 JSON Patch 式增量同步、增量分页合并、CRDT、多人富文本、离线写入与冲突自动合并；通用 IM 系统。
-- 多应用租户控制台、计费、商业托管、应用市场。
-- 自定义多节点状态分片、多节点房间唯一性与跨地域部署。同机双节点已验证；更大的部署需要单节点容量证据后另行设计。
-- 用户提交任意服务端代码的在线执行环境，以及在进程内执行用户提交的任意 Elixir 代码。
-- 可视化低代码编辑器、流程画布和自然语言生成项目。
-- 核心内的连接器生态、第三方渠道 SDK、供应商协议适配（属于能力包或应用）。
-- 聚合分析存储（ClickHouse 类）与查询引擎。
-- 动态 DAG、并行分支、子工作流、通用补偿编排与运行中代码迁移。
+- Dart, Swift and Kotlin SDKs, and standalone React / React Native UI bindings (only the TypeScript SDK exists today).
+- A general-purpose realtime database protocol for arbitrary tables and arbitrary client queries.
+- Arbitrary JSON Patch-style delta synchronization, incremental pagination merge, CRDTs, multi-user rich text, offline writes and automatic conflict merging; a general-purpose IM system.
+- A multi-application tenant console, billing, commercial hosting, an application marketplace.
+- Custom multi-node state sharding, multi-node room uniqueness and cross-region deployment. A two-node setup on one machine has been verified; larger deployments need single-node capacity evidence and a separate design.
+- An online execution environment for arbitrary server code submitted by users, and executing arbitrary user-submitted Elixir code in-process.
+- A visual low-code editor, a flow canvas and natural-language project generation.
+- A connector ecosystem in the core, third-party channel SDKs, provider protocol adapters (these belong to capability packages or applications).
+- Aggregate analytics storage (ClickHouse-like) and a query engine.
+- Dynamic DAGs, parallel branches, sub-workflows, general compensation orchestration and in-flight code migration.
 
-### 尚未提供
+### Not yet provided
 
-Hex / npm 发布与许可证决策；跨节点的全局配额；管理 UI；OIDC 验证器；密钥轮换界面；经过验证的容量基线。
+Hex / npm publishing and the license decision; cross-node global quotas; an admin UI; an OIDC verifier; a key rotation interface; a verified capacity baseline.
 
-## 核心概念
+## Core concepts
 
-| 概念 | 定义 |
+| Concept | Definition |
 | --- | --- |
-| Actor | 经过服务端验证的调用者身份及其授权上下文 |
-| Operation | 有名称、输入、输出和权限要求的业务调用，区分读取与写入 |
-| Subscription | 有名称和参数的服务端查询定义，输出有界、已授权的数据集合 |
-| Snapshot | 某次订阅查询得到的完整可见结果，客户端用它替换对应订阅的数据 |
-| Scope | 变更通知的路由范围，例如某个用户的收件箱；不代替权限检查 |
-| Invalidation | 数据可能变化的内部通知，触发相关订阅重新查询 |
-| Contract | 操作、订阅、数据类型和错误格式的可序列化描述 |
-| Subscription generation | 一次订阅实例的标识，用于隔离重连、重新订阅前后的消息 |
-| Run / Step | 一次可跨请求、跨进程恢复的持久运行，及其中的工作节点或等待节点，见 [RUNS.md](RUNS.md) |
-| Effect | 外部副作用的意图与派发记录，不确定的结果如实保留，见 [EFFECTS.md](EFFECTS.md) |
-| Capability | 可选的服务端能力，客户端在连接时协商，见 [PROTOCOL.md](PROTOCOL.md#能力协商) |
+| Actor | The server-verified identity of a caller and its authorization context |
+| Operation | A named business call with input, output and permission requirements, distinguishing reads from writes |
+| Subscription | A server-side query definition with a name and parameters, whose output is a bounded, authorized data set |
+| Snapshot | The complete visible result of one subscription query, which the client uses to replace the data of that subscription |
+| Scope | The routing range of a change notification, for example one user's inbox; it does not replace permission checks |
+| Invalidation | An internal notification that data may have changed, triggering the relevant subscriptions to query again |
+| Contract | A serializable description of operations, subscriptions, data types and the error format |
+| Subscription generation | The identifier of one subscription instance, used to isolate messages from before and after a reconnect or re-subscription |
+| Run / Step | A durable run that can be resumed across requests and processes, and its work nodes or wait nodes; see [RUNS.md](RUNS.md) |
+| Effect | The intent and dispatch record of an external side effect; uncertain outcomes are kept as they are; see [EFFECTS.md](EFFECTS.md) |
+| Capability | An optional server capability that the client negotiates at connection time; see [PROTOCOL.md](PROTOCOL.md#capability-negotiation) |
 
-## 服务端功能需求
+## Server functional requirements
 
-### FR-01：业务注册与契约
+### FR-01: Business registration and contract
 
-- 开发者可以显式注册操作和订阅，名称在应用内唯一且稳定。
-- 操作声明名称、读写类型、输入、输出、授权与执行逻辑。
-- 订阅声明名称、参数、输出、授权、查询逻辑、依赖的 Scope 和结果上限。
-- 输入输出覆盖字符串、布尔值、JavaScript 安全整数、列表、封闭对象、可空值和字符串枚举。
-- UUID、时间、高精度十进制数和超出 JavaScript 安全整数范围的整数使用明确的字符串编码规则，避免绑定某一种客户端语言。
-- 契约可以导出为机器可读格式，并标识框架协议版本与业务契约版本。
-- 启动时检查名称冲突、缺失实现和无效声明，提供可定位的错误。
-- 从服务端导出的契约生成 TypeScript 类型；不强制应用使用 Ash。应用业务数据通过 Ecto 持久化。
+- Developers can explicitly register operations and subscriptions; names are unique and stable within the application.
+- An operation declares its name, read/write type, input, output, authorization and execution logic.
+- A subscription declares its name, parameters, output, authorization, query logic, the Scopes it depends on and a result limit.
+- Input and output cover strings, booleans, JavaScript safe integers, lists, closed objects, nullable values and string enums.
+- UUIDs, timestamps, high-precision decimals and integers beyond the JavaScript safe integer range use explicit string encoding rules, so the contract is not tied to any one client language.
+- The contract can be exported in a machine-readable format and identifies the framework protocol version and the business contract version.
+- At startup, name conflicts, missing implementations and invalid declarations are checked, and errors that point to the cause are reported.
+- TypeScript types are generated from the contract exported by the server; applications are not required to use Ash. Application business data is persisted through Ecto.
 
-### FR-02：认证与授权
+### FR-02: Authentication and authorization
 
-- 区分平台开发者身份、项目服务密钥与终端用户会话；目前实现后两层，平台登录不在范围内。
-- 通过开发命令创建项目与服务密钥；服务密钥只保存在受信任后端，不进入浏览器或移动端。
-- 客户业务后端先认证自己的用户，再使用服务密钥与可信外部用户标识交换短期用户令牌。
-- 外部身份按 `(project_id, issuer, external_subject)` 映射为内部 Subject；客户端不能自行选择 Subject。
-- 默认用户令牌有效期 10 分钟，可配置签发 60–900 秒；仅存储令牌哈希，支持单会话撤销。
-- 撤销项目密钥阻止新会话签发，既有会话单独撤销或等待过期；密钥不具备任意用户业务读写接口。
-- 身份从服务端验证结果中获得，不接受请求参数里的用户 ID 作为身份依据。
-- 每次 HTTP 调用、订阅建立、重新订阅及快照下发前均检查相应权限。
-- 订阅查询必须在数据库读取阶段限制数据范围，禁止先读取其他用户数据再依赖客户端过滤。
-- Scope 命中只能触发查询，不能赋予数据读取权限。
-- 令牌过期后停止接受新操作并结束相关连接。
-- 应用撤销权限时应发送权限变更通知；同时提供周期复核兜底，默认间隔 30 秒，可配置。
-- 权限复核失败后停止推送并发送订阅关闭原因，SDK 清除该订阅缓存。详见 [鉴权设计](AUTH.md)。
+- Platform developer identity, project service keys and end-user sessions are distinguished; the last two layers are implemented today, and platform login is out of scope.
+- Projects and service keys are created through development commands; a service key is stored only in the trusted backend and never reaches a browser or mobile client.
+- The customer's business backend first authenticates its own user, then exchanges a short-lived user token using the service key and a trusted external user identifier.
+- An external identity is mapped to an internal Subject by `(project_id, issuer, external_subject)`; clients cannot choose the Subject themselves.
+- The default user token lifetime is 10 minutes, configurable to 60–900 seconds at issue time; only token hashes are stored, and single-session revocation is supported.
+- Revoking a project key prevents new sessions from being issued; existing sessions are revoked individually or left to expire; a key has no interface for arbitrary user business reads or writes.
+- Identity comes from the server's verification result; a user ID in request parameters is not accepted as proof of identity.
+- Permissions are checked on every HTTP call, subscription establishment, re-subscription and before every snapshot is delivered.
+- Subscription queries must restrict the data scope at the database read stage; reading other users' data first and relying on client-side filtering is forbidden.
+- A Scope hit can only trigger a query; it cannot grant permission to read data.
+- After a token expires, the server stops accepting new operations and ends the related connections.
+- When an application revokes permissions it should send a permission change notification; a periodic re-check is provided as a safety net, with a default interval of 30 seconds, configurable.
+- After a permission re-check fails, pushing stops and a subscription-closed reason is sent, and the SDK clears that subscription's cache. See [Authentication design](AUTH.md).
 
-### FR-03：业务调用
+### FR-03: Business calls
 
-- 通过 HTTP 调用已注册的 Operation。
-- 调用顺序为：解析请求、认证、输入校验、授权、执行业务、输出校验、返回结果。
-- 每次调用携带或生成 `request_id`，错误和日志中保留关联标识。
-- 业务拒绝、字段校验失败和服务端异常返回不同的错误类型。
-- 未处理异常转换为内部错误响应，不向调用者暴露堆栈或数据库细节。
-- 读取操作不产生业务写入或变更通知。
-- 写入操作以数据库事务提交结果作为成功依据，不能把进入任务队列作为写入完成。
-- 写入结果的输出校验在事务提交前完成；校验失败时回滚，不能返回结构错误但业务已成功的结果。
+- Registered Operations are called over HTTP.
+- The call order is: parse the request, authenticate, validate input, authorize, execute the business logic, validate output, return the result.
+- Every call carries or generates a `request_id`, and the correlation identifier is kept in errors and logs.
+- Business rejections, field validation failures and server exceptions return different error types.
+- Unhandled exceptions are converted into internal error responses, without exposing stack traces or database details to the caller.
+- Read operations produce no business writes or change notifications.
+- A write operation is successful when the database transaction commits; entering a job queue must not be treated as the write being complete.
+- Output validation of a write result completes before the transaction commits; if validation fails, the transaction is rolled back, and a result with a structural error but a business change that did succeed must not be returned.
 
-### FR-04：幂等与写入通知
+### FR-04: Idempotency and write notification
 
-- 需要重试保护的写入操作要求客户端提供 `idempotency_key`。
-- 幂等范围至少包含 Actor、操作名称和幂等键，并记录规范化输入的摘要。
-- 同一范围内，相同键和相同输入返回原有成功结果；相同键但不同输入返回冲突。
-- 并发提交由数据库唯一约束及事务保证最多产生一次该项业务写入。
-- 支持单条写入的原子业务结果；事务失败的请求可以重新执行。
-- 幂等成功结果默认保留 24 小时，允许应用配置；超过保留期后的重复提交不在去重保证内。
-- 业务数据、幂等成功记录和变更通知任务在同一事务中提交。
-- 使用 Oban 任务作为持久化变更通知的载体，任务执行后向相关 Scope 发布失效通知。
-- 重复通知允许发生，订阅刷新必须能够安全重复执行。
-- 对外部服务产生副作用的写入不在请求幂等的保证内；需要外部副作用时使用 Run 与 Effect，见 [EFFECTS.md](EFFECTS.md)。
+- Write operations that need retry protection require the client to supply an `idempotency_key`.
+- The idempotency scope includes at least the Actor, the operation name and the idempotency key, and a digest of the normalized input is recorded.
+- Within the same scope, the same key with the same input returns the original successful result; the same key with different input returns a conflict.
+- Concurrent submissions are guaranteed by database unique constraints and the transaction to produce that business write at most once.
+- Atomic business results for single writes are supported; requests whose transaction failed can be executed again.
+- Idempotent success results are kept for 24 hours by default, configurable by the application; duplicate submissions after the retention period are outside the deduplication guarantee.
+- The business data, the idempotent success record and the change notification job are committed in the same transaction.
+- Oban jobs carry the durable change notification; after a job runs, it publishes an invalidation notification to the relevant Scopes.
+- Duplicate notifications are allowed to occur; subscription refresh must be safe to repeat.
+- Writes that produce side effects on external services are outside the request idempotency guarantee; when external side effects are needed, use Run and Effect, see [EFFECTS.md](EFFECTS.md).
 
-### FR-05：实时订阅
+### FR-05: Realtime subscriptions
 
-- 客户端通过 Phoenix Channels 订阅已注册的名称和参数。
-- 服务端为订阅分配标识和 generation，返回授权后的初始快照。
-- 仅支持有明确条数和响应体大小上限的集合，超限返回结构化错误。
-- 示例只实时订阅最近一页；历史分页通过读取操作完成。
-- 收到相关失效通知后，订阅重新授权、查询并发送完整快照。
-- 同一订阅的连续失效通知可以合并，避免无意义地重复查询。
-- 未经证明权限上下文和查询语义完全相同，不跨 Actor 复用查询结果或缓存。
-- 对私有订阅不广播业务正文，只向已授权的连接发送结果。
-- 客户端可以取消订阅；连接关闭后释放相关进程、监听和定时资源。
-- 快照需要客户端确认；每个订阅最多保留一份待确认快照，期间的通知合并为待刷新标记。确认超时则关闭订阅。
+- Clients subscribe to registered names and parameters over Phoenix Channels.
+- The server assigns the subscription an identifier and a generation, and returns the authorized initial snapshot.
+- Only collections with explicit limits on item count and response body size are supported; exceeding a limit returns a structured error.
+- The examples subscribe in realtime to the most recent page only; history pagination is done through read operations.
+- After receiving a relevant invalidation notification, the subscription re-authorizes, queries and sends a complete snapshot.
+- Consecutive invalidation notifications for the same subscription may be merged to avoid pointless repeated queries.
+- Unless the permission context and query semantics are proven to be exactly identical, query results or caches are not reused across Actors.
+- Private subscriptions do not broadcast business content; results are sent only to authorized connections.
+- Clients can cancel a subscription; after a connection closes, the related processes, listeners and timers are released.
+- Snapshots require client acknowledgement; each subscription keeps at most one snapshot awaiting acknowledgement, and notifications arriving in the meantime are merged into a pending-refresh flag. If the acknowledgement times out, the subscription is closed.
 
-### FR-06：竞态与数据恢复
+### FR-06: Races and data recovery
 
-- 初始查询和监听建立之间不能存在无法恢复的更新缺口。
-- 查询期间发生变更时，必须安排后续刷新，不能把该通知永久吞掉。
-- 同一订阅同时最多运行一次查询；查询期间到达的变更合并为待刷新标记，当前查询结束后继续处理。
-- 同一订阅实例使用递增的发送序号；旧查询结果不能覆盖较新的结果。
-- 新连接或重新订阅生成新的 generation；客户端不得应用旧实例遗留的数据。
-- 重连时重新认证、重新建立订阅并读取快照，不依赖断线前的内存状态。
-- 提供显式刷新，并以周期校验发现遗漏通知；默认每 30 秒校验一次，可配置。
-- 在数据库、任务执行和连接均恢复健康的前提下，遗漏通知应在一个校验周期加查询处理时间内被修复。
-- 快照刷新期间保留上一份有效数据，但通过状态字段表明正在恢复；不能将其宣称为已经同步完成。
+- There must be no unrecoverable update gap between the initial query and the listener being established.
+- If a change occurs during a query, a follow-up refresh must be scheduled; the notification must not be dropped permanently.
+- At most one query runs at a time for a given subscription; changes arriving during a query are merged into a pending-refresh flag and handled after the current query finishes.
+- A given subscription instance uses an increasing send sequence number; an old query result cannot overwrite a newer one.
+- A new connection or re-subscription creates a new generation; the client must not apply data left over from an old instance.
+- On reconnect, the client re-authenticates, re-establishes subscriptions and reads snapshots, without depending on in-memory state from before the disconnect.
+- An explicit refresh is provided, and a periodic re-check finds missed notifications; by default it runs every 30 seconds, configurable.
+- Provided the database, job execution and connections are all healthy again, a missed notification should be repaired within one re-check period plus query processing time.
+- During a snapshot refresh the previous valid data is kept, but a status field shows that recovery is in progress; it must not be presented as fully synchronized.
 
-### FR-07：资源控制与背压
+### FR-07: Resource control and back-pressure
 
-- 设置单连接订阅数、结果条数、HTTP 请求体、Socket 帧、快照大小、数据库语句时间和快照确认超时上限。
-- 慢客户端不积压无限数量的历史快照，可合并尚未发送的刷新需求。
-- 超过连接发送预算时，返回明确原因并要求重连获取当前快照。
-- 实现上述基础限制，并提供按项目的请求速率与订阅数配额（单节点计数，见 [OPERATIONS.md](OPERATIONS.md#项目配额fyrletquota)）；面向公网的请求速率与全局连接配额由部署网关补充，未提供租户计费限额。
-- 一个订阅或操作失败不应导致其他用户连接全部中断。
+- Limits are set on subscriptions per connection, result item count, HTTP request body, Socket frame, snapshot size, database statement time and snapshot acknowledgement timeout.
+- A slow client does not accumulate an unbounded number of historical snapshots; refresh requests that have not yet been sent can be merged.
+- When a connection's send budget is exceeded, an explicit reason is returned and the client is required to reconnect to get the current snapshot.
+- The basic limits above are implemented, and per-project request rate and subscription count quotas are provided (counted per node, see [OPERATIONS.md](OPERATIONS.md#project-quotas-fyrletquota)); request rate and global connection quotas for public-facing traffic are supplied by the deployment gateway, and no tenant billing limits are provided.
+- The failure of one subscription or operation should not drop all other users' connections.
 
-### FR-08：可观测性与开发体验
+### FR-08: Observability and developer experience
 
-- 结构化日志包含请求 ID、操作或订阅名称、耗时、错误类型和可安全记录的身份标识。
-- 默认不记录令牌、完整正文或敏感参数。
-- 记录活跃连接、活跃订阅、查询次数、快照字节数、操作耗时、通知延迟与任务失败数。
-- 明确区分“连接已建立”“订阅正在恢复”“订阅已就绪”和“订阅已失效”。
-- 提供一个最小验证页面或脚本，可建立连接、调用操作、查看快照与错误。
-- 验证脚本直接使用 TypeScript SDK，覆盖真实 HTTP 与 WebSocket 流程。
+- Structured logs contain the request ID, the operation or subscription name, duration, error type and an identity identifier that is safe to log.
+- Tokens, full bodies and sensitive parameters are not logged by default.
+- Active connections, active subscriptions, query counts, snapshot bytes, operation duration, notification latency and job failure counts are recorded.
+- "Connection established", "subscription recovering", "subscription ready" and "subscription invalidated" are clearly distinguished.
+- A minimal verification page or script is provided that can establish a connection, call operations, and view snapshots and errors.
+- The verification script uses the TypeScript SDK directly and covers real HTTP and WebSocket flows.
 
-## 参考业务契约
+## Reference business contract
 
-| 名称 | 类型 | 输入概要 | 输出概要 | 权限 |
+| Name | Type | Input summary | Output summary | Permission |
 | --- | --- | --- | --- | --- |
-| `inbox.add` | 写入 | 正文、内容类型 | 新记录 | 只能为当前用户创建 |
-| `inbox.update` | 写入 | 记录 ID、正文、预期版本 | 更新后记录 | 仅记录所有者 |
-| `inbox.archive` | 写入 | 记录 ID、预期版本 | 更新后记录 | 仅记录所有者 |
-| `inbox.delete` | 写入 | 记录 ID、预期版本 | 删除结果 | 仅记录所有者 |
-| `inbox.history` | 读取 | 分页游标、条数 | 历史记录与下一页游标 | 当前用户可见记录 |
-| `inbox.recent` | 订阅 | 条数、是否包含归档 | 最近记录快照 | 当前用户可见记录 |
+| `inbox.add` | Write | Body, content type | New entry | Can only create for the current user |
+| `inbox.update` | Write | Entry ID, body, expected version | Updated entry | Entry owner only |
+| `inbox.archive` | Write | Entry ID, expected version | Updated entry | Entry owner only |
+| `inbox.delete` | Write | Entry ID, expected version | Deletion result | Entry owner only |
+| `inbox.history` | Read | Pagination cursor, count | History entries and next-page cursor | Entries visible to the current user |
+| `inbox.recent` | Subscription | Count, whether to include archived | Snapshot of recent entries | Entries visible to the current user |
 
-记录至少包含稳定 ID、所有者 ID、内容类型、正文、归档状态、记录版本、创建时间和更新时间。
+An entry contains at least a stable ID, owner ID, content type, body, archived status, entry version, creation time and update time.
 
-列表采用确定性排序，相同时间戳下使用稳定 ID 决定顺序。更新、归档和删除通过预期版本检测并发冲突，冲突后客户端刷新并由用户决定下一次操作。
+Lists use a deterministic order, with the stable ID deciding the order when timestamps are equal. Updates, archiving and deletion detect concurrent conflicts through the expected version; after a conflict, the client refreshes and the user decides the next action.
 
-## 协议要求
+## Protocol requirements
 
-应用层语义与线上格式见 [PROTOCOL.md](PROTOCOL.md)：HTTP 入口、错误码与状态码的对应、订阅事件、ACK 与 generation / seq 规则、增量协商、能力协商。Phoenix 传输协议版本、框架协议版本和应用业务契约版本分别管理。
+For application-level semantics and the wire format, see [PROTOCOL.md](PROTOCOL.md): the HTTP entry point, the mapping between error codes and status codes, subscription events, ACK and generation / seq rules, delta negotiation, and capability negotiation. The Phoenix transport protocol version, the framework protocol version and the application business contract version are managed separately.
 
-## 一致性与可靠性承诺
+## Consistency and reliability commitments
 
-### 事实来源
+### Source of truth
 
-PostgreSQL 是业务数据、幂等成功结果和待执行变更通知的事实来源。连接进程和订阅进程的内存用于调度与缓存，不承担永久保存职责。
+PostgreSQL is the source of truth for business data, idempotent success results and pending change notifications. The memory of connection processes and subscription processes is used for scheduling and caching and is not responsible for permanent storage.
 
-### 成功语义
+### Success semantics
 
-- 写入成功表示业务事务已经提交。
-- 通知发布成功不表示所有客户端已经收到或展示数据。
-- 收到快照表示该次授权查询已经完成，不表示未来不会再发生变化。
-- 提供健康运行条件下的最终收敛，不承诺所有客户端同时看到同一个数据库版本。
-- 不提供跨多个订阅的原子一致视图。
+- A successful write means the business transaction has been committed.
+- A successful notification publish does not mean all clients have received or displayed the data.
+- Receiving a snapshot means that authorized query has completed; it does not mean the data will not change in the future.
+- Eventual convergence is provided under healthy operating conditions; it is not promised that all clients see the same database version at the same time.
+- No atomically consistent view across multiple subscriptions is provided.
 
-### 故障恢复
+### Failure recovery
 
-- 提交前失败：事务回滚，不能发布成功结果或相应变更。
-- 提交后、通知前失败：持久化任务在恢复后继续执行。
-- 通知重复：允许重复刷新，不能重复产生业务写入。
-- 通知遗漏：通过显式刷新、重连读取和周期校验恢复当前数据。
-- 服务重启：从数据库恢复业务事实，客户端重新建立订阅。
-- 任务最终失败：记录错误并支持运维重试，不能静默视为已完成。
+- Failure before commit: the transaction is rolled back, and no success result or corresponding change may be published.
+- Failure after commit but before notification: the durable job continues after recovery.
+- Duplicate notifications: repeated refreshes are allowed, but business writes must not be produced twice.
+- Missed notifications: current data is recovered through explicit refresh, reconnect reads and the periodic re-check.
+- Service restart: business facts are recovered from the database, and clients re-establish subscriptions.
+- Final job failure: the error is recorded and operator retry is supported; the job must not be silently treated as complete.
 
-## TypeScript SDK 与移动端边界
+## TypeScript SDK and mobile boundary
 
-产品名称为 Fyrlet。SDK 按语言组织在 `sdks/<language>/`，当前实现位于 `sdks/typescript/`，本地包名为 `@fyrlet/client`。各语言共享协议和业务契约，分别采用该语言的 API 习惯；React 等框架适配在所属语言 SDK 之上实现。其他语言按实际应用需求增加，目录与验收约定见 [SDK 总览](../sdks/README.md)。
+The product name is Fyrlet. SDKs are organized by language under `sdks/<language>/`; the current implementation is in `sdks/typescript/`, with the local package name `@fyrlet/client`. All languages share the protocol and the business contract, and each follows the API conventions of its own language; framework adapters such as React are built on top of the SDK of the language they belong to. Other languages will be added according to actual application needs; for the directory and acceptance conventions, see the [SDK overview](../sdks/README.md).
 
-1. 提供 `createClient<Contract>`、`call`、`subscribe`、`reconnect`、`close`，以及服务端独立入口的会话交换与撤销。
-2. `getToken({forceRefresh})` 由宿主应用实现；SDK 不保存密码、项目服务密钥或浏览器永久令牌。HTTP 401 最多刷新一次，沿用原幂等键。
-3. 订阅暴露 connecting / recovering / ready / error / closed 状态。恢复期间保留旧数据并标记未就绪；认证或权限失效时清空数据。
-4. SDK 管理快照确认、generation、递增序号与重新订阅；关闭后释放连接、定时器和监听，不再自动重连。
-5. 从服务端契约生成调用与订阅的输入输出类型；SDK 核心不依赖 React、DOM 状态或浏览器存储。
-6. 支持注入 fetch、WebSocket 与随机 ID 生成函数，便于 Node 与 React Native 适配。移动端真机与后台生命周期尚未验收，不能宣称全面支持。
-7. 协议可由非 TypeScript 客户端实现。时间和 UUID 为字符串，数值限安全整数，错误提供稳定机器码。
+1. `createClient<Contract>`, `call`, `subscribe`, `reconnect` and `close` are provided, along with session exchange and revocation as a standalone server-side entry point.
+2. `getToken({forceRefresh})` is implemented by the host application; the SDK does not store passwords, project service keys or permanent browser tokens. An HTTP 401 triggers at most one refresh, reusing the original idempotency key.
+3. Subscriptions expose the connecting / recovering / ready / error / closed states. During recovery the old data is kept and marked not ready; when authentication or permissions become invalid, the data is cleared.
+4. The SDK manages snapshot acknowledgement, generation, increasing sequence numbers and re-subscription; after closing, it releases connections, timers and listeners and no longer reconnects automatically.
+5. Input and output types for calls and subscriptions are generated from the server contract; the SDK core does not depend on React, DOM state or browser storage.
+6. Injecting fetch, WebSocket and a random ID generator is supported, to ease Node and React Native adaptation. Real mobile devices and background lifecycle are not yet verified, so full support must not be claimed.
+7. The protocol can be implemented by non-TypeScript clients. Timestamps and UUIDs are strings, numbers are limited to safe integers, and errors carry stable machine codes.
 
-移动端推送、后台唤醒和离线写入不在目前范围内。服务端不要求客户端永久维持长连接。
+Mobile push, background wake-up and offline writes are out of scope for now. The server does not require clients to keep a long-lived connection permanently.
 
-## 性能目标与验证方式
+## Performance goals and verification
 
-先建立可复现的基线，不把预期优势写成已验证结论。实测结果与方法见 [PERFORMANCE.md](PERFORMANCE.md) 和 [OPTIMIZATIONS.md](OPTIMIZATIONS.md)。
+Establish a reproducible baseline first, and do not write expected advantages as verified conclusions. For measured results and methods, see [PERFORMANCE.md](PERFORMANCE.md) and [OPTIMIZATIONS.md](OPTIMIZATIONS.md).
 
-### 必须采集
+### What must be collected
 
-- 固定资源下的连接数、活跃订阅数、CPU 和内存。
-- 操作提交到客户端应用快照的 p50、p95、p99 延迟。
-- 每次业务变更触发的数据库查询次数与发送字节数。
-- 相同 Scope 的并发变更、私有订阅及慢客户端下的资源变化。
-- 断线恢复耗时、周期校验修复耗时、取消订阅后的资源释放情况。
-- 每条数据和每份快照的大小，以及单用户和多用户分布。
+- Connection count, active subscription count, CPU and memory under fixed resources.
+- p50, p95 and p99 latency from operation submission to the client applying the snapshot.
+- Database query count and bytes sent triggered by each business change.
+- Resource changes under concurrent changes to the same Scope, private subscriptions and slow clients.
+- Disconnect recovery time, periodic re-check repair time, and resource release after unsubscribing.
+- The size of each record and each snapshot, and the single-user and multi-user distributions.
 
-### 压测场景
+### Load test scenarios
 
-| 场景 | 关注点 |
+| Scenario | Focus |
 | --- | --- |
-| 大量空闲连接 | 基础连接与心跳成本 |
-| 少量用户频繁写入 | 通知合并、查询量和延迟 |
-| 多设备订阅同一用户数据 | 重复读取与序列化成本 |
-| 多用户私有订阅 | 权限隔离下的整体开销 |
-| 慢客户端与集中重连 | 背压、恢复和数据库压力 |
+| Many idle connections | Base connection and heartbeat cost |
+| A few users writing frequently | Notification merging, query volume and latency |
+| Multiple devices subscribing to the same user's data | Repeated reads and serialization cost |
+| Many users with private subscriptions | Overall overhead under permission isolation |
+| Slow clients and mass reconnects | Back-pressure, recovery and database pressure |
 
-记录硬件、运行时版本、数据库配置、数据集、查询范围、限额与持久化要求。容量上限和延迟 SLO 以实现后的测量结果确定；不以空闲连接数量代表完整业务吞吐。
+Record the hardware, runtime versions, database configuration, data set, query range, limits and persistence requirements. Capacity limits and latency SLOs are determined from measurements after implementation; the number of idle connections is not used to represent full business throughput.
 
-## 风险
+## Risks
 
-| 风险 | 影响 | 缓解 |
+| Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Run 扩张过快 | 维护成本、恢复正确性难验证 | 可选模块、顺序计划、单执行策略、领域闭环先行 |
-| Outbox 被误读为外部去重 | 重复通知、重复扣费等业务后果 | 稳定业务键、供应商能力与有效期声明；不确定结果默认暂停 |
-| 租约过期但旧执行仍运行 | 重复执行或旧结果覆盖 | 递增代次与条件提交；外部效果另由接收方去重 |
-| 取消与补偿混淆 | UI 显示停止但外部效果仍发生 | 取消结果分级、迟到结果审计、显式补偿 |
-| 追加位置或历史边界错误 | 丢记录、重复合并、错误完整性承诺 | 基准位置校验、一致快照、窗口规则与历史截断声明 |
-| 共享订阅范围成为越权入口 | 私有字段泄露 | 默认私有、独立公共投影、完整缓存键、逐成员校验 |
-| 查询辅助工具被当成数据库隔离 | 非受管路径越权 | 明确保证范围；强隔离另行设计数据库权限与 RLS |
-| 插件组合与加载失败 | 无法恢复或入口降级放行 | 依赖就绪检查、入口关闭、持续运行一致性套件 |
-| 过早抽象插件 API | 错误的长期协议 | 先实现后抽象（见 [PLUGINS.md](PLUGINS.md#接缝原则)） |
-| 领域包反推核心特化 | 核心被单一产品绑死 | 领域包独立发布，核心只接受通用语义 |
+| Run grows too fast | Maintenance cost; recovery correctness is hard to verify | Optional module, sequential plans, single-execution policy, domain loops first |
+| Outbox misread as external deduplication | Business consequences such as duplicate notifications or duplicate charges | Stable business keys, provider capability and validity period declarations; unknown outcomes pause by default |
+| Lease expires but the old execution is still running | Duplicate execution or old results overwriting new ones | Increasing epochs and conditional commits; external effects are deduplicated separately by the receiver |
+| Cancellation confused with compensation | The UI shows stopped but the external effect still happens | Graded cancellation results, auditing of late results, explicit compensation |
+| Wrong append position or history boundary | Lost records, duplicate merges, wrong completeness claims | Base position checks, consistent snapshots, window rules and history truncation declarations |
+| Shared subscription scope becomes an authorization-bypass entry point | Private fields leak | Private by default, a separate public projection, complete cache keys, per-member checks |
+| A query helper mistaken for database isolation | Authorization bypass on unmanaged paths | State the scope of the guarantee explicitly; strong isolation needs a separate database permission and RLS design |
+| Plugin combination and load failures | Cannot recover, or an entry point degrades to allowing access | Dependency readiness checks, entry points closed, a conformance suite running continuously |
+| Premature plugin API abstraction | A wrong long-term protocol | Implement first, abstract later (see [PLUGINS.md](PLUGINS.md#seam-principle)) |
+| Domain packages driving specialization of the core | The core gets tied to a single product | Domain packages are released independently; the core accepts only general semantics |
 
 ---
 
-## 成功判据
+## Success criteria
 
-- **能用**：仓库外的应用可安装；一个真实的运行类业务完成“启动—观察—等待/介入—取消—恢复”；外部不确定结果能够被准确保留和处置；未声明能力的客户端不受影响。
-- **可复用**：至少两个真实领域应用共用公开核心与能力接口，无需 fork 或复制核心代码。单个演示应用跑通不能代替这项验证。
-- **收益可证**：共享订阅报告查询和序列化节省，追加订阅报告字节与刷新回退情况；同时保留授权、慢客户端、恢复与历史边界验收。记录接入步骤、业务代码量、升级成本和运维处置成本，避免仅以功能数量判断。
-- **可关闭**：关闭可选能力后，未使用该能力的应用行为不变；已经存在的任务必须有排空或暂停策略。连接数、单次延迟或相对其他框架的未经验证优势不能替代以上事实。
+- **Usable**: an application outside the repository can install it; a real run-type business completes "start, observe, wait/intervene, cancel, recover"; uncertain external outcomes can be kept and handled accurately; clients that have not declared a capability are unaffected.
+- **Reusable**: at least two real domain applications share the public core and capability interfaces, without forking or copying core code. A single demo application running end to end cannot replace this verification.
+- **Benefit demonstrable**: shared subscriptions report query and serialization savings, and append subscriptions report bytes and refresh fallback; authorization, slow-client, recovery and history-boundary acceptance is kept alongside. Record the integration steps, business code size, upgrade cost and operational handling cost, so that judgement is not based on feature count alone.
+- **Can be turned off**: after an optional capability is turned off, the behavior of applications that do not use it is unchanged; existing jobs must have a drain or pause policy. Connection count, single-request latency, or unverified advantages over other frameworks cannot replace the facts above.
 
-## 未决事项
+## Open questions
 
-- **类型生成扩展**：当前显式契约是唯一类型来源；Ash 适配与其他语言生成器按实际需求评估。
-- **同步层升级**：是否引入 Phoenix.Sync / Electric，取决于正确性测试和性能基线。
-- **离线能力**：先定义客户端缓存、过期和权限撤销语义，再讨论离线写入和冲突处理。
-- **分布式部署**：同机双节点已验证；多主机部署、网络分区恢复与全局配额需要单独验证和设计。
-- **发布与兼容**：正式发布前确定 Hex / npm 发布、许可证、弃用周期和服务端 / SDK 兼容矩阵。
-- **插件 API 冻结**：以实际接缝和升级反馈为准，不设日期（见 [PLUGINS.md](PLUGINS.md#接缝原则)）。
+- **Type generation extensions**: the explicit contract is currently the only source of types; an Ash adapter and generators for other languages will be evaluated according to actual needs.
+- **Sync layer upgrade**: whether to introduce Phoenix.Sync / Electric depends on correctness tests and the performance baseline.
+- **Offline capability**: first define the client cache, expiry and permission revocation semantics, then discuss offline writes and conflict handling.
+- **Distributed deployment**: a two-node setup on one machine has been verified; multi-host deployment, network partition recovery and global quotas need separate verification and design.
+- **Release and compatibility**: before the official release, decide on Hex / npm publishing, the license, the deprecation period and the server / SDK compatibility matrix.
+- **Plugin API freeze**: based on actual seams and upgrade feedback, with no date set (see [PLUGINS.md](PLUGINS.md#seam-principle)).
 
-产品是否成立，先看作者能否用它稳定完成第一个应用，并在第二个应用中减少重复的认证、调用、订阅和恢复代码。
+Whether the product holds up depends first on whether the author can use it to complete the first application reliably, and in the second application reduce the repeated authentication, call, subscription and recovery code.

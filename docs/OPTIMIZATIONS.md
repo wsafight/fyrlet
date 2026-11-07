@@ -1,54 +1,54 @@
-# 优化记录
+# Optimization log
 
-本文记录对 Fyrlet 做过的优化、方法与证据，以及测量后回退或默认关闭的试验。原则是**先测量再改造**：每一项都标明证据的层级（函数级、语句数、端到端），不把函数级的收益写成服务整体的收益。同资源对照结果与基准方法见 [PERFORMANCE.md](PERFORMANCE.md)。
+This document records the optimizations made to Fyrlet, the methods and evidence behind them, and the experiments that were reverted or left off by default after measurement. The principle is **measure first, then change**: each item states the level of its evidence (function-level, statement count, end-to-end), and a function-level gain is never written up as a gain for the service as a whole. For same-resource comparison results and the benchmark method, see [PERFORMANCE.md](PERFORMANCE.md).
 
-原始运行数据在本机 `.local/fair/`（已被版本控制忽略），不随仓库提交。
+The raw run data is in `.local/fair/` on the local machine (ignored by version control) and is not committed with the repository.
 
-## 总览
+## Overview
 
-| 项 | 状态 | 证据 |
+| Item | Status | Evidence |
 | --- | --- | --- |
-| Oban 已完成作业无限增长 | 已修复 | 依赖源码；表规模为估算，未跑 24 小时 |
-| `View.reset` 复用未变化记录的大小 | 已优化 | 纯函数微基准 −45%；无端到端数据 |
-| 幂等记录自动清理 | 已实现 | 正确性测试；无性能数据 |
-| Channel 空闲休眠 | 已实现，默认不变 | 3 次交替：内存约 −12%，CPU 约 +5%（噪声内） |
-| 延迟备用 Oban 任务 | 已实现，默认关闭 | 8 轮对照无可测收益 |
-| 连接鉴权批处理 | 已回退 | 6 轮交替差异 2–3%，小于噪声 |
-| `snapshot_with_metadata` 死代码 | 已移到测试辅助 | 清理，无性能数据 |
-| 幂等保留期配置化 | 已完成，默认不变 | 估算 |
+| Unbounded growth of completed Oban jobs | Fixed | Dependency source; table size is an estimate, not run for 24 hours |
+| `View.reset` reuses sizes of unchanged records | Optimized | Pure-function microbenchmark −45%; no end-to-end data |
+| Automatic cleanup of idempotency records | Implemented | Correctness tests; no performance data |
+| Channel idle hibernation | Implemented, default unchanged | 3 alternating rounds: memory about −12%, CPU about +5% (within noise) |
+| Delayed fallback Oban job | Implemented, off by default | 8-round comparison, no measurable gain |
+| Batching of connection authentication | Reverted | 6 alternating rounds, 2–3% difference, below noise |
+| `snapshot_with_metadata` dead code | Moved to test helpers | Cleanup, no performance data |
+| Configurable idempotency retention period | Done, default unchanged | Estimate |
 
-## 1. Oban 清理器容量
+## 1. Oban pruner capacity
 
-依赖源码显示 `Oban.Pruner` 默认每 30 秒最多删 10,000 条，即约 333 条/秒；原配置又保留 24 小时。每次写入都会插一条兜底作业，所以持续写入超过约 333 次/秒时 `oban_jobs` 净增长，不收敛。
+The dependency source shows that `Oban.Pruner` by default deletes at most 10,000 rows every 30 seconds, about 333 rows/second; the original configuration also kept jobs for 24 hours. Every write inserts one fallback job, so when sustained writes exceed about 333 per second, `oban_jobs` grows without converging.
 
-现在配置为 `pruner: [max_age: 3_600, interval: 10_000, limit: 50_000]`（约 5000 条/秒），并改用非弃用的 `pruner:` / `cron:` 配置键。按 500 writes/s 估算（在小表上实测每个作业约 2 KB，含索引，数值偏大）：原来 24 小时稳态约 4300 万行、约 86 GB；现在约 180 万行、约 4 GB。**这是估算，没有跑 24 小时验证**。
+The configuration is now `pruner: [max_age: 3_600, interval: 10_000, limit: 50_000]` (about 5000 rows/second), and it uses the non-deprecated `pruner:` / `cron:` configuration keys. Estimated at 500 writes/s (measured on a small table at about 2 KB per job including indexes, so the figure is on the high side): previously the 24-hour steady state was about 43 million rows, about 86 GB; now it is about 1.8 million rows, about 4 GB. **This is an estimate; it was not run for 24 hours.**
 
-## 2. `View.reset` 复用记录大小
+## 2. `View.reset` reuses record sizes
 
-新增、删除、窗口移入移出会走 `View.reset`，它原来对窗口内全部记录（默认 50 条）重新做 JSON 编码来计算大小。现在 `View.new/3` 接收上一版视图，内容相同的记录复用已算好的大小，只对新增或变化的记录编码。
+Additions, deletions and records moving into or out of the window go through `View.reset`, which used to re-encode every record in the window (50 by default) as JSON to compute sizes. Now `View.new/3` receives the previous view, records with identical content reuse the sizes already computed, and only added or changed records are encoded.
 
-微基准 `bench/view_reset.exs`（纯函数，50 条 × 128 B，每轮 3000 次，5 轮）：
+Microbenchmark `bench/view_reset.exs` (pure function, 50 records × 128 B, 3000 iterations per round, 5 rounds):
 
-| | 每次新增耗时 µs（5 轮） | 中位数 |
+| | Time per addition, µs (5 rounds) | Median |
 | --- | --- | --- |
-| 修改前 | 128.8 / 130.5 / 130.0 / 128.4 / 133.2 | 130.0 |
-| 修改后 | 71.4 / 68.6 / 70.3 / 71.2 / 72.4 | 71.2 |
+| Before | 128.8 / 130.5 / 130.0 / 128.4 / 133.2 | 130.0 |
+| After | 71.4 / 68.6 / 70.3 / 71.2 / 72.4 | 71.2 |
 
-基准内置校验：字节数与全量重算一致，patch 的新增与移除内容正确。`test/fyrlet/view_test.exs` 对比“复用结果”与“全量新建”的 records、order、sizes、bytes，并覆盖内容变化、无变化与非索引视图回退。
+Built-in checks in the benchmark: the byte counts equal a full recomputation, and the added and removed content of the patch is correct. `test/fyrlet/view_test.exs` compares the "reused result" with a "full rebuild" on records, order, sizes and bytes, and covers changed content, no change, and fallback for non-indexed views.
 
-**局限**：只是视图层的纯函数耗时，不含数据库查询（`update_membership` 仍会查一次）和网络。现有压测框架只支持“更新已有记录”，没有新增/删除场景，所以不能说端到端快了多少。
+**Limitation**: this is only the pure-function time of the view layer. It excludes database queries (`update_membership` still queries once) and the network. The existing load-test framework only supports "update an existing record" and has no add/delete scenario, so it cannot say how much faster things are end to end.
 
-## 3. 幂等记录清理与保留
+## 3. Idempotency record cleanup and retention
 
-`Fyrlet.PruneWorker` 通过 Oban Cron 每 10 分钟分批（5000 行/批）删除过期幂等记录和过期超过 24 小时的会话，并新增 `idempotency_results(expires_at)` 索引避免清理时全表扫描。此前只有手动 `mix fyrlet.prune`。该索引给每次写入增加一次索引维护，成本未单独测量。
+`Fyrlet.PruneWorker` uses Oban Cron to delete, every 10 minutes and in batches (5000 rows per batch), expired idempotency records and sessions that expired more than 24 hours ago, and a new index `idempotency_results(expires_at)` avoids a full table scan during cleanup. Previously there was only the manual `mix fyrlet.prune`. The index adds one index maintenance operation to every write; this cost was not measured separately.
 
-保留期是产品语义（客户端可安全重试同一个 Idempotency-Key 的窗口），因此只做成可配置，默认仍为 24 小时。容量估算与配置见 [SERVER.md](SERVER.md) 的“数据保留与容量”。
+The retention period is product semantics (the window in which a client can safely retry the same Idempotency-Key), so it was only made configurable, and the default remains 24 hours. For capacity estimates and configuration, see "Data retention and capacity" in [SERVER.md](SERVER.md).
 
-## 4. Channel 空闲休眠
+## 4. Channel idle hibernation
 
-`FYRLET_CHANNEL_HIBERNATE_MS`（构建期，默认 15000，即 Phoenix 默认值）。对照：同源码、同数据库迁移，仅休眠 15000 ms 对 1000 ms；应用 1 vCPU / 1 GiB，500 writes/s × 20 秒，交替 A B B A A B。
+`FYRLET_CHANNEL_HIBERNATE_MS` (build time, default 15000, which is the Phoenix default). Comparison: same source, same database migration, only hibernation of 15000 ms against 1000 ms; app at 1 vCPU / 1 GiB, 500 writes/s × 20 seconds, alternating A B B A A B.
 
-| 轮 | 休眠 ms | 完成写入 | P95 ms | 应用 CPU 秒 | 节流周期 | anon 内存峰值 MiB |
+| Round | Hibernate ms | Writes completed | P95 ms | App CPU seconds | Throttled periods | anon memory peak MiB |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 15000 | 9966 | 5.56 | 18.2 | 1 | 578 |
 | 2 | 1000 | 9854 | 9.88 | 18.3 | 3 | 523 |
@@ -57,249 +57,249 @@
 | 5 | 15000 | 9826 | 3.95 | 14.4 | 2 | 634 |
 | 6 | 1000 | 9957 | 4.58 | 16.7 | 3 | 533 |
 
-内存（cgroup anon 峰值）15000 均值约 615 MiB、1000 均值约 543 MiB，约低 12%，但最差与最好值有重叠（574 对 578）；CPU 约 +5%，在同组 ±10% 的波动内；P95 与完成写入数无可靠差异。结论：这是小而偏向省内存的取舍，**不是速度优化**；连接数更大（如 5000 用户 / 10000 连接）时收益才更可能显著，这点未测。
+Memory (cgroup anon peak): the 15000 mean is about 615 MiB and the 1000 mean about 543 MiB, about 12% lower, but the worst and best values overlap (574 against 578); CPU is about +5%, within the ±10% fluctuation inside a group; P95 and writes completed show no reliable difference. Conclusion: this is a small trade-off that favors saving memory and is **not a speed optimization**; with more connections (for example 5000 users / 10000 connections) the gain is more likely to be significant, but this was not measured.
 
-## 5. 无收益而回退或默认关闭的试验
+## 5. Experiments reverted or left off by default for lack of benefit
 
-- **延迟备用 Oban 任务**（`FYRLET_INVALIDATION_FALLBACK_DELAY_S`）：提交后已立即广播，备用任务只在失败时才需要，所以让它延后几秒执行。8 轮交替对照 CPU 均值相差约 1.5%，而同设置下各轮波动约 ±10%，无可测收益。该选项已移除，备用任务总是立即入队。
-- **连接鉴权批处理**：让 `UserSocket.connect` 的会话查找也走批处理。1000 用户 × 2 设备、10 writes/s × 2 秒，使整次运行的 CPU 主要来自建连，交替 6 轮：改前 CPU 均值 4.17 秒、建连 3775 ms；改后 4.07 秒、3697 ms，差 2–3%。代码与测试已回退，避免给热路径增加无证据的分支。
+- **Delayed fallback Oban job** (`FYRLET_INVALIDATION_FALLBACK_DELAY_S`): the broadcast is already sent immediately after commit, and the fallback job is only needed on failure, so it was delayed by a few seconds. In an 8-round alternating comparison the mean CPU differed by about 1.5%, while rounds under the same settings fluctuate by about ±10%; there was no measurable gain. The option was removed, and the fallback job is always enqueued immediately.
+- **Batching of connection authentication**: make the session lookup in `UserSocket.connect` also go through batching. With 1000 users × 2 devices and 10 writes/s × 2 seconds, so that the CPU of the whole run came mainly from connection setup, 6 alternating rounds: before the change mean CPU 4.17 seconds and connection setup 3775 ms; after, 4.07 seconds and 3697 ms, a 2–3% difference. The code and tests were reverted, to avoid adding an unproven branch to a hot path.
 
-## 6. 其他
+## 6. Other
 
-- `Runtime.snapshot_with_metadata/4` 在 `lib/` 里没有生产调用者，却在每次调用里做 SHA-256 指纹和 O(n) 索引比较，只有测试使用。已整体移到 `test/support/fixtures.ex`，`Runtime.snapshot/2` 简化为直接取视图。
-- 新增环境变量 `POOL_SIZE`（数据库连接池，默认 10）。写入事务在整个事务期间占用一个连接；这个值是否限制吞吐尚未实测。
+- `Runtime.snapshot_with_metadata/4` has no production caller in `lib/`, yet on every call it computes a SHA-256 fingerprint and an O(n) index comparison, and only tests use it. It was moved as a whole to `test/support/fixtures.ex`, and `Runtime.snapshot/2` was simplified to fetch the view directly.
+- New environment variable `POOL_SIZE` (database connection pool, default 10). A write transaction occupies one connection for its whole duration; whether this value limits throughput has not been measured.
 
-## 7. 静态数据缓存（契约索引与插件加载）
+## 7. Static data cache (contract index and plugin loading)
 
-**发现**：用微基准量得，每次 `Registry.fetch/2` 约 205 µs（对每个定义重新调用 `contract()` 重建整张契约），每次 `Capabilities.enabled?/1` 约 100 µs（重新校验全部插件）。前者在每次操作调用和订阅加入时执行，后者在路由、协商、`Runtime` 等 11 处执行。
+**Finding**: microbenchmarks measured about 205 µs per `Registry.fetch/2` (it called `contract()` again for every definition and rebuilt the whole contract), and about 100 µs per `Capabilities.enabled?/1` (it re-validated all plugins). The former runs on every operation call and subscription join; the latter runs in 11 places, including routing, negotiation and `Runtime`.
 
-**做法**：`Fyrlet.StaticCache`（`:persistent_term`，读取不拷贝、不加锁）。契约索引按"定义模块列表"缓存，插件加载结果按"插件与能力配置"缓存；配置变化时自动重算，`Fyrlet.Registry.refresh/0`、`Fyrlet.Plugins.reload/0` 可显式清除。`config :fyrlet, runtime_cache: false` 关闭（核心测试套件关闭，因为很多用例在运行期改写契约；缓存路径由 `static_cache_test` 以及默认开启缓存的示例、插件包和 SDK 集成测试覆盖）。契约在同一组定义下视为不变：运行期改写契约的代码需要调用 `refresh/0`。
+**What was done**: `Fyrlet.StaticCache` (`:persistent_term`; reads do not copy or lock). The contract index is cached by "list of definition modules", and the plugin loading result is cached by "plugin and capability configuration"; when the configuration changes it is recomputed automatically, and `Fyrlet.Registry.refresh/0` and `Fyrlet.Plugins.reload/0` can clear it explicitly. `config :fyrlet, runtime_cache: false` turns it off (the core test suite turns it off, because many cases rewrite contracts at runtime; the cached path is covered by `static_cache_test` and by the example, plugin package and SDK integration tests, which run with the cache on by default). The contract is treated as unchanged for a given set of definitions: code that rewrites contracts at runtime must call `refresh/0`.
 
-| 调用 | 之前 | 之后 |
+| Call | Before | After |
 | --- | --- | --- |
-| `Registry.fetch/2` | 约 205 µs | 约 1.6 µs |
-| `Capabilities.enabled?/1`、`supported/0` | 约 100 µs | 约 1 µs |
-| `Capabilities.negotiate/2` | 约 100 µs | 约 1 µs |
+| `Registry.fetch/2` | about 205 µs | about 1.6 µs |
+| `Capabilities.enabled?/1`, `supported/0` | about 100 µs | about 1 µs |
+| `Capabilities.negotiate/2` | about 100 µs | about 1 µs |
 
-端到端（同一进程交替开关缓存，4 轮取中位数）：
+End to end (cache toggled alternately in the same process, median of 4 rounds):
 
-| 操作 | 缓存关 µs | 缓存开 µs |
+| Operation | Cache off µs | Cache on µs |
 | --- | --- | --- |
-| `Runtime.prepare_subscription`（不写库） | 286 | 55 |
-| `Runtime.call("inbox.add")`（含数据库） | 1900 | 1660 |
+| `Runtime.prepare_subscription` (no database write) | 286 | 55 |
+| `Runtime.call("inbox.add")` (including database) | 1900 | 1660 |
 
-**局限**：写入那一行**不能作为结论**——延迟随轮次从约 870 µs 漂移到约 2000 µs（表与 Oban 作业持续增长），漂移大于缓存带来的差异，配对比较 4 轮里 3 轮偏向开启缓存，幅度约 100–240 µs，与按调用次数估算的约 200–300 µs 同量级，但未达到统计上可确认的程度。没有跑过 PERFORMANCE.md 第 3 节那样的 cgroup 限额压测，所以不声称 500 writes/s 下的吞吐或 CPU 变化；按[PERFORMANCE.md](PERFORMANCE.md)“单核剖析”（单核约 53% 忙）推算收益在个位数到约 10% 的单核份额，**这是估算**。
+**Limitation**: the write row **cannot be taken as a conclusion**. Latency drifted with the round from about 870 µs to about 2000 µs (the table and Oban jobs keep growing), and the drift is larger than the difference the cache makes. In the paired comparison, 3 of 4 rounds favored the cache being on, by about 100–240 µs, which is of the same order as the roughly 200–300 µs estimated from the call counts, but it does not reach statistically confirmable level. No cgroup-limited load test like the one in section 3 of PERFORMANCE.md was run, so no change in throughput or CPU at 500 writes/s is claimed; extrapolating from the "Single-core profile" in [PERFORMANCE.md](PERFORMANCE.md) (single core about 53% busy), the gain is a single-core share from the single digits up to about 10%, **and this is an estimate**.
 
-## 8. `Schema.validate` 成功路径（BEAM 层剖析驱动）
+## 8. `Schema.validate` success path (driven by BEAM-level profiling)
 
-**怎么发现的**：先用微基准排除了几个常见嫌疑（见下），再对"写入 + Observer 刷新 50 条记录"的真实路径做 `:tprof`（`call_time`，300 轮）。方法：`Mix.ensure_application!(:tools)`，`:tprof.start(%{type: :call_time})`、`enable_trace(:all)`、`set_pattern(:_, :_, :_)`，跑负载后 `:tprof.inspect(data, :total, :measurement)`。绝对耗时被追踪放大，只看相对占比。结果：**Elixir 层 CPU 最大的单一来源是 `Fyrlet.Schema.check`**——自身加上它引起的 `Access.get`（每 300 轮 48.7 万次）、`:maps.fold`、`String.length`/`unicode_util`、`DateTime` 解析、`Enum.reduce`，合计约 25–30%。原因：每次新增/删除会让窗口整体重置（`View.reset`），整个 50 条快照重新校验，每次刷新约 420 次 `check`。
+**How it was found**: first a few common suspects were ruled out with microbenchmarks (see below), then `:tprof` (`call_time`, 300 rounds) was run on the real path of "write + Observer refresh of 50 records". Method: `Mix.ensure_application!(:tools)`, `:tprof.start(%{type: :call_time})`, `enable_trace(:all)`, `set_pattern(:_, :_, :_)`, run the load, then `:tprof.inspect(data, :total, :measurement)`. Absolute times are inflated by tracing, so only relative shares are used. Result: **the largest single source of CPU in the Elixir layer is `Fyrlet.Schema.check`**: itself plus the `Access.get` it causes (487,000 calls per 300 rounds), `:maps.fold`, `String.length`/`unicode_util`, `DateTime` parsing and `Enum.reduce`, together about 25–30%. Cause: each addition or deletion resets the whole window (`View.reset`), and the entire 50-record snapshot is validated again, about 420 `check` calls per refresh.
 
-**原因（都在成功路径上）**：每个字段拼 `path <> "." <> name` 路径字符串（只有出错才用得上）；每个字符串都 `String.length/1`（按字素簇计数）；每个字段都 `Map.put` 重建规范化 map；`schema["format"]` 这类方括号访问走 `Access.get/2 → Access.get/3` 两层远程调用；`DateTime.from_iso8601` 解析每个时间戳；`Enum.with_index |> map_reduce` 给每条记录分配元组。
+**Causes (all on the success path)**: for each field a `path <> "." <> name` path string is built (only needed on error); every string goes through `String.length/1` (which counts grapheme clusters); every field is rebuilt into the normalized map with `Map.put`; bracket access such as `schema["format"]` goes through two layers of remote calls, `Access.get/2 → Access.get/3`; `DateTime.from_iso8601` parses every timestamp; `Enum.with_index |> map_reduce` allocates a tuple for every record.
 
-**做法**（`lib/fyrlet/schema.ex`，语义不变）：路径用反向列表（每层一个 cons），只在报错时渲染；只有设置了 `minLength` 或字节数超过 `maxLength` 时才数字素（N 字节的串至多 N 个字素）；只对"值发生变化"的条目重建 map；每个键只 `Map.get` 一次；规范格式的时间戳用二进制模式匹配判定，其余形式交还 `DateTime.from_iso8601`（快路径只在该解析器也会接受时回答"是"）；数组用带索引的尾递归。
+**What was done** (`lib/fyrlet/schema.ex`, semantics unchanged): the path is a reversed list (one cons per level) rendered only when an error is reported; graphemes are counted only when `minLength` is set or the byte count exceeds `maxLength` (a string of N bytes has at most N graphemes); the map is rebuilt only for entries whose value changed; each key is read with `Map.get` only once; timestamps in canonical format are recognized by binary pattern matching, and other forms are handed back to `DateTime.from_iso8601` (the fast path answers "yes" only when that parser would also accept); arrays use tail recursion with an index.
 
-**如何保证语义不变**：旧实现原样冻结为 `test/support/schema_reference.ex`；`schema_differential_test` 用带种子的随机生成器造 6000 组 schema × 值（含越界、多字节、非法类型、默认值、`anyOf`、嵌套），要求规范化后的值和每条错误路径与文案逐字相同；另对全部已注册契约、以及 2 万条对合法时间戳做单字符变异的字符串，逐一对照 `DateTime.from_iso8601`。做了三个变异检验（minLength 改按字节、快路径去掉日历检查、丢掉嵌套默认值），差分测试都报警。
+**How semantics are kept unchanged**: the old implementation is frozen as it was in `test/support/schema_reference.ex`; `schema_differential_test` uses a seeded random generator to produce 6000 schema × value combinations (including out-of-range, multibyte, invalid types, defaults, `anyOf` and nesting), and requires the normalized values and every error path and message to be identical character for character; in addition, for all registered contracts and for 20,000 strings made by a single-character mutation of a valid timestamp, each result is compared against `DateTime.from_iso8601`. Three mutation checks were done (minLength counted in bytes, calendar check removed from the fast path, nested defaults dropped), and the differential test raised an alarm in each case.
 
-| 校验对象 | 旧 µs | 新 µs | 倍数 |
+| Validated object | Old µs | New µs | Factor |
 | --- | --- | --- | --- |
-| `inbox.add` 输入 | 0.97 | 0.59 | 1.65 |
-| 1 条记录 | 3.48 | 1.66 | 2.09 |
-| 50 条记录（快照刷新） | 148.4 | 69.6 | **2.13** |
+| `inbox.add` input | 0.97 | 0.59 | 1.65 |
+| 1 record | 3.48 | 1.66 | 2.09 |
+| 50 records (snapshot refresh) | 148.4 | 69.6 | **2.13** |
 
-（5 次取中位数，同进程并排。）再次剖析，同一负载的追踪总时间下降约 15%。
+(Median of 5 runs, side by side in the same process.) Profiling again, the total traced time of the same load dropped by about 15%.
 
-**局限**：这是校验函数本身的耗时与追踪占比，不是端到端吞吐；增量更新路径只校验一条记录，受益很小，收益集中在窗口重置与订阅加入。没有跑 cgroup 限额压测。
+**Limitation**: this is the time of the validation function itself and its share of the trace, not end-to-end throughput; the incremental update path validates only one record and benefits little, so the gain is concentrated in window resets and subscription joins. No cgroup-limited load test was run.
 
-**排除的嫌疑（实测，不值得改）**：模块属性里的 `~r` 正则没有被每次重编译，每次约 0.75 µs（手写二进制匹配 0.07 µs，但绝对值太小）；`Application.get_env`/`fetch_env!` 约 0.08 µs，`Limits.get/1` 里"先求值默认值"的写法没有可见代价；标准库 `JSON` 比 Jason 编码快 1.44 倍、解码快 2.2 倍，但 Observer 把编码结果用 `Jason.Fragment` 拼进帧里以避免对每个订阅者重编码，换编码器只省约 15 µs/次，且字节级输出差异要逐项验证，收益不足以承担风险。
+**Suspects ruled out (measured, not worth changing)**: the `~r` regex in the module attribute is not recompiled on every call, and costs about 0.75 µs per call (handwritten binary matching is 0.07 µs, but the absolute value is too small); `Application.get_env`/`fetch_env!` costs about 0.08 µs, and evaluating the default first in `Limits.get/1` has no visible cost; the standard library `JSON` encodes 1.44 times and decodes 2.2 times faster than Jason, but the Observer splices the encoded result into frames with `Jason.Fragment` to avoid re-encoding for each subscriber, so switching encoders would save only about 15 µs per call, and byte-level output differences would have to be verified one by one; the gain does not justify the risk.
 
-## 9. 逐项"先测量再改造"（2026-11-07）
+## 9. "Measure first, then change", item by item (2026-11-07)
 
-所有压测都写成**沙箱内**的 ExUnit 文件，放在 `test/bench/`（文件名不以 `_test.exs` 结尾，日常 `mix test` 不会跑，需要时显式指定路径），跑完自动回滚，不会在测试库里留数据。（早先用非沙箱脚本时曾留下残留数据，导致一次无关的测试失败，已清理并改为这种方式。）
+All load tests are written as ExUnit files that run **inside the sandbox** and live in `test/bench/` (file names do not end in `_test.exs`, so a routine `mix test` does not run them; specify the path explicitly when needed), and they roll back automatically when done, leaving no data in the test database. (When non-sandbox scripts were used earlier, residual data was left behind and caused an unrelated test failure; it was cleaned up and this approach adopted.)
 
-| 文件 | 测什么 | 用法 |
+| File | What it measures | Usage |
 | --- | --- | --- |
-| `append_fanout.exs` | N 个订阅者、P 条消息，每条消息的数据库查询数与投递耗时 | `FANOUT=100 POSTS=20 mix test test/bench/append_fanout.exs` |
-| `query_counts.exs` | 各用户可见操作的语句数，按种类分类 | `mix test test/bench/query_counts.exs` |
-| `revalidate_callers.exs` | 用 `:dbg` 追踪谁在调用 `Auth.revalidate` 以及 Observer 为何刷新 | 同上 |
-| `run_view.exs` | 步骤输出很大时 `Runs.View.build` 的耗时 | `OUTPUT_KB=30 STEPS=10 mix test test/bench/run_view.exs` |
-| `lease_count.exs` | 全系统租约很多时，"项目并发上限"检查的代价（含 `EXPLAIN ANALYZE`） | `PROJECTS=200 RUNS=100 mix test test/bench/lease_count.exs` |
-| `advance_statements.exs` | 推进一个 Run 步骤发出的每一条语句及重复项 | 同上 |
-| `packages/fyrlet_ops/test/bench/status_scale.exs` | 历史数据增长时 Ops 状态快照的耗时 | `HISTORY=200000 ACTIVE=2000 mix test test/bench/status_scale.exs` |
+| `append_fanout.exs` | N subscribers, P messages: database queries and delivery time per message | `FANOUT=100 POSTS=20 mix test test/bench/append_fanout.exs` |
+| `query_counts.exs` | Statement counts of user-visible operations, classified by kind | `mix test test/bench/query_counts.exs` |
+| `revalidate_callers.exs` | Uses `:dbg` tracing to find who calls `Auth.revalidate` and why the Observer refreshes | Same as above |
+| `run_view.exs` | Time of `Runs.View.build` when step outputs are large | `OUTPUT_KB=30 STEPS=10 mix test test/bench/run_view.exs` |
+| `lease_count.exs` | Cost of the "per-project concurrency limit" check when the system holds many leases (including `EXPLAIN ANALYZE`) | `PROJECTS=200 RUNS=100 mix test test/bench/lease_count.exs` |
+| `advance_statements.exs` | Every statement issued to advance one Run step, and the duplicates | Same as above |
+| `packages/fyrlet_ops/test/bench/status_scale.exs` | Time of the Ops status snapshot as history grows | `HISTORY=200000 ACTIVE=2000 mix test test/bench/status_scale.exs` |
 
-**测量时踩到的两个坑（都会导致误判）**：测试配置里周期对账是 100 ms（生产 30 s），会把额外的刷新混进计数；播种数据留下的兜底 Oban 作业若在测量窗口里被 `drain_queue` 执行，会让 Observer 多刷新几次。所以基准里把对账间隔调大，并在测量前先清空队列。
+**Two pitfalls hit while measuring (both lead to misjudgment)**: in the test configuration the periodic reconciliation is 100 ms (30 s in production), which mixes extra refreshes into the counts; and if the fallback Oban jobs left by seeding data are executed by `drain_queue` inside the measurement window, the Observer refreshes a few more times. So the benchmarks raise the reconciliation interval and drain the queue before measuring.
 
-**① 追加订阅的扇出**（`Stream.after_cursor_shared/4`，`features/stream/reader.ex`）
+**① Fan-out of append subscriptions** (`Stream.after_cursor_shared/4`, `features/stream/reader.ex`)
 
-基线：每条消息约 2.3 次数据库查询/订阅者（n=1 → 17，n=25 → 75，n=100 → 239 次/消息）。来源：读流头 + 读条目，加上批次发完后"为确认没有更多而再读一次"的收尾读取。做法：(a) 批次返回 `more?`，已到达所读到的头就不再确认读取（下一次追加自有它的通知）；(b) 同一游标的批次对房间里所有订阅者相同且写入后不可变，用 ETS 加按流分区的"单飞"读取进程共享（命中是调用者进程里的一次 ETS 查找；未命中时同时到达的其他请求排队，不会各自查库）；(c) 批次的 JSON 只编码一次。**只缓存批次**，不缓存 `:none` 和 `:reset`（过期的 `:none` 会藏起刚追加的更新）；`reset`/`prune` 时立即清除；TTL 1 秒作兜底；共享路径出任何问题都回退到调用者自己读取。授权与会话复核仍在频道里每次发送前执行，缓存里没有任何按人区分的数据。
+Baseline: about 2.3 database queries per subscriber per message (n=1 → 17, n=25 → 75, n=100 → 239 per message). Source: reading the stream head + reading the entries, plus the trailing read "once more to confirm there is nothing more" after the batch has been sent. What was done: (a) a batch returns `more?`, and once the head that was read has been reached, no confirming read is made (the next append has its own notification); (b) a batch for the same cursor is identical for all subscribers in the room and immutable after being written, so it is shared through ETS plus a per-stream-partition "single-flight" reader process (a hit is one ETS lookup in the caller's process; on a miss, other requests arriving at the same time queue up instead of each querying the database); (c) the JSON of a batch is encoded only once. **Only batches are cached**, not `:none` and `:reset` (a stale `:none` would hide an update that was just appended); `reset`/`prune` clear it immediately; a 1-second TTL is the fallback; any problem on the shared path falls back to the caller reading for itself. Authorization and session re-checks still run in the channel before every send, and the cache holds no per-person data.
 
-| 订阅者 | 之前 | 之后 |
+| Subscribers | Before | After |
 | --- | --- | --- |
-| 25 | 75 次/消息 | 27 次/消息 |
-| 100 | 239 次/消息，16.7 ms | 34 次/消息，3.8 ms |
+| 25 | 75 per message | 27 per message |
+| 100 | 239 per message, 16.7 ms | 34 per message, 3.8 ms |
 
-边际成本从约 2.24 降到约 0.17 次/订阅者（剩下的是批处理后的会话复核）。沙箱是单连接，延迟只作参考，查询数才是可靠指标。变异检验：缓存 `:none`、reset/prune 不清缓存，测试都报警。
+The marginal cost dropped from about 2.24 to about 0.17 queries per subscriber (what remains is the batched session re-check). The sandbox has a single connection, so latency is for reference only, and the query count is the reliable metric. Mutation checks: caching `:none`, and not clearing the cache on reset/prune, were both caught by tests.
 
-**② 订阅加入的会话查询**（`Observer.attach/3`）
+**② Session queries when joining a subscription** (`Observer.attach/3`)
 
-实测私有订阅加入 6 条语句，其中 5 条是会话查询：`prepare_subscription` 1 次，`Runtime.view` 内部"前/后复核"各 1 次，随后 `attach` 自己的"前/后复核"又各 1 次。不能直接删——`view` 的复核同时保证了"授权在查询之前"。做法是重排：先 复核→授权→成员检查，再用新增的 `Runtime.load_view/4`（不含检查）加载，最后一次读后复核。保证不变：应用的查询代码不会为未授权者执行；加载期间会话被撤销则不发送。加入从 6 → 4 条语句（会话 5 → 3）；写入后的投递路径（16 条，3 次会话）是有意设计，没动。append 加入原来没有"读后复核"，现在补上了（语句数不变）。变异检验：去掉读后复核、把加载挪回授权之前，测试都报警。
+Measured: a private subscription join takes 6 statements, 5 of which are session queries: 1 in `prepare_subscription`, 1 each for the "before/after re-check" inside `Runtime.view`, then 1 each for the "before/after re-check" of `attach` itself. They cannot simply be deleted, because the re-check in `view` also guarantees "authorization comes before the query". What was done is a reorder: first re-check → authorize → membership check, then load with the new `Runtime.load_view/4` (which has no checks), and finally one post-read re-check. Guarantees are unchanged: the application's query code is not executed for an unauthorized caller; nothing is sent if the session is revoked during loading. The join goes from 6 → 4 statements (session 5 → 3); the delivery path after a write (16 statements, 3 session checks) is deliberate and was not touched. The append join previously had no "post-read re-check"; it was added (statement count unchanged). Mutation checks: removing the post-read re-check, and moving the load back before authorization, were both caught by tests.
 
-**③ Run 视图**（`Runs.View`）
+**③ Run view** (`Runs.View`)
 
-语句数本身不多（读视图 5 条），但为渲染一行摘要，它 `SELECT *` 读出每个步骤的 `input`/`output`（最多 64 KiB）并对每个副作用的加密 `payload`/`result` 解密。改为只取摘要用到的列。10 步 × 30 KB 输出：2.06 → 0.73 ms（2.8 倍）；1 KB 输出：0.67 → 0.57 ms。
+The number of statements is not large in itself (5 to read a view), but to render a summary line it ran `SELECT *` to read each step's `input`/`output` (up to 64 KiB) and decrypted each side effect's encrypted `payload`/`result`. It now fetches only the columns the summary uses. 10 steps × 30 KB output: 2.06 → 0.73 ms (2.8 times); 1 KB output: 0.67 → 0.57 ms.
 
-**④ 每项目并发上限检查**（`Engine.project_busy?/2`）
+**④ Per-project concurrency limit check** (`Engine.project_busy?/2`)
 
-每次领取步骤都会执行：把全系统所有"租约中的尝试"与 `runs` JOIN 后按项目过滤。`EXPLAIN ANALYZE` 显示计划是对整张租约表顺序扫描：
+It runs on every step claim: it JOINs all "attempts holding a lease" system-wide with `runs` and then filters by project. `EXPLAIN ANALYZE` shows the plan is a sequential scan of the whole lease table:
 
-| 全系统租约数 | 该项目持有 | 之前 | 之后 |
+| Leases system-wide | Held by this project | Before | After |
 | --- | --- | --- | --- |
-| 2,000 | 40 | 197 µs（扫 2000 行） | 62 µs（扫 40 行） |
-| 20,000 | 100 | **1,436 µs**（扫 20,000 行） | **69 µs**（扫 100 行） |
+| 2,000 | 40 | 197 µs (scans 2000 rows) | 62 µs (scans 40 rows) |
+| 20,000 | 100 | **1,436 µs** (scans 20,000 rows) | **69 µs** (scans 100 rows) |
 
-代价与"其他所有项目"的并发量成正比，小数据下完全看不出。做法：新迁移给 `fyrlet_run_attempts` 加 `project_id`（回填并设为非空）和一个只含租约中记录的部分索引 `(project_id, lease_expires_at)`；查询不再 JOIN。这条规则**原来没有任何测试**，所以先补了测试（项目隔离、过期租约不计、已结束尝试不计、不把自己的租约算在内、被限制时步骤保持未领取并稍后重试），并确认**原来的 JOIN 查询也通过同样的测试**（语义不变），三个变异都被抓到。`Recovery` 里统计各项目租约数的同类查询一并去掉了 JOIN。
+The cost is proportional to the concurrency of "all other projects" and is invisible with small data. What was done: a new migration adds `project_id` to `fyrlet_run_attempts` (backfilled and set non-null) and a partial index `(project_id, lease_expires_at)` containing only records that hold a lease; the query no longer JOINs. This rule **had no tests at all before**, so tests were added first (project isolation, expired leases not counted, finished attempts not counted, own lease not counted, and when limited the step stays unclaimed and is retried later), and it was confirmed that **the original JOIN query also passes the same tests** (semantics unchanged); all three mutations were caught. The similar query in `Recovery` that counts leases per project also lost its JOIN.
 
-**⑤ Run 推进一步**
+**⑤ Advancing a Run by one step**
 
-29 条语句里，每个事件是"`UPDATE event_seq` + `INSERT event`"两次往返，一步有 3 个事件。融合成一条 CTE 语句（同一事务、同一把行锁，语义不变；不像先前设想的那样需要在事务边界加缓冲），Run 与 Effect 的事件写入都改了：29 → 26 条。UPDATE 无命中时 CTE 会让 INSERT 静默插入 0 行，所以显式检查 `num_rows == 1` 保持原来"找不到就大声报错"的行为。重复回执 ID 时的异常类型由 `Ecto.ConstraintError` 变为 `Postgrex.Error`，没有代码依赖它（都使事务回滚）。
+Of the 29 statements, each event takes two round trips, "`UPDATE event_seq` + `INSERT event`", and one step has 3 events. These were fused into a single CTE statement (same transaction, same row lock, semantics unchanged; unlike what was first envisaged, no buffering at the transaction boundary is needed), and the event writes of both Runs and Effects were changed: 29 → 26 statements. When the UPDATE matches nothing, the CTE makes the INSERT silently insert 0 rows, so `num_rows == 1` is checked explicitly to keep the original "fail loudly if not found" behavior. For a duplicate receipt ID, the exception type changed from `Ecto.ConstraintError` to `Postgrex.Error`; no code depends on it (both roll back the transaction).
 
-**⑥ 测量后确认不需要改的**
+**⑥ Things confirmed after measurement not to need changing**
 
-- **Ops 状态快照**：20 万条历史 Run + 2000 条活跃时，`status(:all)` 17.4 ms、单项目 7.9 ms；每 30 秒一次约占 0.06% 个核。10 倍数据量也只有 0.6%，不优化。
-- **Oban 插入触发**：每个作业"INSERT + `pg_notify`"两次往返，看似可省，但关掉后 Run 的步骤间唤醒要等轮询间隔，会给每次步骤转换加上最多约 1 秒延迟，得不偿失。
-- **Run 步骤上下文读取所有已完成步骤输出**：对 N 步的 Run 是 O(N²)，但这是语义（`step/3` 的上下文承诺提供先前已提交的输出），不是实现问题。
+- **Ops status snapshot**: with 200,000 historical Runs + 2000 active, `status(:all)` takes 17.4 ms and a single project 7.9 ms; once every 30 seconds this takes about 0.06% of a core. With 10 times the data it is only 0.6%, so it is not optimized.
+- **Oban insert trigger**: each job costs two round trips, "INSERT + `pg_notify`", which looks avoidable, but with it turned off the wake-up between Run steps would wait for the polling interval, adding up to about 1 second of delay to every step transition, which is not worth it.
+- **Run step context reads the outputs of all completed steps**: this is O(N²) for a Run with N steps, but it is the semantics (the `step/3` context promises to provide previously committed outputs), not an implementation problem.
 
-**局限**：以上都是语句数、查询计划和函数/视图级耗时，**不是端到端吞吐**，也没有跑 cgroup 限额压测；沙箱使用单个数据库连接，所以延迟不代表真实连接池下的并发表现。
+**Limitation**: all of the above are statement counts, query plans and function/view-level timings, **not end-to-end throughput**, and no cgroup-limited load test was run; the sandbox uses a single database connection, so latency does not represent concurrent behavior under a real connection pool.
 
-## 10. 端到端复测：HEAD 对当前工作树（2026-11-07）
+## 10. End-to-end re-test: HEAD against the current working tree (2026-11-07)
 
-**目的**：回答两件事——平台化改动有没有拖慢基础路径？这一轮优化有没有净收益？
+**Purpose**: answer two questions: did the platform changes slow down the basic path? Did this round of optimizations bring a net gain?
 
-**条件**：沿用[PERFORMANCE.md](PERFORMANCE.md)“测试条件”的同资源限额（应用 1 vCPU / 1 GiB、`cpuset 0`，PostgreSQL 与生成器各自独占核，cgroup v2 计数），同一个负载生成器（用当前工作树的 SDK，两边都使用基础协议）：1000 用户 × 2 设备，`sessions=shared`，每用户 50 条 × 128 B，500 writes/s，20 秒，warmup 1，每次重新建库、播种。顺序 A B B A，两轮共 8 次。A = 仓库 HEAD（`27bcb2a`，Inbox 在 `lib/` 里，用 `Dockerfile.fyrlet` 打发行版）；B = 当前工作树，Inbox 作为**独立宿主应用**（`examples/inbox`）打发行版。
+**Conditions**: the same-resource limits of "Test conditions" in [PERFORMANCE.md](PERFORMANCE.md) (app 1 vCPU / 1 GiB, `cpuset 0`, PostgreSQL and the generator each on their own core, cgroup v2 accounting), and the same load generator (using the SDK of the current working tree, with both sides using the basic protocol): 1000 users × 2 devices, `sessions=shared`, 50 records × 128 B per user, 500 writes/s, 20 seconds, warmup 1, database rebuilt and seeded for each run. Order A B B A, two rounds, 8 runs in total. A = repository HEAD (`27bcb2a`, Inbox in `lib/`, release built with `Dockerfile.fyrlet`); B = the current working tree, with Inbox as a **standalone host application** (`examples/inbox`) built into a release.
 
-**第一次结果有 +26% CPU，原因是配置而不是代码**：
+**The first result showed +26% CPU, caused by configuration rather than code**:
 
-| | HEAD | 当前（首次） |
+| | HEAD | Current (first) |
 | --- | --- | --- |
-| 应用 CPU 秒（4 次） | 14.6 / 12.7 / 12.7 / 12.7 | 18.7 / 17.4 / 15.5 / 15.3 |
+| App CPU seconds (4 runs) | 14.6 / 12.7 / 12.7 / 12.7 | 18.7 / 17.4 / 15.5 / 15.3 |
 
-每一次 current 都高于每一次 head，不是噪声。查配置发现：HEAD 的 `config/prod.exs` 设置了 `logger level: :info`；而依赖库自己的配置文件不会被加载，宿主应用（`examples/inbox`）的配置里没有，发行版默认 `:debug`，每条 SQL 都被格式化写出。给三个示例应用补上 `config :logger, level: :info` 后重跑；`INSTALL.md` 的必配项清单里补了这一条（这是宿主应用接入时一个真实的坑）。
+Every current run is higher than every head run, so it is not noise. Checking the configuration showed that HEAD's `config/prod.exs` sets `logger level: :info`; the dependency library's own configuration file is not loaded, the host application (`examples/inbox`) did not have it in its configuration, and the release defaults to `:debug`, so every SQL statement was formatted and written out. After adding `config :logger, level: :info` to the three example applications and re-running, this item was also added to the list of required settings in `INSTALL.md` (this is a real pitfall when integrating a host application).
 
-**修正后的结果**：
+**Corrected result**:
 
-| | HEAD | 当前 |
+| | HEAD | Current |
 | --- | --- | --- |
-| 完成写入（4 次） | 10000 / 9999 / 9999 / 9988 | 10000 / 9991 / 10000 / 10000 |
-| 传播 P95 ms | 2.17 / 2.35 / 2.16 / 2.82（中位 2.26） | 2.14 / 2.63 / 2.12 / 2.08（中位 2.13） |
-| 应用 CPU 秒 | 12.8 / 13.6 / 12.7 / 14.1（均值 13.3） | 12.4 / 13.0 / 12.7 / 12.5（均值 12.7） |
-| 被节流周期 | 0 / 0 / 1 / 1 | 0 / 0 / 0 / 5 |
-| anon 内存峰值 MiB | 674 / 674 / 669 / 669 | 568 / 568 / 559 / 561 |
-| 覆盖率 / OOM | 全部 1.00 / 0 | 全部 1.00 / 0 |
+| Writes completed (4 runs) | 10000 / 9999 / 9999 / 9988 | 10000 / 9991 / 10000 / 10000 |
+| Propagation P95 ms | 2.17 / 2.35 / 2.16 / 2.82 (median 2.26) | 2.14 / 2.63 / 2.12 / 2.08 (median 2.13) |
+| App CPU seconds | 12.8 / 13.6 / 12.7 / 14.1 (mean 13.3) | 12.4 / 13.0 / 12.7 / 12.5 (mean 12.7) |
+| Throttled periods | 0 / 0 / 1 / 1 | 0 / 0 / 0 / 5 |
+| anon memory peak MiB | 674 / 674 / 669 / 669 | 568 / 568 / 559 / 561 |
+| Coverage / OOM | all 1.00 / 0 | all 1.00 / 0 |
 
-**读数**：
-- **基础路径没有回归**：完成写入、覆盖率、P95 都在噪声内一致。
-- CPU 当前均值低约 4%，但两边区间重叠（12.4–13.0 对 12.7–14.1），**在噪声内，不据此声称提速**（[PERFORMANCE.md](PERFORMANCE.md)“单核剖析”记录了同一基线两次重复就能差 ±20%）。
-- 唯一清晰的差异是 anon 内存峰值：4 次对 4 次区间完全不重叠，当前低约 16%。**原因没有剖析**，不做推测。
-- 这是"HEAD 对整个工作树"的整体对照：里面同时包含平台化改动和前面各节的优化，**无法把差异归因到某一项**。前面各节的收益仍然是函数/语句级的证据（第 7–9 节）。
+**Reading**:
+- **No regression on the basic path**: writes completed, coverage and P95 agree within noise.
+- Mean CPU is about 4% lower for current, but the ranges of the two sides overlap (12.4–13.0 against 12.7–14.1), **so it is within noise and no speedup is claimed from it** (the "Single-core profile" in [PERFORMANCE.md](PERFORMANCE.md) records that two repetitions of the same baseline can differ by ±20%).
+- The only clear difference is the anon memory peak: the ranges of 4 runs against 4 runs do not overlap at all, and current is about 16% lower. **The cause was not profiled**, and no guess is made.
+- This is an overall comparison of "HEAD against the whole working tree": it contains both the platform changes and the optimizations of the earlier sections, so **the difference cannot be attributed to any single item**. The gains of the earlier sections remain function/statement-level evidence (sections 7–9).
 
-**局限**：只测了 500 writes/s 的收件箱负载；没有测 Run、Effect、追加订阅的端到端负载（这几条路径在 HEAD 里不存在，没有对照基线）；每组只有 4 次。
+**Limitation**: only the inbox load at 500 writes/s was measured; no end-to-end load was measured for Runs, Effects or append subscriptions (these paths do not exist in HEAD, so there is no comparison baseline); each group has only 4 runs.
 
-**复现**：`git worktree add --detach .local/fair/base-src 27bcb2a` 取得基线；`Dockerfile.fyrlet`（基线）与 `Dockerfile.current`（当前，从 `examples/inbox` 打发行版）构建两个镜像；`VARIANT=head|current fyr_ab.sh <镜像> <速率> <标签>` 跑单次，`abba_ab.sh <速率> <轮数>` 跑 A/B/B/A。这些脚本在忽略的 `.local/fair/` 目录里，含本机绝对路径，尚未整理成可复用工具。
+**Reproduction**: get the baseline with `git worktree add --detach .local/fair/base-src 27bcb2a`; build two images with `Dockerfile.fyrlet` (baseline) and `Dockerfile.current` (current, release built from `examples/inbox`); run a single run with `VARIANT=head|current fyr_ab.sh <image> <rate> <label>`, and run A/B/B/A with `abba_ab.sh <rate> <rounds>`. These scripts are in the ignored `.local/fair/` directory, contain absolute paths of the local machine, and have not yet been turned into reusable tools.
 
-## 11. 共享订阅的会话复核批处理，以及一轮没有端到端收益的试验（2026-11-07）
+## 11. Batched session re-checks for shared subscriptions, and a round of experiments with no end-to-end gain (2026-11-07)
 
-起点是一份对各层（编译与数据布局、复制与编码、GC、分配器、I/O、数据库往返、传输、原生内核）做静态分析得出的候选清单。逐项实现并测量后，**只保留了一项**；其余几项在函数级有 1.7–3.3 倍的收益，但端到端 A/B 看不出差别，已回退。
+The starting point was a list of candidates from a static analysis of each layer (compilation and data layout, copying and encoding, GC, allocator, I/O, database round trips, transport, native kernels). After implementing and measuring them one by one, **only one item was kept**; the others had function-level gains of 1.7–3.3 times but showed no difference in end-to-end A/B, and were reverted.
 
-### 保留：`identical` 共享订阅的成员会话复核改为批量
+### Kept: member session re-checks of `identical` shared subscriptions are now batched
 
-**发现**：`test/bench/shared_fanout.exs`（N 个成员订阅同一个 `sharing: "identical"` 房间，触发一次变更）数出每次变更的会话语句数**恰好等于成员数**（25 / 100 / 300 个成员对应 25 / 100 / 300 条）。原因：`Observer.deliver/3` 与 `recheck_clients/1` 在**一个进程里**逐个成员调用 `Auth.revalidate/1`，它是对 `SessionChecks` 分片的阻塞调用；分片的批处理只能合并**并发**的调用者，单个进程一次只送一个请求，每个成员都成了只含一条的查询。（追加订阅的每个订阅者是独立的 Channel 进程，本来就能被分片合并，不受影响。）
+**Finding**: `test/bench/shared_fanout.exs` (N members subscribe to the same `sharing: "identical"` room, and one change is triggered) counts the session statements per change as **exactly the number of members** (25 / 100 / 300 members give 25 / 100 / 300 statements). Cause: `Observer.deliver/3` and `recheck_clients/1` call `Auth.revalidate/1` for each member one by one **in a single process**, and it is a blocking call to a `SessionChecks` shard; the shard's batching can only merge **concurrent** callers, a single process sends only one request at a time, and each member becomes a query containing just one. (Each subscriber of an append subscription is its own Channel process and could already be merged by the shard, so it is not affected.)
 
-**做法**：新增 `SessionChecks.revalidate_many/1` 与 `Auth.revalidate_many/1`（用 `:gen_server.send_request/2` 先发出全部请求再统一收回复，整体 15 秒期限；批处理关闭或在事务内时回退为逐个直接查询）。`Observer` 在投递循环前、以及对账时，先对“本轮要检查的成员”做一次批量会话预检，再逐个做授权与成员检查并发送。私有 Observer 只有一个成员，行为不变。
+**What was done**: added `SessionChecks.revalidate_many/1` and `Auth.revalidate_many/1` (using `:gen_server.send_request/2` to send all requests first and then collect the replies together, with a 15-second deadline for the whole; when batching is off or inside a transaction it falls back to direct queries one by one). Before the delivery loop, and during reconciliation, the `Observer` first does one batched session pre-check for "the members to be checked this round", then does the authorization and membership checks one by one and sends. A private Observer has only one member, so its behavior is unchanged.
 
-| 成员数 | 之前（语句/次变更） | 之后 |
+| Members | Before (statements per change) | After |
 | --- | --- | --- |
 | 25 | 25 | 8 |
 | 100 | 100 | 11–14 |
 | 300 | 300 | 16 |
 
-沙箱是单连接，所以只采信语句数，不采信延迟；真实网络下串行往返的耗时随成员数线性增长，批量后随分片数（8）增长。
+The sandbox has a single connection, so only statement counts are trusted and latency is not; over a real network the time of serial round trips grows linearly with the number of members, and after batching it grows with the number of shards (8).
 
-**语义变化**：会话检查与同一轮里其他成员的授权、成员检查之间，间隔比原来大（原来紧挨着发送）。同一轮投递内，被撤销的会话仍会被停掉（有测试）。授权与成员检查本身仍然逐个、在发送前执行。
+**Semantic change**: the gap between the session check and the authorization and membership checks of the other members in the same round is larger than before (previously they were right next to the send). Within the same delivery round, a revoked session is still stopped (there is a test). The authorization and membership checks themselves still run one by one, before sending.
 
-**测试**：`session_checks_test` 新增三个——结果与逐个 `revalidate/1` 一致且保序（含已撤销、跨项目、不存在的会话）、同一分片的 20 个请求只产生一次批查询、批处理关闭或事务内走直接查询；`shared_scope_test` 新增一个——批处理开启时，三个成员中会话被撤销的那一个被停掉而其余两个照常收到快照。变异检验：让批量预检对所有成员放行，两个测试报警。
+**Tests**: `session_checks_test` gains three: the result is consistent with calling `revalidate/1` one by one and preserves order (including revoked, cross-project and nonexistent sessions); 20 requests on the same shard produce only one batched query; and with batching off or inside a transaction a direct query is used. `shared_scope_test` gains one: with batching on, of three members the one whose session was revoked is stopped, and the other two receive the snapshot as usual. Mutation check: making the batched pre-check let all members through raises an alarm in two tests.
 
-### 回退：函数级有收益、端到端无收益的四项
+### Reverted: four items with function-level gain but no end-to-end gain
 
-| 候选 | 做法 | 函数级测量 |
+| Candidate | What was done | Function-level measurement |
 | --- | --- | --- |
-| 契约编译成闭包 | 把 schema 的关键字读取、属性表和默认值一次性提取，校验时不再逐项 `Map.get` | 1 条记录 1.44 → 0.67 µs；50 条 64 → 37 µs（约 1.9 倍） |
-| 复用记录编码 | `View` 保留每条记录的 JSON，快照由这些片段拼接，不再整体重编码 | 50 条首次快照 209 → 137 µs；改 1 条后重建 178 → 110 µs |
-| 窗口重置跳过未变记录的校验 | 与上一版严格相等的记录不再校验，任何异常整体回退到完整校验 | 28.6 → 8.7 µs（1/50 变化） |
-| `View.new` / `reset` 单趟扫描 | 去掉被丢弃的 `RecordIndex` 位置表，delta 与 unchanged 判断只看“与上一版不同”的记录 | `reset`（1/50 变化）159 → 91 µs |
+| Compile the contract into closures | Extract the schema's keyword reads, attribute table and defaults once, so validation no longer does `Map.get` item by item | 1 record 1.44 → 0.67 µs; 50 records 64 → 37 µs (about 1.9 times) |
+| Reuse record encodings | `View` keeps the JSON of each record, and the snapshot is spliced from these fragments instead of being re-encoded as a whole | First snapshot of 50 records 209 → 137 µs; rebuild after changing 1 record 178 → 110 µs |
+| Window reset skips validation of unchanged records | Records strictly equal to the previous version are not validated again, and any exception falls back to full validation as a whole | 28.6 → 8.7 µs (1/50 changed) |
+| `View.new` / `reset` single pass | Remove the discarded `RecordIndex` position table; the delta and unchanged decisions look only at records "different from the previous version" | `reset` (1/50 changed) 159 → 91 µs |
 
-这四项都有差分测试（旧实现冻结为参考，对随机输入逐字段比对）和变异检验，没有已知的正确性问题。回退的原因是**没有端到端证据**，同时增加了约 300 行代码。
+All four have differential tests (the old implementation frozen as a reference, compared field by field on random input) and mutation checks, and have no known correctness problem. The reason for reverting is that there is **no end-to-end evidence** while about 300 lines of code are added.
 
-**端到端 A/B 怎么做的**：以当前代码为基础做一份“基线副本”，把上面四项逐项关闭（注册表不附带编译 schema；`validate_known` 换回 `validate`；`View.new`/`reset` 换成冻结的旧实现；快照重新整体编码），分别打成镜像，其余完全相同；种子数据由同一份代码准备，只有镜像不同。负载与第 10 节相同（1000 用户 × 2 设备、`sessions=shared`、每用户 50 条 × 128 B、20 秒、warmup 1），按 A B B A 交替，每边 6 次。
+**How the end-to-end A/B was done**: a "baseline copy" was made on top of the current code, with the four items above turned off one by one (the registry does not carry the compiled schema; `validate_known` is switched back to `validate`; `View.new`/`reset` are switched to the frozen old implementation; snapshots are re-encoded as a whole), and each was built into an image, everything else identical; the seed data is prepared by the same code, so only the image differs. The load is the same as in section 10 (1000 users × 2 devices, `sessions=shared`, 50 records × 128 B per user, 20 seconds, warmup 1), alternating A B B A, 6 runs per side.
 
-| 条件 | 指标 | 基线（关） | 当前（开） |
+| Condition | Metric | Baseline (off) | Current (on) |
 | --- | --- | --- | --- |
-| 500 writes/s，1 vCPU | 完成写入（中位） | 9990 | 9976 |
-| | P95 ms（中位） | 2.66 | 2.65 |
-| | 应用 CPU 秒（中位 / 范围） | 13.5 / 12.8–14.4 | 13.2 / 12.3–13.6 |
-| 500 writes/s，0.5 vCPU（CPU 成为瓶颈） | 完成写入（中位 / 最小） | 9928 / 9603 | 9984 / 9773 |
-| | P95 ms（中位 / 范围） | 42.9 / 11.6–86.1 | 25.0 / 16.2–75.6 |
-| | 应用 CPU 秒（中位） | 12.9 | 13.1 |
+| 500 writes/s, 1 vCPU | Writes completed (median) | 9990 | 9976 |
+| | P95 ms (median) | 2.66 | 2.65 |
+| | App CPU seconds (median / range) | 13.5 / 12.8–14.4 | 13.2 / 12.3–13.6 |
+| 500 writes/s, 0.5 vCPU (CPU is the bottleneck) | Writes completed (median / minimum) | 9928 / 9603 | 9984 / 9773 |
+| | P95 ms (median / range) | 42.9 / 11.6–86.1 | 25.0 / 16.2–75.6 |
+| | App CPU seconds (median) | 12.9 | 13.1 |
 
-读数：所有差异都落在重复间的波动里（CPU 区间重叠；0.5 vCPU 的 P95 范围 11–86 ms，中位数的差不可信；完成写入只差 0.6%），**不能声称有端到端收益**。当前镜像的 anon 内存峰值中位两组都偏高 6–8%（588 对 624、620 对 669 MiB），区间有重叠，原因没有剖析。
+Reading: all differences fall within the fluctuation between repetitions (the CPU ranges overlap; the P95 range at 0.5 vCPU is 11–86 ms, so the difference in medians is not trustworthy; writes completed differ by only 0.6%), so **no end-to-end gain can be claimed**. The median anon memory peak of the current image is 6–8% higher in both groups (588 against 624, 620 against 669 MiB), the ranges overlap, and the cause was not profiled.
 
-这与[PERFORMANCE.md](PERFORMANCE.md)“单核剖析”一致：500 writes/s 在 1 vCPU 下应用只有约一半时间在忙，这些改动省下的是每次刷新几十到一百多微秒，而一次写入主要花在数据库往返上。
+This is consistent with the "Single-core profile" in [PERFORMANCE.md](PERFORMANCE.md): at 500 writes/s on 1 vCPU the app is busy only about half the time, these changes save a few tens to over a hundred microseconds per refresh, and a write spends most of its time on database round trips.
 
-### 连接池大小：10 对 30，没有差别
+### Connection pool size: 10 against 30, no difference
 
-同一镜像、仅 `POOL_SIZE` 不同，800 writes/s、1 vCPU，A B B A 每边 6 次：
+Same image, only `POOL_SIZE` differs, 800 writes/s, 1 vCPU, A B B A, 6 runs per side:
 
 | | `POOL_SIZE=10` | `POOL_SIZE=30` |
 | --- | --- | --- |
-| 完成写入（中位） | 15776 | 15805 |
-| P95 ms（中位 / 范围） | 7.1 / 3.7–11.9 | 4.5 / 3.6–11.5 |
-| 应用 CPU 秒（中位） | 18.3 | 18.0 |
+| Writes completed (median) | 15776 | 15805 |
+| P95 ms (median / range) | 7.1 / 3.7–11.9 | 4.5 / 3.6–11.5 |
+| App CPU seconds (median) | 18.3 | 18.0 |
 
-此时应用 CPU 未饱和（几乎不被节流），连接池不是瓶颈，默认值 10 保留。更高速率或更慢的数据库下是否变化**没有测**。
+At this point app CPU is not saturated (almost no throttling) and the connection pool is not the bottleneck, so the default of 10 is kept. Whether this changes at higher rates or with a slower database was **not measured**.
 
-### 没有结论的
+### No conclusion
 
-- **BEAM 调度器空转参数**（`+sbwt none` 等）：已搭好对照（`ERL_AFLAGS` 传入同一镜像），决定不继续后中止，没有可用数据。
-- **写入路径省一次往返**（幂等先插占位行）：没有实现，[PERFORMANCE.md](PERFORMANCE.md)“单核剖析”估计约 10%，低于噪声。
+- **BEAM scheduler busy-wait parameters** (`+sbwt none` and so on): a comparison was set up (`ERL_AFLAGS` passed to the same image), then it was decided not to continue and it was aborted, so there is no usable data.
+- **Saving one round trip on the write path** (insert a placeholder row first for idempotency): not implemented; the "Single-core profile" in [PERFORMANCE.md](PERFORMANCE.md) estimates about 10%, below noise.
 
-### 局限
+### Limitations
 
-- 端到端负载是私有订阅的收件箱（`soak`），**没有测共享房间的端到端**；共享房间批量复核的收益只有语句数证据。
-- 每边 6 次，同一基线两次重复就能差 ±20%（见[PERFORMANCE.md](PERFORMANCE.md)“单核剖析”），上表只能排除大幅差异。
-- 微基准的倍数不能直接换算成服务吞吐：被优化部分占总耗时 20% 时，即使它快 5 倍，整体也只有约 1.19 倍。
+- The end-to-end load is the inbox with private subscriptions (`soak`); **shared rooms were not measured end to end**; the gain of batched re-checks for shared rooms has only statement-count evidence.
+- With 6 runs per side, and two repetitions of the same baseline able to differ by ±20% (see the "Single-core profile" in [PERFORMANCE.md](PERFORMANCE.md)), the table above can only rule out large differences.
+- Microbenchmark factors cannot be converted directly into service throughput: when the optimized part accounts for 20% of the total time, even a 5-times speedup of it gives only about 1.19 times overall.
 
-### 复现
+### Reproduction
 
 ```sh
-FANOUT=100 ROUNDS=5 mix test test/bench/shared_fanout.exs      # 共享房间每次变更的会话语句数
+FANOUT=100 ROUNDS=5 mix test test/bench/shared_fanout.exs      # Session queries per shared-room change
 ```
 
-端到端 A/B 沿用第 10 节的脚本思路（镜像、同一份种子、A B B A）。脚本仍在被忽略的 `.local/fair/` 里，含本机绝对路径，没有整理成可复用工具。
+The end-to-end A/B follows the script approach of section 10 (images, the same seed, A B B A). The scripts are still in the ignored `.local/fair/`, contain absolute paths of the local machine, and have not been turned into reusable tools.
 
-## 12. 仍未做的
+## 12. Still not done
 
-- **推进一步的语句仍有重复读取**：同一个步骤行在一次推进里被锁定读取 3–4 次，Run 行被读取 2 次。它们都是各自事务里的必要读取（行锁），合并需要重构 `Engine` 的事务划分，而这个模块由故障注入测试守护状态机不变量，收益（约几条索引查找）不抵风险。
-- **读视图时 Run 被加载两次**（一次给 `run_authorize/4`，一次给视图）。可以通过在调用链中传递已加载的 Run 来省一次，但会改变授权与视图的接口，收益小。
-- **追加订阅的会话复核**：现在每个订阅者每次发送前都复核（有批处理分片），是扇出后剩下的主要边际成本；要进一步降低需要在授权语义上做取舍，需要单独评审。（共享 `identical` 订阅的成员复核是另一回事，已在第 11 节改为批量。）
-- **BEAM 虚拟机参数**（如 `+sbwt none`：在 1 vCPU 的 cgroup 里调度器空转会消耗 CPU 配额）：本机没有可复现的容器环境，不凭推测调整。
-- 端到端吞吐与 cgroup 限额下的对照需要重新跑[PERFORMANCE.md](PERFORMANCE.md)“对照结果”那套外部压测，上面所有改动尚未在那套环境下复测。
+- **Advancing one step still has duplicate reads**: the same step row is read with a lock 3–4 times in one advance, and the Run row twice. They are all necessary reads (row locks) in their own transactions; merging them requires restructuring the transaction boundaries of `Engine`, and this module is guarded by fault-injection tests of the state-machine invariants, so the gain (a few index lookups) does not outweigh the risk.
+- **The Run is loaded twice when reading a view** (once for `run_authorize/4`, once for the view). One load could be saved by passing the already loaded Run through the call chain, but that would change the interface between authorization and the view, for a small gain.
+- **Session re-checks of append subscriptions**: now every subscriber is re-checked before every send (with batching shards), which is the main marginal cost remaining after the fan-out; lowering it further requires a trade-off in the authorization semantics and needs a separate review. (The member re-checks of shared `identical` subscriptions are a different matter, and were made batched in section 11.)
+- **BEAM VM parameters** (such as `+sbwt none`: in a 1 vCPU cgroup, scheduler busy-waiting consumes CPU quota): there is no reproducible container environment on the local machine, and no changes are made on speculation.
+- End-to-end throughput and the comparison under cgroup limits require re-running the external load tests of "Comparison results" in [PERFORMANCE.md](PERFORMANCE.md); none of the changes above has yet been re-tested in that environment.
 
-### 决定不做的方向
+### Directions decided against
 
-静态分析阶段列出过下列方向。没有对应的瓶颈或负载证据时不做；做过并回退的在第 11 节：
+The following directions were listed during the static analysis. Without evidence of a corresponding bottleneck or load they are not pursued; those that were tried and reverted are in section 11:
 
-- **原生内核（Rustler / NIF）**：没有测出的计算热点。调用粒度、BEAM term 的构造成本、调度和部署架构的维护成本都不低。
-- **GC、进程堆与 `off_heap`**：没有消息堆积或 GC 问题的证据；统一设置会带来额外分配，不同进程取舍不同。
-- **分配器（mimalloc / jemalloc）、io_uring、替换整个 I/O 模型、Nx / EXLA / GPU**：没有出现分配器竞争、传输层瓶颈或向量计算负载。
-- **拆分串行节点（`Tracker`、Observer 的 `DynamicSupervisor`）**：`claim` 只做几次 map 操作，没有证据显示它在建连风暴下受限；拆分会让同一 transport 的限额统计和清理更复杂。
-- **减少写入路径的数据库往返**：把 advisory 锁和幂等查询合并在 READ COMMITTED 下不成立（见[性能对比](PERFORMANCE.md)“单核剖析”）；“幂等先插占位行”预计省一次往返，约 10%，低于测量噪声，未实现。
+- **Native kernels (Rustler / NIF)**: no computational hotspot was measured. The call granularity, the cost of constructing BEAM terms, scheduling and the maintenance cost of the deployment architecture are all not low.
+- **GC, process heaps and `off_heap`**: no evidence of message buildup or GC problems; a uniform setting brings extra allocation, and the trade-off differs between processes.
+- **Allocators (mimalloc / jemalloc), io_uring, replacing the whole I/O model, Nx / EXLA / GPU**: no allocator contention, transport-layer bottleneck or vector-computation load has appeared.
+- **Splitting serial nodes (`Tracker`, the Observer's `DynamicSupervisor`)**: `claim` does only a few map operations, and there is no evidence it is limited under a connection storm; splitting would make the limit accounting and cleanup of the same transport more complex.
+- **Reducing database round trips on the write path**: merging the advisory lock and the idempotency lookup does not hold under READ COMMITTED (see "Single-core profile" in [Performance comparison](PERFORMANCE.md)); "insert a placeholder row first for idempotency" is expected to save one round trip, about 10%, below measurement noise, and is not implemented.
 
-一个通用的教训：函数级微基准的倍数不能代表服务整体。若被优化部分占总耗时的 20% 且加速 5 倍，整体只快约 1.19 倍；这条路径的耗时主要是数据库往返，所以**减少往返次数**（语句数可以直接数出来）有实际价值，而把某段 Elixir 计算加快几十微秒在端到端上看不出来。
+A general lesson: the factor of a function-level microbenchmark does not represent the service as a whole. If the optimized part accounts for 20% of the total time and is sped up 5 times, the whole is only about 1.19 times faster; the time of this path is mainly database round trips, so **reducing the number of round trips** (the statement count can be counted directly) has real value, while speeding up some Elixir computation by a few tens of microseconds cannot be seen end to end.

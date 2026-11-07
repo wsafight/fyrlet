@@ -1,38 +1,38 @@
-# 持久 Run
+# Durable Runs
 
-可选能力 `runs`。Run 表达需要跨请求、跨进程恢复的工作：长时运行、等待外部信号、需要人工介入或取消。普通读写和订阅无需创建 Run；Run 的状态通过既有订阅机制观察。
+Optional capability `runs`. A Run expresses work that must survive across requests and processes: long-running work, waiting for external signals, work that needs human intervention or cancellation. Ordinary reads, writes and subscriptions do not need a Run; the state of a Run is observed through the existing subscription mechanism.
 
-> **一句话目标：** 业务既能完成可靠的事务调用，也能启动可观察、可介入、可取消的持久任务；恢复时以已经提交的事实继续。
+> **One-sentence goal:** an application can both make reliable transactional calls and start durable tasks that are observable, interruptible and cancellable; on recovery it continues from the facts that have already been committed.
 
-Run 在外部副作用上依赖 [Effect 与 Outbox](EFFECTS.md)，鉴权边界见 [ARCHITECTURE.md](ARCHITECTURE.md#鉴权的分层边界)，线上入口见 [PROTOCOL.md](PROTOCOL.md#run能力-runs)，业务回调见 [SERVER.md](SERVER.md)。
+For external side effects, Runs depend on [Effects and Outbox](EFFECTS.md); for the authentication boundaries see [ARCHITECTURE.md](ARCHITECTURE.md#authentication-boundaries), for the wire entry points see [PROTOCOL.md](PROTOCOL.md#run-capability-runs), and for business callbacks see [SERVER.md](SERVER.md).
 
-## 操作种类
+## Operation kinds
 
-`operations` 的 `kind` 有三种取值：
+The `kind` of `operations` has three values:
 
-| kind | 语义 | 返回 |
+| kind | Semantics | Returns |
 | --- | --- | --- |
-| `read` | 有界查询 | 结果 |
-| `write` | 单事务业务写入 | 结果 + 受影响 Scope |
-| **`run`** | 创建一次长时运行，事务内只落记录，立即返回 | `run_id` + 初始状态 |
+| `read` | Bounded query | Result |
+| `write` | Single-transaction business write | Result + affected Scope |
+| **`run`** | Creates a long-running Run; only a record is written inside the transaction, and it returns immediately | `run_id` + initial status |
 
-`run` 操作必须携带 `Idempotency-Key`。在幂等保留期内，同一 `(project, subject, operation, key)` 与相同规范化输入返回同一 `run_id`；输入不同返回冲突。默认保留期为 24 小时，过期后再次使用该键可能创建新 Run。
+A `run` operation must carry an `Idempotency-Key`. Within the idempotency retention period, the same `(project, subject, operation, key)` with the same normalized input returns the same `run_id`; a different input returns a conflict. The default retention period is 24 hours, and after it expires, using the key again may create a new Run.
 
-需要长期唯一的业务（如"同一事件只通知一次"）使用可选的 `business_key`：`run/3` 可返回该键，核心在 `fyrlet_runs` 上建立 `(project_id, operation, business_key)` 唯一约束（仅对非空键生效，不随请求幂等记录清理）。冲突时返回已有 `run_id` 与其当前状态，不创建新 Run；是否允许在终态后重建由操作声明（`on_conflict: :return_existing | :reject_if_active`，默认 `:return_existing`）。
+A business that needs long-term uniqueness (such as "notify only once per event") uses the optional `business_key`: `run/3` can return that key, and the core establishes a `(project_id, operation, business_key)` unique constraint on `fyrlet_runs` (effective only for non-empty keys, and not cleaned up with request idempotency records). On conflict it returns the existing `run_id` and its current status and does not create a new Run; whether re-creation after a terminal state is allowed is declared by the operation (`on_conflict: :return_existing | :reject_if_active`, default `:return_existing`).
 
-创建 Run、持久化计划和创建首个 Oban 任务在同一事务内完成；HTTP 成功表示运行已受理，不表示业务已经完成。
+Creating the Run, persisting the plan and creating the first Oban job complete in the same transaction; HTTP success means the run has been accepted, not that the business work has completed.
 
-## 定义方式
+## Definition
 
-执行工作与决定下一步分开：
+Doing the work is separated from deciding the next step:
 
-| 回调 | 职责 |
+| Callback | Responsibility |
 | --- | --- |
-| `run/3` | 根据操作名、已验证发起者与输入生成顺序计划；不执行外部调用 |
-| `step/3` | 根据步骤名、已持久化输入和执行上下文返回业务结果或 Effect 意图 |
-| `advance/3` | 根据已持久化状态、事件和上下文决定下一步；不执行 IO（动态推进） |
+| `run/3` | Produces a sequential plan from the operation name, the verified initiator and the input; performs no external calls |
+| `step/3` | Returns a business result or an Effect intent from the step name, the persisted input and the execution context |
+| `advance/3` | Decides the next step from the persisted state, the event and the context; performs no IO (dynamic advancement) |
 
-静态计划包含工作节点与显式等待节点：
+A static plan contains work nodes and explicit wait nodes:
 
 ```elixir
 {:ok, steps: [
@@ -42,26 +42,26 @@ Run 在外部副作用上依赖 [Effect 与 Outbox](EFFECTS.md)，鉴权边界�
 ]}
 ```
 
-`step/3` 的返回值为 `{:ok, output}`、`{:error, %Fyrlet.Error{}}` 或 `{:effect, effect_spec}`；也可返回 `{:ok, output, commit: fun}`——`fun` 在提交结果的**同一事务**内执行，用于把业务写入与步骤结果原子提交（受管提交）。`fun` 返回 `{:error, error}` 或抛出异常时，整个提交回滚，随后作为一次尝试失败记录。Effect 意图交给核心提交和派发，见 [EFFECTS.md](EFFECTS.md)；Step 不返回“下一步”指令。执行上下文提供先前已提交的输出，当前 Step 的解析后输入在首次执行前固定，重试复用。
+The return value of `step/3` is `{:ok, output}`, `{:error, %Fyrlet.Error{}}` or `{:effect, effect_spec}`; it may also return `{:ok, output, commit: fun}`, where `fun` runs inside the **same transaction** that commits the result, so that a business write and the step result are committed atomically (managed commit). If `fun` returns `{:error, error}` or raises, the whole commit rolls back and is then recorded as a failed attempt. An Effect intent is handed to the core to be committed and dispatched, see [EFFECTS.md](EFFECTS.md); a Step does not return a "next step" instruction. The execution context provides previously committed outputs; the resolved input of the current Step is fixed before its first execution and reused on retry.
 
-计划创建时分配稳定的 Step 实例与 `wait_id`，同名步骤以实例 ID/序号区分。每个节点的输入、输出和信号负载必须有契约与大小上限。
+When the plan is created, stable Step instances and `wait_id`s are assigned, and steps with the same name are distinguished by instance ID/sequence number. The input, output and signal payload of every node must have a contract and a size limit.
 
-`run/3` 与 `advance/3` 两种规划模式按操作显式二选一。`advance/3` 可返回 `{:step, name, input}`、`{:wait, wait_spec}`、`{:done, output}` 或 `{:error, error}`；推进决定与新节点在同一事务内持久化，不能在恢复时重新执行已提交的决定。操作声明 `planning: :dynamic`（`Fyrlet.Runs.operation/2`），定义实现 `advance(operation, state, event)`；`state` 含 `input`、已完成节点的 `outputs`、`run_id`、`project_id`、`initiator_subject_id`；`event` 为 `:start`、`{:step_succeeded, name, output}`、`{:wait_satisfied, name, payload}` 或 `{:wait_timed_out, name}`。业务键与有效期由可选的 `plan_options/3` 提供。动态节点与静态节点经过同一套校验，总节点数受同一上限约束；`advance/3` 抛出异常以 `ADVANCE_CRASHED` 终止运行，且不泄露异常内容。
+The two planning modes `run/3` and `advance/3` are chosen explicitly, one or the other, per operation. `advance/3` can return `{:step, name, input}`, `{:wait, wait_spec}`, `{:done, output}` or `{:error, error}`; the advancement decision and the new node are persisted in the same transaction, and a committed decision cannot be re-executed on recovery. The operation declares `planning: :dynamic` (`Fyrlet.Runs.operation/2`) and the definition implements `advance(operation, state, event)`; `state` contains `input`, the `outputs` of completed nodes, `run_id`, `project_id` and `initiator_subject_id`; `event` is `:start`, `{:step_succeeded, name, output}`, `{:wait_satisfied, name, payload}` or `{:wait_timed_out, name}`. The business key and the expiry are provided by the optional `plan_options/3`. Dynamic nodes go through the same validation as static nodes, and the total node count is bound by the same limit; if `advance/3` raises, the run is terminated with `ADVANCE_CRASHED`, and the exception content is not leaked.
 
-## 状态与数据
+## State and data
 
-数据表：
+Tables:
 
-| 表 | 主要字段 |
+| Table | Main fields |
 | --- | --- |
-| `fyrlet_runs` | id、project_id、subject_id、operation、business_key、definition_version、plan、execution_grant_id、status、wait_reason、version、input、output、error、current_step、cancel_deadline、cancellation_outcome、started_at、finished_at、expires_at |
-| `fyrlet_run_steps` | id、run_id、type、name、seq、status、input、output、wait_id、wait_deadline、wait_timeout_action、current_attempt、error、started_at、finished_at |
-| `fyrlet_run_attempts` | id、step_id、attempt、execution_epoch、lease_id、lease_expires_at、status、error、started_at、finished_at |
-| `fyrlet_run_signals` | id、run_id、wait_id、name、payload、idempotency_key、input_hash、status、received_at、consumed_at |
-| `fyrlet_run_events` | id、run_id、step_id、type、payload、seq、created_at |
-| `fyrlet_execution_grants` | id、project_id、发起者引用、执行主体、操作与资源范围、expires_at、revoked_at |
+| `fyrlet_runs` | id, project_id, subject_id, operation, business_key, definition_version, plan, execution_grant_id, status, wait_reason, version, input, output, error, current_step, cancel_deadline, cancellation_outcome, started_at, finished_at, expires_at |
+| `fyrlet_run_steps` | id, run_id, type, name, seq, status, input, output, wait_id, wait_deadline, wait_timeout_action, current_attempt, error, started_at, finished_at |
+| `fyrlet_run_attempts` | id, step_id, attempt, execution_epoch, lease_id, lease_expires_at, status, error, started_at, finished_at |
+| `fyrlet_run_signals` | id, run_id, wait_id, name, payload, idempotency_key, input_hash, status, received_at, consumed_at |
+| `fyrlet_run_events` | id, run_id, step_id, type, payload, seq, created_at |
+| `fyrlet_execution_grants` | id, project_id, initiator reference, execution subject, operation and resource scope, expires_at, revoked_at |
 
-Run 状态机：
+Run state machine:
 
 ```text
 pending → running ⇄ waiting
@@ -72,117 +72,117 @@ pending | running | waiting → expired
 cancelling → expired
 ```
 
-各状态的进入条件：
+Entry conditions of each state:
 
-| 转换 | 条件 |
+| Transition | Condition |
 | --- | --- |
-| `→ failed`（来自 `pending`/`waiting`） | 执行授权撤销或过期（见下文“执行身份与代码版本”）、`definition_unavailable` 超过 `definition_unavailable_ttl`（默认 1 小时）仍未恢复、等待节点超时且 `wait_timeout_action: :fail`、重试耗尽 |
-| `waiting → running` | 信号被消费，或等待节点超时且 `wait_timeout_action: :continue`（负载为 `timeout` 标记，供后续 Step 区分） |
-| `cancelling → expired` | 取消期限前 Run 先到 `expires_at`：按 `expired` 终态处理并保留 `cancellation_outcome: fenced_timeout`，不再等待执行器确认 |
-| `waiting` 的 `wait_reason` | `signal`（等待用户/集成信号）、`effect`（等待 Effect 结果）、`definition_unavailable`（定义版本缺失，调度暂停） |
+| `→ failed` (from `pending`/`waiting`) | The execution grant is revoked or expired (see "Execution identity and code version" below), `definition_unavailable` has not recovered after `definition_unavailable_ttl` (default 1 hour), a wait node timed out with `wait_timeout_action: :fail`, or retries are exhausted |
+| `waiting → running` | A signal is consumed, or a wait node times out with `wait_timeout_action: :continue` (the payload is a `timeout` marker so that later Steps can tell the cases apart) |
+| `cancelling → expired` | The Run reaches `expires_at` before the cancellation deadline: it is handled as the `expired` terminal state and keeps `cancellation_outcome: fenced_timeout`, without waiting any longer for executor confirmation |
+| `wait_reason` of `waiting` | `signal` (waiting for a user/integration signal), `effect` (waiting for an Effect result), `definition_unavailable` (the definition version is missing, scheduling is paused) |
 
-等待节点必须声明 `wait_timeout_action`（`:fail` | `:continue`，默认 `:fail`）；到期判定与信号消费竞争同一状态锁（见下文“信号、取消与介入”）。
+A wait node must declare `wait_timeout_action` (`:fail` | `:continue`, default `:fail`); the expiry decision and signal consumption compete for the same state lock (see "Signals, cancellation and intervention" below).
 
-Step 与 Attempt 状态：
+Step and Attempt states:
 
-| 对象 | 状态 | 说明 |
+| Object | States | Description |
 | --- | --- | --- |
-| Step | `pending` → `running` → `succeeded` \| `failed` \| `cancelled` | 工作节点；`running` 期间可挂起为 `awaiting_effect` 后回到 `running` 或进入终态 |
-| Step（wait） | `pending` → `waiting` → `satisfied` \| `timed_out` \| `cancelled` | 等待节点；`satisfied`/`timed_out` 后不再变更 |
-| Attempt | `leased` → `succeeded` \| `failed` \| `abandoned` | `abandoned` 表示租约失效或被取消隔离；Attempt 终态不可改写 |
+| Step | `pending` → `running` → `succeeded` \| `failed` \| `cancelled` | Work node; while `running` it can be suspended as `awaiting_effect` and then return to `running` or enter a terminal state |
+| Step (wait) | `pending` → `waiting` → `satisfied` \| `timed_out` \| `cancelled` | Wait node; it no longer changes after `satisfied`/`timed_out` |
+| Attempt | `leased` → `succeeded` \| `failed` \| `abandoned` | `abandoned` means the lease was lost or the attempt was fenced off by cancellation; an Attempt's terminal state cannot be rewritten |
 
-Step 返回 Effect 意图后进入 `awaiting_effect`：此时当前 Attempt 的租约**释放**（`succeeded` 并标注 `effect_pending`），后续推进由 Effect 状态驱动；Effect 的派发所有权（`lease_id`/`execution_epoch`，见 [EFFECTS.md](EFFECTS.md)）独立于 Step Attempt。Effect 结果提交时仍校验 Run 未处于终态。
+After a Step returns an Effect intent it enters `awaiting_effect`: the lease of the current Attempt is **released** (`succeeded`, annotated `effect_pending`), and later advancement is driven by the Effect state; the dispatch ownership of the Effect (`lease_id`/`execution_epoch`, see [EFFECTS.md](EFFECTS.md)) is independent of the Step Attempt. When an Effect result is committed, it is still checked that the Run is not in a terminal state.
 
-约束：
+Constraints:
 
-- Run/Step 当前状态是推进事实来源；Event 是同事务写入的审计记录。不引入通过重放全部事件重建状态的执行模型。
-- 行锁、条件更新与唯一约束保护状态转换；每个 Run 最多一个当前有效的 Step 执行所有权。领取时持久化租约与递增的 `execution_epoch`，结果提交必须匹配当前代次、租约及 Run 状态。
-- 租约失效后的旧执行器仍可能继续运行，但不能提交状态或推进 Run。框架不承诺事务外代码绝不重复执行；已持久化完成的 Step 不重跑，未确认完成的尝试可能重跑。
-- 唯一约束至少覆盖 Step 表的 `(run_id, seq)`、Attempt 表的 `(step_id, attempt)`、Event 表的 `(run_id, seq)` 与 Signal 表的 `(run_id, idempotency_key)`。信号负载哈希覆盖等待实例、名称与 payload。Event 序号在锁定 Run 的事务中分配，不使用跨事务自增 ID 推断提交顺序。
-- Step 输出、下一节点、关联业务变更与后续任务通过受管提交接口原子写入；Step 自行发起的独立 Repo 写入不自动获得这一保证。事务中不包裹外部调用。
-- 重试有最大次数、退避、总运行期限与可重试错误分类。超过上限进入 `failed`，保留已提交输出；重试不重新生成已存在的 Effect 身份。
-- `expires_at` 是运行期限，不是数据删除时间。到期时使执行代次失效并进入 `expired`，拒绝新信号与后续推进；已派发 Effect 的真实结果仍需记录和对账。
-- `completed`、`failed`、`cancelled`、`expired` 不再推进；迟到结果可追加审计记录，不能改写终态。
+- The current Run/Step state is the source of truth for advancement; an Event is an audit record written in the same transaction. No execution model that rebuilds state by replaying all events is introduced.
+- Row locks, conditional updates and unique constraints protect state transitions; each Run has at most one currently valid Step execution owner. On claim, a lease and an incremented `execution_epoch` are persisted, and a result commit must match the current epoch, the lease and the Run state.
+- An old executor whose lease has expired may still keep running, but it cannot commit state or advance the Run. The framework does not promise that code outside the transaction is never executed twice; a Step whose completion has been persisted is not re-run, while an attempt whose completion was not confirmed may be re-run.
+- The unique constraints cover at least `(run_id, seq)` on the Step table, `(step_id, attempt)` on the Attempt table, `(run_id, seq)` on the Event table and `(run_id, idempotency_key)` on the Signal table. The signal payload hash covers the wait instance, the name and the payload. The Event sequence number is assigned in the transaction that locks the Run, and a cross-transaction auto-increment ID is not used to infer commit order.
+- The Step output, the next node, the associated business changes and follow-up jobs are written atomically through the managed commit interface; independent Repo writes issued by a Step on its own do not automatically get this guarantee. No external call is wrapped in a transaction.
+- Retries have a maximum count, backoff, a total run deadline and a classification of retryable errors. Exceeding the limit enters `failed` and keeps the committed outputs; a retry does not regenerate the identity of an Effect that already exists.
+- `expires_at` is the run deadline, not a data deletion time. On expiry the execution epoch is invalidated and the Run enters `expired`, rejecting new signals and further advancement; the real outcome of Effects that were already dispatched must still be recorded and reconciled.
+- `completed`, `failed`, `cancelled` and `expired` do not advance any more; a late result may append an audit record but cannot rewrite the terminal state.
 
-## 执行策略
+## Execution strategies
 
-框架只定义"谁来执行一个 step"，执行方式可插：
+The framework only defines "who executes a step"; the execution method is pluggable:
 
-| 策略 | 适用 | 说明 |
+| Strategy | Use | Description |
 | --- | --- | --- |
-| `:oban` | 默认，所有工作 Step | Oban 负责唤醒与排队，Run 状态表决定是否执行；重复或迟到任务必须安全退出 |
-| `:local` | 短 Step 的连续执行 | 同样遵守租约与代次检查，不能只有内存中的 Task 状态 |
-| `:external` | 特定语言与重计算 | 使用下文外部执行器协议的租约，不托管用户代码 |
+| `:oban` | Default, all work Steps | Oban handles waking and queuing, and the Run state table decides whether to execute; duplicate or late jobs must exit safely |
+| `:local` | Consecutive execution of short Steps | Also obeys the lease and epoch checks; it cannot rely on in-memory Task state alone |
+| `:external` | Specific languages and heavy computation | Uses the lease of the external executor protocol below; user code is not hosted |
 
-`:oban` 为默认。`:local` 以配置 `runs: [local_chain: n]` 实现：同一次唤醒连续执行至多 n 个步骤，每一步仍独立领取租约、独立提交，崩溃或迟到结果的处理不变。`:external` 见下文外部执行器协议。业务重试状态以 Run/Attempt 记录为准，Oban 的任务重投不能额外消耗或重置业务重试次数。恢复扫描器检查到期租约与缺失唤醒任务，不依赖进程存活或一次通知。
+`:oban` is the default. `:local` is implemented with the configuration `runs: [local_chain: n]`: one wake-up executes at most n steps in a row, each step still claims its own lease and commits independently, and the handling of crashes or late results is unchanged. The business retry state is defined by the Run/Attempt records, and an Oban job redelivery cannot additionally consume or reset the business retry count. The recovery scanner checks expired leases and missing wake-up jobs, and does not depend on a process being alive or on a single notification.
 
-## 信号、取消与介入
+## Signals, cancellation and intervention
 
-框架提供三个用户入口（用户令牌 + `X-Project-Id`）；Webhook 通过已认证的受限集成主体调用同一核心 API：
+The framework provides three user entry points (user token + `X-Project-Id`); a Webhook calls the same core API through an authenticated, restricted integration principal:
 
-| 入口 | 语义 |
+| Entry point | Semantics |
 | --- | --- |
-| `POST /api/v1/runs/:run_id/signals` | 持久化 `{wait_id, name, payload, idempotency_key}`，返回信号回执；受理与消费分开 |
-| `POST /api/v1/runs/:run_id/cancel` | 幂等受理取消，返回当前状态与取消期限 |
-| `GET /api/v1/runs/:run_id` | 读取 run、step 摘要与最近事件（有界） |
+| `POST /api/v1/runs/:run_id/signals` | Persists `{wait_id, name, payload, idempotency_key}` and returns a signal receipt; acceptance and consumption are separate |
+| `POST /api/v1/runs/:run_id/cancel` | Idempotently accepts a cancellation and returns the current status and the cancellation deadline |
+| `GET /api/v1/runs/:run_id` | Reads the run, step summaries and recent events (bounded) |
 
-权限由 `run_authorize/4` 决定，动作包括 `:view` / `:signal` / `:cancel` / `:start`。Run 归属项目、当前调用者、信号负载和目标等待节点都要参与校验。信号与取消入口按「项目 + 调用者 + Run」限流，超限返回 `LIMIT_EXCEEDED`；被拒绝和限流的请求同样计入 `fyrlet.run.signal`。
+Permissions are decided by `run_authorize/4`, with the actions `:view` / `:signal` / `:cancel` / `:start`. The owning project of the Run, the current caller, the signal payload and the target wait node all take part in the check. The signal and cancel entry points are rate-limited per "project + caller + Run" and return `LIMIT_EXCEEDED` when exceeded; rejected and rate-limited requests are also counted in `fyrlet.run.signal`.
 
-信号语义：
+Signal semantics:
 
-- 对已登记且未关闭的 `wait_id`，允许信号早于 Run 进入 `waiting` 到达；先写入收件箱，进入该等待节点后再消费。受理成功不代表已经推进。
-- 收件箱插入、幂等结果和唤醒任务原子提交；消费信号、关闭等待节点与推进状态也原子提交。同一等待实例只消费一个有效信号。
-- 同一幂等键与相同负载返回同一回执，负载不同返回冲突。错误名称、未知等待实例，以及针对终态或已关闭等待实例的新信号被拒绝；成功回执的重放不重复消费。
-- 等待期限与信号竞争由同一状态锁决定；已经超时的等待节点不能被迟到信号复活。动态等待必须先登记 `wait_id`，再派发可能产生回执的外部请求。
+- For a registered `wait_id` that is not closed, a signal is allowed to arrive before the Run enters `waiting`; it is written to the inbox first and consumed after the Run enters that wait node. Successful acceptance does not mean the Run has advanced.
+- The inbox insert, the idempotency result and the wake-up job are committed atomically; consuming the signal, closing the wait node and advancing the state are also committed atomically. A wait instance consumes only one valid signal.
+- The same idempotency key with the same payload returns the same receipt, and a different payload returns a conflict. A wrong name, an unknown wait instance, and a new signal for a terminal Run or a closed wait instance are rejected; replaying a successful receipt does not consume again.
+- The wait deadline and a signal compete under the same state lock; a wait node that has already timed out cannot be revived by a late signal. A dynamic wait must register its `wait_id` first and only then dispatch the external request that may produce a receipt.
 
-取消语义：
+Cancellation semantics:
 
-- 取消与结果提交、Effect 派发认领竞争同一状态锁。受理后不再领取新 Step、消费信号或认领后续 Effect；未认领的 Effect 标为 `cancelled`。已提交认领事务的 Effect 按在途请求处理，即使外部调用尚未返回。
-- 无执行中工作时可立即结束；有执行中工作时进入 `cancelling`，请求协作停止，并设置 `cancel_deadline`（默认 60 秒，可配置）。
-- **在途 Effect 不阻塞取消终态**：Run 在执行器确认或期限到达后即进入 `cancelled`，不等待已认领 Effect 返回；Effect 继续按 [EFFECTS.md](EFFECTS.md) 记录真实结果（含 `unknown`），并在运行视图中独立展示。SDK 在 `cancelled` 的 Run 上仍须显示未结 Effect 的状态。
-- 执行器确认后进入 `cancelled`，`cancellation_outcome: confirmed`；到期仍未确认时，使租约与代次失效并结束，标记 `fenced_timeout`。后者只表示禁止后续推进，不代表外部代码已停止。
-- 取消后的迟到结果只记录，不调用推进逻辑。已经派发的副作用仍可能完成，Effect 继续记录真实结果；撤销或补偿必须是独立、显式的业务操作。
-- SDK 区分“取消已受理”“已确认停止”和“超时后禁止推进”，不能把它们都展示为外部工作已停止。
+- Cancellation competes with result commits and Effect dispatch claims for the same state lock. Once accepted, no new Step is claimed, no signal is consumed and no later Effect is claimed; Effects not yet claimed are marked `cancelled`. An Effect whose claim transaction has already committed is treated as an in-flight request, even if the external call has not yet returned.
+- When no work is executing, it can finish immediately; when work is executing, the Run enters `cancelling`, requests cooperative stop, and sets `cancel_deadline` (default 60 seconds, configurable).
+- **In-flight Effects do not block the cancellation terminal state**: the Run enters `cancelled` once the executor confirms or the deadline is reached, without waiting for claimed Effects to return; the Effects keep recording their real outcome (including `unknown`) according to [EFFECTS.md](EFFECTS.md), and are shown separately in the run view. The SDK must still show the status of unsettled Effects on a `cancelled` Run.
+- After executor confirmation it enters `cancelled` with `cancellation_outcome: confirmed`; if there is still no confirmation at the deadline, the lease and epoch are invalidated and the Run ends, marked `fenced_timeout`. The latter only means that further advancement is forbidden, not that the external code has stopped.
+- A late result after cancellation is only recorded and does not invoke the advancement logic. Side effects that were already dispatched may still complete, and the Effect keeps recording the real outcome; revocation or compensation must be a separate, explicit business operation.
+- The SDK distinguishes "cancellation accepted", "stop confirmed" and "advancement forbidden after timeout", and must not present all three as the external work having stopped.
 
-## 运行视图（核心订阅）
+## Run view (core subscriptions)
 
-框架注册内建订阅，无需业务重复实现：
+The framework registers built-in subscriptions, so applications do not need to implement them again:
 
-| 名称 | 参数 | 输出 |
+| Name | Parameters | Output |
 | --- | --- | --- |
-| `fyrlet.run` | `run_id` | Run 状态、Step 摘要、等待原因、取消结果、Effect 摘要、最近 N 条事件与历史分页位置 |
-| `fyrlet.runs.recent` | `limit` | 当前 Actor 可见的最近 run |
+| `fyrlet.run` | `run_id` | Run status, Step summaries, wait reason, cancellation outcome, Effect summaries, the latest N events and the paging position of the history |
+| `fyrlet.runs.recent` | `limit` | The recent runs visible to the current Actor |
 
-运行视图使用完整有界快照，复用失效通知、ACK 与断线重取路径。Run/Step/Effect 的可见变化都应触发刷新；事件与 Step 历史超过上限后分页读取，不能让长任务突破快照大小限制。
+The run view uses a complete bounded snapshot and reuses the invalidation notification, ACK and reconnect-refetch paths. Any visible change to a Run/Step/Effect should trigger a refresh; once events and Step history exceed the limit they are read by paging, so that a long task cannot break the snapshot size limit.
 
-`fyrlet.runs.recent` 必须在查询阶段执行可见性过滤后再分页，不能先读取项目内全部 Run 再在客户端过滤。高频日志的增量传输使用追加订阅，见 [STREAMS.md](STREAMS.md)。
+`fyrlet.runs.recent` must apply visibility filtering in the query stage before paging; it must not first read all Runs of the project and filter them on the client. Incremental delivery of high-frequency logs uses append subscriptions, see [STREAMS.md](STREAMS.md).
 
-## 外部执行器协议
+## External executor protocol
 
-外部执行器负责领取、续租、上报结果与响应取消，复用核心执行所有权规则：
+An external executor is responsible for claiming, renewing leases, reporting results and responding to cancellation, reusing the core execution ownership rules:
 
-- 领取返回固定输入、定义版本、`attempt_id`、`lease_id`、`execution_epoch` 与到期时间。
-- 续租与结果上报必须携带当前租约和代次；已过期、被取消或被替换的租约不能推进状态。**过期立即生效**：`lease_expires_at` 一过，心跳（不再续期）、状态查询（返回 `lease_valid: false` 并要求停止）和结果上报（返回 `LEASE_LOST`，只记一条 `attempt.late_result` 审计事件）都立刻拒绝，不必等恢复扫描或接管先发生。取舍：执行器干完了活但租约已过期、恢复扫描尚未接管时，这份结果会被丢弃并重做。进程内（`:internal`）步骤不心跳，不受此限，仍由恢复扫描处理。
-- 同一尝试的相同结果重复上报幂等；不同结果冲突。无权限和过期租约的结果不得被当作有效完成。
-- 执行器长轮询获取取消标记；取消受理后不延长执行租约，失联按取消期限处理。
-- 执行器凭据按项目、队列和能力限制，可单独撤销；只能领取授权的工作，不等同于用户身份。
+- A claim returns the fixed input, the definition version, `attempt_id`, `lease_id`, `execution_epoch` and the expiry time.
+- Lease renewal and result reporting must carry the current lease and epoch; an expired, cancelled or replaced lease cannot advance state. **Expiry takes effect immediately**: as soon as `lease_expires_at` has passed, the heartbeat (no longer renews), the status query (returns `lease_valid: false` and requires a stop) and the result report (returns `LEASE_LOST` and records only an `attempt.late_result` audit event) are all rejected at once, without waiting for the recovery scan or takeover to happen first. The trade-off: when an executor has finished the work but its lease has expired and the recovery scan has not yet taken over, that result is discarded and the work is redone. In-process (`:internal`) steps do not send heartbeats and are not subject to this; they are still handled by the recovery scan.
+- Reporting the same result again for the same attempt is idempotent; a different result conflicts. A result from a caller without permission or with an expired lease must not be treated as a valid completion.
+- The executor long-polls for the cancellation marker; after a cancellation is accepted the execution lease is not extended, and losing contact is handled according to the cancellation deadline.
+- Executor credentials are limited by project, queue and capability and can be revoked individually; they may only claim authorized work and are not equivalent to a user identity.
 
-传输为 HTTP，取消标记用长轮询。需要能力 `executors`（服务端配置）。执行器凭据 `rtx_…`（`Fyrlet.Features.Executors.create/3`）限定项目与队列，可单独撤销，不是用户令牌。操作以 `executor: %{"default" => "队列", "步骤名" => "队列"}` 把步骤路由到队列；进程内工作者不领取带队列的步骤。
+The transport is HTTP, and the cancellation marker uses long polling. The capability `executors` (server configuration) is required. The executor credential `rtx_…` (`Fyrlet.Features.Executors.create/3`) is bound to a project and queues, can be revoked individually, and is not a user token. An operation routes steps to queues with `executor: %{"default" => "queue", "step name" => "queue"}`; in-process workers do not claim steps that have a queue.
 
-| 端点 | 作用 |
+| Endpoint | Purpose |
 | --- | --- |
-| `POST /api/v1/executor/claim` `{queues}` | 领取一个步骤，返回 `attempt_id`、`lease_id`、`execution_epoch`、`input`、`definition_version`、`lease_expires_at`；无工作时 `data` 为 `null` |
-| `POST /api/v1/executor/attempts/:id/heartbeat` `{lease_id, epoch}` | 续租；取消受理后不再延长，返回 `cancel: true` |
-| `GET /api/v1/executor/attempts/:id?lease_id=&epoch=&wait=` | 长轮询取消标记（`wait` 至多 25 秒）；租约已失效时返回 `cancel: true, lease_valid: false` |
-| `POST /api/v1/executor/attempts/:id/result` `{lease_id, epoch, status, output \| error}` | 上报一次结果；同一结果重复上报返回 `duplicate`，不同结果冲突；租约失效返回 `LEASE_LOST`（409） |
+| `POST /api/v1/executor/claim` `{queues}` | Claims one step and returns `attempt_id`, `lease_id`, `execution_epoch`, `input`, `definition_version` and `lease_expires_at`; when there is no work, `data` is `null` |
+| `POST /api/v1/executor/attempts/:id/heartbeat` `{lease_id, epoch}` | Renews the lease; after a cancellation is accepted it is no longer extended and returns `cancel: true` |
+| `GET /api/v1/executor/attempts/:id?lease_id=&epoch=&wait=` | Long-polls the cancellation marker (`wait` at most 25 seconds); when the lease is no longer valid it returns `cancel: true, lease_valid: false` |
+| `POST /api/v1/executor/attempts/:id/result` `{lease_id, epoch, status, output \| error}` | Reports a result once; reporting the same result again returns `duplicate`, a different result conflicts; a lost lease returns `LEASE_LOST` (409) |
 
-执行器只能领取自己队列、自己项目的步骤，只能操作自己持有的尝试。服务端不托管也不运行执行器代码。
+An executor can claim only steps of its own queues and its own project, and can operate only on attempts it holds. The server neither hosts nor runs executor code.
 
-## 执行身份与代码版本
+## Execution identity and code version
 
-- 创建 Run 时记录发起者及一个由核心持久化的执行授权引用，限定项目、操作、资源范围与期限；不保存或重用原始用户令牌。
-- 执行授权期限默认取 `min(Run 的 expires_at, 授权策略上限)`，创建时若授权期限短于 Run 计划的等待总时长则拒绝创建（`VALIDATION_FAILED`），避免长等待 Run 在中途因授权先过期而失败。
-- 用户会话自然过期不自动取消已受理的 Run。每次领取新 Step 或认领 Effect 派发前复核执行授权；授权撤销后拒绝新工作并使 Run 失败。正在外部执行的请求仍需按真实结果记录。
-- 查看、投递信号与取消仍按当前调用者重新授权。执行器凭据仅赋予执行指定尝试的能力，不自行扩大 Run 的业务权限。
-- Run 固定 `definition_version`，关联适用的 Step 输入输出契约与实现。固定要通过 `definition_version → implementation` **显式注册**实现：仅记录版本号却仍调用被覆盖的同名模块，不构成版本固定。升级时保留活跃 Run 依赖的实现与契约。部署必须保留未结束 Run 所需版本；版本缺失时停止调度并以 `definition_unavailable` 等待原因告警，禁止静默使用新代码。
-- 不提供运行中迁移；若将来提供，必须显式记录旧版本、新版本、状态映射与操作者，不能通过替换模块隐式改变既有 Run。
+- When a Run is created, the initiator and an execution grant reference persisted by the core are recorded, limited to the project, operation, resource scope and duration; the original user token is neither stored nor reused.
+- The execution grant's duration defaults to `min(the Run's expires_at, the grant policy maximum)`; if at creation the grant duration is shorter than the total wait time of the Run's plan, creation is rejected (`VALIDATION_FAILED`), so that a long-waiting Run does not fail midway because its grant expired first.
+- Natural expiry of the user session does not automatically cancel an accepted Run. The execution grant is re-checked before each claim of a new Step or Effect dispatch claim; after the grant is revoked, new work is rejected and the Run fails. Requests already executing externally must still be recorded by their real outcome.
+- Viewing, delivering signals and cancelling are still re-authorized against the current caller. An executor credential only grants the ability to execute the specified attempt and does not expand the Run's business permissions on its own.
+- A Run pins its `definition_version` and associates the applicable Step input/output contracts and implementation. Pinning requires **explicitly registering** the implementation through `definition_version → implementation`: merely recording a version number while still calling an overridden module of the same name is not version pinning. On upgrade, the implementations and contracts that active Runs depend on are retained. A deployment must retain the versions needed by unfinished Runs; when a version is missing, scheduling stops and an alert is raised with the `definition_unavailable` wait reason, and silently using new code is forbidden.
+- Migration of a running Run is not provided; if it is provided in the future, it must explicitly record the old version, the new version, the state mapping and the operator, and must not change existing Runs implicitly by replacing a module.

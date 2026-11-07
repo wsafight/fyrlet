@@ -1,48 +1,48 @@
-# Effect 与 Outbox
+# Effect and Outbox
 
-外部副作用（发邮件、调用第三方 HTTP 等）不能放进数据库事务里。Effect 把**意图**和本地事务一起提交，由统一的派发器在事务外执行，并如实记录不确定的结果。Outbox 保证意图与本地事务一起提交，**不自动保证外部系统只执行一次**。
+External side effects (sending email, calling third-party HTTP, and so on) cannot be put inside a database transaction. An Effect commits the **intent** together with the local transaction, a unified dispatcher executes it outside the transaction, and uncertain outcomes are recorded as they are. The Outbox guarantees that the intent is committed together with the local transaction, and **does not automatically guarantee that the external system executes only once**.
 
-Effect 总是归属某个 [Run](RUNS.md) 的 Step。适配器协议、重试规则和人工处置见下文；开发者视角的用法见 [SERVER.md](SERVER.md)。
+An Effect always belongs to a Step of a [Run](RUNS.md). The adapter protocol, retry rules and manual resolution are described below; usage from the developer's point of view is in [SERVER.md](SERVER.md).
 
-## 问题
+## Problem
 
-写入的幂等只覆盖同一数据库事务内的写入（见 [PRODUCT.md](PRODUCT.md) 的 FR-04）。外部副作用需要统一记录外部工作的意图、派发尝试与不确定结果，并按适配器能力声明重试边界。Outbox 保证意图与本地事务一起提交，不自动保证外部系统只执行一次。
+Write idempotency covers only writes within the same database transaction (see FR-04 in [PRODUCT.md](PRODUCT.md)). External side effects need a unified record of the intent of external work, dispatch attempts and uncertain outcomes, and the retry boundary follows the capabilities declared by the adapter. The Outbox guarantees that the intent is committed together with the local transaction; it does not automatically guarantee that the external system executes only once.
 
-## 模型
+## Model
 
-表 `fyrlet_effects`：
+Table `fyrlet_effects`:
 
-| 字段 | 说明 |
+| Field | Description |
 | --- | --- |
-| `operation_id` | 持久化的稳定业务请求 ID；作为对外幂等键，重试复用 |
-| `project_id` / `run_id` / `step_id` / `effect_key` | 归属与逻辑唯一键；同一 Step 的同一 Effect 不重复创建 |
-| `adapter` / `adapter_version` / `delivery_policy` | 适配器、能力版本与明确的重试策略 |
-| `payload` / `payload_hash` | 固定的规范化请求，不含凭据；同一逻辑键对应不同请求时冲突 |
-| `status` | `pending`（待派发）/ `claimed`（已认领、外部调用进行中或结果未回写）/ `accepted`（接收方已受理，等待回执或查询）/ `succeeded` / `failed` / `unknown` / `cancelled` |
-| `lease_id` / `execution_epoch` / `lease_expires_at` | 派发所有权与旧结果隔离；独立于 Step Attempt 租约（见 [RUNS.md](RUNS.md#状态与数据)） |
-| `attempts` / `claimed_at` / `next_attempt_at` | 尝试记录与调度；`claimed_at` 不代表外部已执行 |
-| `secret_ref` | 适配器所需凭据的引用名；凭据本体由适配器在派发时从项目密钥存储解析，不进入 `payload`、日志与事件 |
-| `external_ref` / `result` / `last_error` / `resolution_required` | 外部引用、已知结果与人工处置标记 |
+| `operation_id` | Durable, stable business request ID; used as the outward idempotency key and reused on retries |
+| `project_id` / `run_id` / `step_id` / `effect_key` | Ownership and logical unique key; the same Effect of the same Step is not created twice |
+| `adapter` / `adapter_version` / `delivery_policy` | Adapter, capability version and explicit retry policy |
+| `payload` / `payload_hash` | Fixed, normalized request without credentials; the same logical key with a different request conflicts |
+| `status` | `pending` (awaiting dispatch) / `claimed` (claimed, external call in progress or result not yet written back) / `accepted` (accepted by the receiver, awaiting a receipt or lookup) / `succeeded` / `failed` / `unknown` / `cancelled` |
+| `lease_id` / `execution_epoch` / `lease_expires_at` | Dispatch ownership and isolation of old results; independent of the Step Attempt lease (see [RUNS.md](RUNS.md#state-and-data)) |
+| `attempts` / `claimed_at` / `next_attempt_at` | Attempt records and scheduling; `claimed_at` does not mean the external system has executed |
+| `secret_ref` | Reference name of the credential the adapter needs; the adapter resolves the credential itself from the project secret store at dispatch time, and it does not enter `payload`, logs or events |
+| `external_ref` / `result` / `last_error` / `resolution_required` | External reference, known result and manual-resolution flag |
 
-规则：
+Rules:
 
-1. Step 返回 Effect 意图后，核心在同一事务中创建 Effect、将 Step 置为 `awaiting_effect`（释放当前 Attempt 租约，Run 的 `wait_reason` 为 `effect`），并创建派发任务；事务回滚则三者均不存在。
-2. 仅统一的 Effect dispatcher 可以派发。Oban 唤醒 dispatcher；Step 执行器不能再次直接调用适配器。派发认领先在短事务中记录租约与 `claimed`，外部调用在事务外完成。
-3. 派发进程失联或响应不确定（`claimed` 且租约过期、或适配器返回 `:unknown`）时进入 `unknown`，不能因为本地没有成功记录就判定外部未执行。
-4. Effect 完成与 Step 输出、后续推进同事务提交；Run 已取消或过期时只保存 Effect 的真实结果，不推进 Run。
-5. 幂等保证取决于接收方对稳定业务键的约束及保留窗口。**查询对账不等于去重；框架不统一承诺 exactly-once 或至多一次外部副作用。**
+1. After a Step returns an Effect intent, the core, in the same transaction, creates the Effect, sets the Step to `awaiting_effect` (releasing the current Attempt lease, and the Run's `wait_reason` is `effect`), and creates the dispatch job; if the transaction rolls back, none of the three exists.
+2. Only the unified Effect dispatcher may dispatch. Oban wakes the dispatcher; the Step executor must not call the adapter directly again. A dispatch claim first records the lease and `claimed` in a short transaction, and the external call completes outside the transaction.
+3. When the dispatching process is lost or the response is uncertain (`claimed` with an expired lease, or the adapter returns `:unknown`), the Effect enters `unknown`; it must not be concluded that the external side did not execute merely because there is no local success record.
+4. Effect completion is committed in the same transaction as the Step output and subsequent advancement; when the Run is already cancelled or expired, only the real result of the Effect is saved and the Run is not advanced.
+5. The idempotency guarantee depends on the receiver's constraint on the stable business key and on its retention window. **Reconciliation by lookup is not deduplication; the framework does not uniformly promise exactly-once or at-most-once external side effects.**
 
-适配器必须声明能力与策略：
+Adapters must declare capabilities and policy:
 
-| 外部能力 | 允许的默认行为 | 保证边界 |
+| External capability | Allowed default behavior | Guarantee boundary |
 | --- | --- | --- |
-| 幂等键或唯一业务键 | 在有效幂等窗口内复用 `operation_id` 重试 | 去重依赖接收方契约；超过窗口不能继续宣称安全重试 |
-| 仅可查询结果 | 优先对账；结果不明时暂停派发 | 查不到可能仍在处理中，不能据此证明可安全重发 |
-| 无幂等、无查询 | 不确定结果暂停并要求人工处置 | 仅业务显式选择 `retry_allow_duplicates` 后允许可能重复的重发 |
+| Idempotency key or unique business key | Retry by reusing `operation_id` within the valid idempotency window | Deduplication depends on the receiver's contract; beyond the window, safe retry can no longer be claimed |
+| Result lookup only | Reconcile first; pause dispatch when the result is unclear | Not found may still mean in progress, so it cannot be used to prove that resending is safe |
+| No idempotency, no lookup | An uncertain result pauses and requires manual resolution | A resend that may duplicate is allowed only after the business explicitly chooses `retry_allow_duplicates` |
 
-确定未执行的临时失败可按退避重试；不确定失败不能伪装成“确定未执行”。自动重试期限不得超过供应商去重窗口，相关能力未知时按不支持处理。
+A temporary failure that is known not to have executed may be retried with backoff; an uncertain failure must not be disguised as "known not to have executed". The automatic retry period must not exceed the provider's deduplication window, and when the relevant capability is unknown it is treated as unsupported.
 
-## 适配器协议
+## Adapter protocol
 
 ```elixir
 defmodule Fyrlet.Effects.Adapter do
@@ -57,16 +57,16 @@ defmodule Fyrlet.Effects.Adapter do
 end
 ```
 
-`capabilities` 至少声明幂等方式与有效期、是否可查询、是否可撤销，以及成功结果代表“供应商受理”还是“最终业务完成”。例如邮件服务受理不能自动解释为用户已收到邮件。
+`capabilities` declares at least the idempotency method and its validity period, whether the effect is queryable, whether it is cancellable, and whether a success result means "accepted by the provider" or "final business completion". For example, acceptance by an email service cannot automatically be interpreted as the user having received the email.
 
-`accepted` 使 Effect 进入 `accepted` 状态，等待可验证的回执或查询结果（回执经受限集成主体调用核心 API 提交，见 [PROTOCOL.md](PROTOCOL.md#副作用回执)）；`retryable` 只用于适配器能够确认尚未产生业务效果的失败。查询的 `not_found` 本身不是安全重发依据。
+`accepted` puts the Effect into the `accepted` status to await a verifiable receipt or lookup result (receipts are submitted by calling the core API through a restricted integration principal, see [PROTOCOL.md](PROTOCOL.md#effect-receipts)); `retryable` is used only for failures where the adapter can confirm that no business effect has yet occurred. A `not_found` from a lookup is not by itself a basis for safe resending.
 
-`unknown` 的处置：支持查询时按退避对账；超过 `effect_reconcile_ttl`（默认 24 小时）后仍保持 `unknown`，设置 `resolution_required: true` 并告警，不自动转成 `failed`。只有可信结果证明失败时才进入 `failed`。人工确认、放弃等待或允许重发必须记录证据、操作者和决策，不能覆盖原始尝试记录。
+Handling of `unknown`: when lookup is supported, reconcile with backoff; if it is still `unknown` after `effect_reconcile_ttl` (default 24 hours), set `resolution_required: true` and raise an alert, without automatically converting it to `failed`. It enters `failed` only when a trusted result proves the failure. Manual confirmation, giving up waiting or allowing a resend must record the evidence, the operator and the decision, and must not overwrite the original attempt records.
 
-客户端可读取 Effect 状态；依赖该结果的操作可返回 `EFFECT_UNKNOWN`（HTTP 409，`retryable: false`），禁止 SDK 因该错误自动重发外部业务。
+Clients can read the Effect status; an operation that depends on that result may return `EFFECT_UNKNOWN` (HTTP 409, `retryable: false`), and the SDK is forbidden to resend the external business automatically because of this error.
 
-## 与写入路径的关系
+## Relationship to the write path
 
-- `write` 仍保持“事务提交即成功”，成功只表示本地业务写入完成，不代表任何外部工作完成。受管写入回调不得直接调用外部系统。
-- Effect 必须归属 Run/Step；只需异步投递的业务也可使用单 Step Run。不提供由独立 write 直接产生 Effect 的 API，避免两套调度与完成语义。
-- 请求幂等窗口、Effect 对账窗口、供应商去重窗口与 Run 历史保留期分别配置。未解决 Effect 的逻辑唯一键和尝试记录不能随请求幂等记录一起清理。
+- `write` still keeps "success on transaction commit"; success only means the local business write is complete and does not mean any external work is complete. A managed write callback must not call external systems directly.
+- An Effect must belong to a Run/Step; a business that only needs asynchronous delivery can also use a single-Step Run. No API is provided for a standalone write to produce an Effect directly, to avoid two sets of scheduling and completion semantics.
+- The request idempotency window, the Effect reconciliation window, the provider deduplication window and the Run history retention period are configured separately. The logical unique key and attempt records of an unresolved Effect must not be cleaned up together with request idempotency records.

@@ -1,35 +1,35 @@
-# 性能对比
+# Performance comparison
 
-测量日期：2026-11-07。本文只保留最新一次的 Fyrlet / Meteor 同资源对照，以及共享房间与追加流的端到端对照；优化的做法、证据和回退的试验见 [OPTIMIZATIONS.md](OPTIMIZATIONS.md)。更早几轮的历史报告已移除，其结论不再作为依据。
+Measurement date: 2026-11-07. This document keeps only the latest same-resource Fyrlet / Meteor comparison and the end-to-end comparison of shared rooms and append streams; for how the optimizations were done, the evidence, and the experiments that were reverted, see [OPTIMIZATIONS.md](OPTIMIZATIONS.md). Earlier rounds of historical reports have been removed, and their conclusions are no longer relied on.
 
-原始运行数据在本机 `.local/fair/`（已被版本控制忽略），不随仓库提交。对照条件与结论门槛见 [bench/FAIRNESS.md](../bench/FAIRNESS.md)。
+The raw run data is in `.local/fair/` on the local machine (ignored by version control) and is not committed with the repository. For the comparison conditions and the thresholds for drawing conclusions see [bench/FAIRNESS.md](../bench/FAIRNESS.md).
 
-## 结论边界
+## Limits of the conclusions
 
-- 这是**单核组**（应用各 1 vCPU / 1 GiB）、**单机虚拟机**里的结果，每个负载点 2 次重复，负载持续 20 秒。
-- 趋势明确：500 writes/s 下 Fyrlet 完成了绝大部分目标写入，Meteor 只完成 20–29%。但 Meteor 的重复间波动很大，**不能据此给出稳定倍数**。
-- 双方业务保障**没有对齐**（见下文“没有对齐的条件”）。不能把它当成“同保障下的引擎排名”。
-- 没有做多核组、长时间稳定性、冷启动与断线恢复对照。
+- These are results from a **single-core group** (1 vCPU / 1 GiB per application) inside a **single-machine virtual machine**, with 2 repetitions per load point and a load duration of 20 seconds.
+- The trend is clear: at 500 writes/s Fyrlet completed the vast majority of the target writes, while Meteor completed only 20–29%. But Meteor's variation between repetitions is large, so **no stable multiple can be given from this**.
+- The business guarantees of the two sides are **not aligned** (see "Conditions that are not aligned" below). It cannot be taken as an "engine ranking under the same guarantees".
+- No multi-core group, long-duration stability, cold start or disconnect-recovery comparison was done.
 
-## 测试条件（已由操作系统强制）
+## Test conditions (enforced by the operating system)
 
-| 项目 | 配置 |
+| Item | Configuration |
 | --- | --- |
-| 环境 | Colima Linux 虚拟机（10 vCPU / 24 GiB），Docker 容器，cgroup v2 |
-| 应用 | Fyrlet 与 Meteor 各 `--cpus 1 --memory 1g --memory-swap 1g`，`--cpuset-cpus 0` |
-| 数据库 | PostgreSQL 17 与 MongoDB 7.0（副本集 + oplog）各 2 vCPU / 2 GiB，`cpuset 1-2` |
-| 生成器 | 独立容器，`cpuset 4-9`，与应用和数据库不共享核 |
-| 构建产物 | Fyrlet：`mix release`；Meteor：`meteor build` 的 production bundle，Node 24.22.1 |
-| 负载 | 1000 用户 × 2 设备（3000 连接），`sessions=shared`，每用户 50 条 × 128 B，20 秒，concurrency 64，warmup 1，timeout 60 秒 |
-| 顺序 | Fyrlet / Meteor / Meteor / Fyrlet 交替；每轮重新灌数据 |
-| 限额证据 | 每轮前后读取容器 cgroup 的 `cpu.stat`（usage、nr_throttled）、`memory.events`（oom_kill）、`memory.peak` |
-| BEAM | cgroup 下 `schedulers_online=1`（宿主 10 核） |
+| Environment | Colima Linux virtual machine (10 vCPU / 24 GiB), Docker containers, cgroup v2 |
+| Applications | Fyrlet and Meteor each with `--cpus 1 --memory 1g --memory-swap 1g`, `--cpuset-cpus 0` |
+| Databases | PostgreSQL 17 and MongoDB 7.0 (replica set + oplog), each 2 vCPU / 2 GiB, `cpuset 1-2` |
+| Generator | Separate container, `cpuset 4-9`, sharing no cores with the applications or databases |
+| Build artifacts | Fyrlet: `mix release`; Meteor: the production bundle from `meteor build`, Node 24.22.1 |
+| Load | 1000 users × 2 devices (3000 connections), `sessions=shared`, 50 items × 128 B per user, 20 seconds, concurrency 64, warmup 1, timeout 60 seconds |
+| Order | Fyrlet / Meteor / Meteor / Fyrlet alternating; data re-seeded for every round |
+| Limit evidence | Before and after every round, the container cgroup's `cpu.stat` (usage, nr_throttled), `memory.events` (oom_kill) and `memory.peak` are read |
+| BEAM | `schedulers_online=1` under the cgroup (host has 10 cores) |
 
-容器的文件描述符软限制默认只有 1024，3000 个连接会卡在约 1050 个；双方应用和生成器都提高到了 65536。
+The containers' default soft file descriptor limit is only 1024, and 3000 connections get stuck at about 1050; the applications and the generator on both sides were raised to 65536.
 
-## 对照结果
+## Comparison results
 
-| 轮 | 实现 | 目标 writes/s | 完成写入 | 传播 P95 ms | 应用 CPU 秒 | 被节流周期 | 应用内存峰值 MiB* | OOM |
+| Round | Implementation | Target writes/s | Completed writes | Propagation P95 ms | App CPU seconds | Throttled periods | App peak memory MiB* | OOM |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Fyrlet | 500 | 9732 | 9.74 | 15.3 | 1 | 636 | 0 |
 | 2 | Meteor | 500 | 2917 | 498.84 | 34.1 | 22 | 554 | 0 |
@@ -40,75 +40,75 @@
 | 7 | Meteor | 100 | 2000 | 253.96 | 35.6 | 5 | 524 | 0 |
 | 8 | Fyrlet | 100 | 1975 | 4.56 | 9.5 | 1 | 627 | 0 |
 
-\* `memory.peak` 含页缓存，不等于 RSS，只适合比较同一实现内部的相对变化。应用 CPU 秒包含建连与预热阶段，100 writes/s 时建连占比大，不能直接除以写入数当作 CPU/写入。
+\* `memory.peak` includes the page cache and is not RSS; it is suitable only for comparing relative changes within the same implementation. App CPU seconds include the connection and warmup phases; at 100 writes/s connection setup is a large share, so it cannot be divided directly by the number of writes to get CPU per write.
 
-读数：
+Reading:
 
-- 500 writes/s：Fyrlet 完成约 97–99% 的目标写入；Meteor 只完成 20–29%，CPU 被节流 21–22 个周期，即已打满 1 核。
-- 100 writes/s：双方都完成了全部目标写入。Fyrlet 的 P95 为 3.3 与 4.6 ms；Meteor 的两次分别是 14.2 与 254.0 ms，相差 18 倍，只能说明 Meteor 在此负载下已接近单核上限，给不出稳定数值。
-- 两边内存都在 1 GiB 内，没有 OOM。
-- 所有轮次的最终完整视图都校验正确，已接受写入的中间投递覆盖率为 100%。
+- 500 writes/s: Fyrlet completed about 97–99% of the target writes; Meteor completed only 20–29%, with CPU throttled for 21–22 periods, meaning 1 core was saturated.
+- 100 writes/s: both sides completed all target writes. Fyrlet's P95 was 3.3 and 4.6 ms; Meteor's two runs were 14.2 and 254.0 ms, an 18-fold difference, which only shows that Meteor is already close to the single-core limit under this load and cannot give a stable figure.
+- Memory stayed within 1 GiB on both sides, with no OOM.
+- In all rounds the final complete view was verified correct, and the intermediate delivery coverage of accepted writes was 100%.
 
-### 为什么没有测更高速率
+### Why higher rates were not tested
 
-把目标速率提到 900 和 1300 writes/s 时，是**负载生成器**（单线程 Node）先掉拍（`generatorDropped`），Fyrlet 的 cgroup 节流为 0。按 FAIRNESS.md 的规则，生成器掉拍的点不能证明服务端容量上限，所以这套对照给不出 Fyrlet 的容量上限。
+When the target rate was raised to 900 and 1300 writes/s, it was the **load generator** (single-threaded Node) that first dropped ticks (`generatorDropped`), while Fyrlet's cgroup throttling was 0. Under the rules in FAIRNESS.md, a point where the generator drops ticks cannot demonstrate the server's capacity limit, so this comparison cannot give Fyrlet's capacity limit.
 
-## 没有对齐的条件
+## Conditions that are not aligned
 
-- **鉴权保障**：Fyrlet 每次推送前重新读会话，检查过期与撤销，写入事务对会话加 `FOR SHARE` 锁并用 advisory lock 串行化同 key 请求，另有持久化的兜底通知。Meteor 只在登录与订阅时检查一次会话，到期靠定时器。Fyrlet 做的事更多。
-- **写确认强度**：Meteor 的写入用 MongoDB 多文档事务，`readConcern: snapshot` 加 `writeConcern: majority`；PostgreSQL 一侧使用默认提交。两边没有逐项对齐，这一点对 Meteor 不利。
-- **架构固定成本**：Meteor 在单个 Node 事件循环里同时处理 DDP、EJSON、oplog 监听与每连接的 mergebox，一核限额下互相争用；Fyrlet 对同一订阅只计算一次。这是读代码得出的推断，**没有对 Meteor 做 CPU 剖析**。
-- 多核组（4 vCPU / 4 GiB，Meteor 多进程加粘性代理）未做；数据库刷盘与写确认未逐项对齐；负载只覆盖“更新已有记录”。
+- **Authentication guarantees**: before every push Fyrlet re-reads the session and checks expiry and revocation; the write transaction takes a `FOR SHARE` lock on the session and uses an advisory lock to serialize requests with the same key, and there is also a durable fallback notification. Meteor checks the session only once, at login and subscription, and relies on a timer for expiry. Fyrlet does more.
+- **Write acknowledgement strength**: Meteor's writes use MongoDB multi-document transactions with `readConcern: snapshot` plus `writeConcern: majority`; the PostgreSQL side uses the default commit. The two sides are not aligned item by item, which is unfavourable to Meteor.
+- **Fixed architectural cost**: Meteor handles DDP, EJSON, oplog tailing and the per-connection mergebox in a single Node event loop, and they contend with each other under a one-core limit; Fyrlet computes the same subscription only once. This is an inference from reading the code; **no CPU profiling was done on Meteor**.
+- The multi-core group (4 vCPU / 4 GiB, Meteor multi-process with a sticky proxy) was not run; database flushing and write acknowledgement were not aligned item by item; the load covers only "updating existing records".
 
-## Fyrlet 单核剖析（500 writes/s）
+## Fyrlet single-core profile (500 writes/s)
 
-稳定写入阶段，用 `:msacc` 与按进程类型汇总的 reductions 观察：
+During the steady write phase, observed with `:msacc` and reductions summed by process type:
 
-- 调度器约 53% 忙，**500 writes/s 在 1 vCPU 下并未使 Fyrlet 饱和**。
-- reductions 占比：写入处理（`OperationChannel`）约 51%，Bandit 连接进程约 9%，会话检查分片合计约 10%，Oban 生产者约 5.8%，Observer 约 5%。
-- 把应用压到 0.4 vCPU 才使 CPU 成为瓶颈，但同一基线两次重复就差约 ±20%（完成写入 7464 对 9909），能测出的收益需要至少 3 次交替重复。
-- 曾设想把 advisory lock 与幂等 SELECT 合并成一条语句，**不成立**：READ COMMITTED 下同一语句内等锁后快照已固定，会读不到刚提交的幂等行，导致重复执行。
+- The scheduler was about 53% busy; **500 writes/s did not saturate Fyrlet at 1 vCPU**.
+- Share of reductions: write handling (`OperationChannel`) about 51%, Bandit connection processes about 9%, session check shards about 10% combined, Oban producers about 5.8%, Observers about 5%.
+- Only when the application was squeezed to 0.4 vCPU did CPU become the bottleneck, but two repetitions of the same baseline already differed by about ±20% (completed writes 7464 vs 9909), so a measurable gain needs at least 3 alternating repetitions.
+- The idea of merging the advisory lock and the idempotency SELECT into one statement **does not hold**: under READ COMMITTED, after waiting for the lock within a single statement the snapshot is already fixed, so the just-committed idempotency row cannot be seen, which leads to duplicate execution.
 
-写入路径剩下的候选（会话检查与 advisory lock 合并、幂等先插占位行）预计各省 1 次数据库往返，约 10% 量级，低于当前噪声，未实施。
+The remaining candidates on the write path (merging the session check with the advisory lock, inserting a placeholder idempotency row first) are each expected to save 1 database round trip, on the order of 10%, which is below the current noise and was not implemented.
 
-## 复现与现状
+## Reproduction and current state
 
-对照用的 Dockerfile 与运行脚本目前只在本机 `.local/fair/`，含本机绝对路径和一个临时的 `docker` 包装脚本，**尚未整理成可复用工具**。复现需要：
+The Dockerfile and run scripts used for the comparison currently exist only in `.local/fair/` on the local machine, contain local absolute paths and a temporary `docker` wrapper script, and **have not yet been turned into a reusable tool**. Reproduction requires:
 
-1. 用 `mix release` 构建 Fyrlet 镜像（运行层需与构建层的 glibc 版本一致，本次用 `debian:trixie-slim`）；用 `meteor build --server-only --architecture os.linux.aarch64` 打 Meteor bundle 并装进 `node:24.22.1`。
-2. 在 Linux 虚拟机里用 `--cpus`、`--memory`、`--memory-swap`、`--cpuset-cpus` 起应用、数据库和生成器容器，并把文件描述符限制提高到 65536。
-3. 用 `bench/runner.mjs --endpoint ... --fixtures ...` 的外部端点模式运行，每轮重新灌数据，交替执行顺序，并在运行前后读取容器 cgroup 计数。
+1. Build the Fyrlet image with `mix release` (the runtime layer must match the build layer's glibc version; this run used `debian:trixie-slim`); build the Meteor bundle with `meteor build --server-only --architecture os.linux.aarch64` and put it into `node:24.22.1`.
+2. In a Linux virtual machine, start the application, database and generator containers with `--cpus`, `--memory`, `--memory-swap` and `--cpuset-cpus`, and raise the file descriptor limit to 65536.
+3. Run in the external endpoint mode of `bench/runner.mjs --endpoint ... --fixtures ...`, re-seeding the data every round, alternating the execution order, and reading the container cgroup counters before and after each run.
 
-Fyrlet 的灌数据用 `bench/fixtures/seed.exs`；Meteor 用 `bench/adapters/meteor.mjs` 的 `seed()`，`runId` 必须符合 `bench-<数字>-<8 位十六进制>`。
+Fyrlet is seeded with `bench/fixtures/seed.exs`; Meteor with `seed()` in `bench/adapters/meteor.mjs`, and `runId` must match `bench-<digits>-<8 hexadecimal digits>`.
 
-## 仍未覆盖
+## Still not covered
 
-端到端的新增/删除压测、24 小时稳定性、多核组、Meteor 的 CPU 剖析、鉴权与写确认保障对齐、冷启动与断线恢复对照。
+End-to-end add/delete load tests, 24-hour stability, the multi-core group, CPU profiling of Meteor, alignment of the authentication and write-acknowledgement guarantees, and cold-start and disconnect-recovery comparison.
 
-## 共享房间与追加流端到端对照（2026-11-07）
+## Shared rooms and append streams compared end to end (2026-11-07)
 
-本组使用 Chat 领域应用、真实 PostgreSQL / HTTP / WebSocket。25 个不同主体、不同会话的用户加入同项目房间，逐次写入后等待全部客户端收到对应内容。每模式每轮 20 次写入，共 3 轮；消息模式先填满 100 条实时窗口，每条文本 128 字节。SDK 关闭字段级 `delta-v1`，分别比较普通私有快照与 `sharing: identical`、全量消息快照与 append。原始报告：[shared-2026-11-07.json](bench/shared-2026-11-07.json)。
+This group uses the Chat domain application with real PostgreSQL / HTTP / WebSocket. 25 users with different subjects and different sessions join a room in the same project, write one after another, and after each write wait for all clients to receive the corresponding content. Each mode does 20 writes per round, for 3 rounds; the message mode first fills the 100-item live window, with each text 128 bytes. The SDK has field-level `delta-v1` turned off, and compares ordinary private snapshots against `sharing: identical`, and full message snapshots against append. Raw report: [shared-2026-11-07.json](bench/shared-2026-11-07.json).
 
-| 模式 | 每轮视图构建 | 每轮快照数据编码 | 每轮数据库查询 | 每轮下行应用载荷字节 | 每轮 p50 范围（ms） | 每轮 p95 范围（ms） |
+| Mode | View builds per round | Snapshot data encodings per round | Database queries per round | Downstream application payload bytes per round | p50 range per round (ms) | p95 range per round (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 房间私有快照 | 500 | 500 | 2435–2478 | 240300 | 14.04–15.24 | 16.66–21.57 |
-| 房间公共共享投影 | 20 | 20 | 1586–1590 | 240300 | 13.33–13.78 | 14.21–16.28 |
-| 最近 100 条消息全量快照 | 500 | 500 | 3036–3053 | 13531300 | 13.51–14.32 | 14.87–25.35 |
-| 最近 100 条消息 append | 0 | 0 | 2330–2358 | 209300 | 13.93–16.20 | 15.45–18.79 |
+| Room private snapshot | 500 | 500 | 2435–2478 | 240300 | 14.04–15.24 | 16.66–21.57 |
+| Room public shared projection | 20 | 20 | 1586–1590 | 240300 | 13.33–13.78 | 14.21–16.28 |
+| Latest 100 messages, full snapshot | 500 | 500 | 3036–3053 | 13531300 | 13.51–14.32 | 14.87–25.35 |
+| Latest 100 messages, append | 0 | 0 | 2330–2358 | 209300 | 13.93–16.20 | 15.45–18.79 |
 
-相同房间投影的查询构建和快照数据编码均减少 **96%**，从每次更新 25 份降为 1 份；每连接封套与网络发送仍保留，因此共享前后下行载荷相同。编码计数来自实际 `fyrlet.subscription.serialize` 调用，不由连接数推算，也不包含每连接协议封套编码。消息 append 相对发送整个 100 条窗口减少 **98.45%** 下行应用载荷；它没有走普通 Observer 的快照编码路径，表中 0 不表示没有序列化成本。
+For the same room projection, query construction and snapshot data encoding were both reduced by **96%**, from 25 copies per update to 1; the per-connection envelope and network send remain, so the downstream payload is the same before and after sharing. The encoding count comes from actual `fyrlet.subscription.serialize` calls, is not inferred from the number of connections, and does not include per-connection protocol envelope encoding. Message append reduces downstream application payload by **98.45%** compared with sending the whole 100-item window; it does not go through the ordinary Observer snapshot encoding path, so the 0 in the table does not mean there is no serialization cost.
 
-三个 append 正常更新轮次中 `gap` / `overflow` / `refresh` 回退均为 0。每轮另对一个订阅显式刷新，断言恰好发生 1 次 `refresh` 快照回退；刷新流量与计数在表格测量窗口之外。慢客户端、窗口溢出和游标失效仍由核心通道测试覆盖，本组不以顺利路径代替这些故障测试。
+In the three normal-update rounds of append, the `gap` / `overflow` / `refresh` fallbacks were all 0. In each round one subscription is additionally refreshed explicitly, asserting that exactly 1 `refresh` snapshot fallback occurs; the refresh traffic and counts are outside the table's measurement window. Slow clients, window overflow and cursor invalidation are still covered by the core channel tests; this group does not let the happy path stand in for those failure tests.
 
-统计边界：数据库查询包含会话与逐成员授权、操作事务、持久化通知及后台作业，没有关闭安全检查。字节数是客户端 WebSocket 接收到的应用消息 UTF-8 大小，不含 HTTP 响应、初始快照、TLS 或 WebSocket 帧头。延迟包含 HTTP 写入及等待所有客户端的 10ms 轮询；表中范围是三个轮次各自的分位数范围，不是合并样本的分位数。测试顺序固定、没有 CPU / 内存隔离，是本机开发构建单节点对照，不能作为延迟优势或生产容量承诺。本次在共享订阅撤销修复后重跑，原始数据与表格已替换为本轮结果。
+Statistical boundaries: database queries include session and per-member authorization, operation transactions, durable notifications and background jobs, with no security checks turned off. Byte counts are the UTF-8 size of application messages received by the client over WebSocket, excluding HTTP responses, the initial snapshot, TLS or WebSocket frame headers. Latency includes the HTTP write and the 10ms polling while waiting for all clients; the ranges in the table are the per-round quantile ranges across the three rounds, not quantiles of the pooled samples. The test order is fixed, there is no CPU / memory isolation, and this is a single-node comparison on a local development build, so it cannot be used as a latency advantage or a production capacity commitment. This run was repeated after the shared-subscription revocation fix, and the raw data and the table were replaced with this round's results.
 
-另有同机双节点 120 秒、12 客户端的正确性与资源清理验证，实测 2056 条消息、41 次重连/续期，全部历史无空洞或重复，关闭连接后订阅、Observer 和读取缓存归零；见 [ACCEPTANCE.md](ACCEPTANCE.md) 与 [双节点原始报告](bench/cluster-2026-11-07.json)。它不包含隔离的缓存性能对照，不能推导跨主机容量或长期稳定性。
+There is also a correctness and resource-cleanup verification on the same machine with two nodes, 120 seconds and 12 clients, which measured 2056 messages and 41 reconnections/renewals, with all history free of gaps or duplicates, and subscriptions, Observers and read caches back to zero after connections closed; see [ACCEPTANCE.md](ACCEPTANCE.md) and the [two-node raw report](bench/cluster-2026-11-07.json). It contains no isolated cache performance comparison and cannot be used to infer cross-host capacity or long-term stability.
 
-复现（独立 `chat_benchmark` 数据库，HTTP 4185、统计 4186）：
+Reproduction (separate `chat_benchmark` database, HTTP 4185, metrics 4186):
 
 ```sh
 bash scripts/shared_bench.sh
 FANOUT=10 POSTS=10 ROUNDS=3 bash scripts/shared_bench.sh
 ```
 
-可用 `SHARED_BENCH_DATABASE_URL`、`SHARED_BENCH_PORT`、`SHARED_BENCH_METRICS_PORT` 覆盖连接。统计服务只在明确启用的本地非生产测试中启动；测试后服务进程关闭，报告写入 `.local/bench/`。它以独立常驻进程持有计数表，避免启动脚本返回后丢失统计；任何统计接口失败或遥测计数为空都会使验收失败。
+`SHARED_BENCH_DATABASE_URL`, `SHARED_BENCH_PORT` and `SHARED_BENCH_METRICS_PORT` can override the connection. The metrics service starts only in explicitly enabled local non-production tests; after the test the service process is shut down, and the report is written to `.local/bench/`. It holds the counter table in a separate long-lived process so the counts are not lost after the start script returns; any metrics interface failure or empty telemetry counts makes the acceptance fail.

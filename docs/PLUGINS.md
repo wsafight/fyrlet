@@ -1,122 +1,122 @@
-# 能力包、插件与领域包
+# Capability packages, plugins and domain packages
 
-扩展分三种，可开发性与维护责任不同，不能用同一种“插件”心智去理解（三层结构见 [ARCHITECTURE.md](ARCHITECTURE.md#三层结构)）：
+Extensions come in three kinds. They differ in how they are developed and who maintains them, so they cannot all be understood with the same "plugin" mental model (for the three layers see [ARCHITECTURE.md](ARCHITECTURE.md#three-layers)):
 
-- **能力包 / 插件**：给框架加零件（入口、执行器、副作用适配器），要遵守插件协议。
-- **领域包**：用框架造整车，是依赖 Fyrlet 的普通应用，不是插件。
-- **核心可选特性**：改变身份、操作种类或通道协议的能力，只能由核心定义。
+- **Capability packages / plugins**: add parts to the framework (entry points, executors, side-effect adapters) and must follow the plugin protocol.
+- **Domain packages**: build a whole vehicle with the framework; they are ordinary applications that depend on Fyrlet, not plugins.
+- **Optional core features**: capabilities that change identity, operation kinds or the channel protocol; only the core may define them.
 
-Webhooks / Ops 是独立插件包，HTTP / Email 是独立适配器包；改变身份、操作或通道协议的能力保留为核心可选特性（匿名入口、摄取、HTTP 执行器、追加通道）。
+Webhooks and Ops are standalone plugin packages, and HTTP and Email are standalone adapter packages; capabilities that change identity, operations or the channel protocol remain optional core features (anonymous entry point, ingest, HTTP executor, append channel).
 
-## 能力包
+## Capability packages
 
-| 能力包 | 提供 | 依赖的核心能力 | 客户端可见 |
+| Capability package | Provides | Core capabilities it depends on | Visible to clients |
 | --- | --- | --- | --- |
-| `fyrlet_anonymous` | 公开只读订阅、公开快照、独立配额；经核心生成受限匿名主体 | 核心订阅 + 能力协商 | 是（`anonymous_read`） |
-| `fyrlet_webhook` | 签名校验、重放防护、持久化去重与 Operation/Signal 转换 | 受限集成主体 + 幂等 | 否 |
-| `fyrlet_ingest` | 批量摄取；批次原子性、逐项错误、去重与背压 | 契约 + 持久化受理 | 是（`ingest`） |
-| `fyrlet_effect_http` | HTTP/webhook 派发；去重、查询能力按目标服务声明 | Effect | 否 |
-| `fyrlet_effect_email` | 邮件派发；受理、投递与退信状态按供应商语义区分 | Effect | 否 |
-| `fyrlet_executor_http` | HTTP 外部执行器（见 [RUNS.md](RUNS.md#外部执行器协议)）；Oban 执行属核心 Run 模块，不作为能力包 | Run | 否 |
-| `fyrlet_ops` | 有界状态快照、阈值告警、项目级只读状态接口（没有图形面板） | Telemetry | 否 |
+| `fyrlet_anonymous` | Public read-only subscriptions, public snapshots, separate quota; generates a restricted anonymous principal through the core | Core subscriptions + capability negotiation | Yes (`anonymous_read`) |
+| `fyrlet_webhook` | Signature verification, replay protection, durable deduplication and Operation/Signal conversion | Restricted integration subject + idempotency | No |
+| `fyrlet_ingest` | Batch ingest; batch atomicity, per-item errors, deduplication and back-pressure | Contract + durable acceptance | Yes (`ingest`) |
+| `fyrlet_effect_http` | HTTP/webhook dispatch; deduplication and query capability are declared per target service | Effect | No |
+| `fyrlet_effect_email` | Email dispatch; acceptance, delivery and bounce states are distinguished according to provider semantics | Effect | No |
+| `fyrlet_executor_http` | HTTP external executor (see [RUNS.md](RUNS.md#external-executor-protocol)); Oban execution belongs to the core Run module and is not a capability package | Run | No |
+| `fyrlet_ops` | Bounded status snapshots, threshold alerts, project-level read-only status interface (no graphical panel) | Telemetry | No |
 
-`fyrlet_webhooks`、`fyrlet_ops` 是独立插件包，HTTP / Email 是独立适配器包，均有各自测试。匿名、摄取与 HTTP 执行器是核心可选特性。邮件包含实现 `FyrletEffectEmail.Provider` 的 Resend 供应商，声明 24h 幂等窗口与可查询性；“供应商受理”不等于“已送达”，送达/退信经查询对账进入。测试使用本地 HTTP 供应商模拟，真实投递仍需凭证验收。
+`fyrlet_webhooks` and `fyrlet_ops` are standalone plugin packages, and HTTP / Email are standalone adapter packages; each has its own tests. Anonymous, ingest and the HTTP executor are optional core features. The email package contains a Resend provider that implements `FyrletEffectEmail.Provider`, declaring a 24h idempotency window and queryability; "accepted by the provider" does not mean "delivered", and delivery/bounce enters through reconciliation by querying. Tests use a local HTTP provider simulation; real delivery still needs acceptance with credentials.
 
-## 插件 API
+## Plugin API
 
-接口来自内置能力包反复用到的接缝：受监督进程、迁移目录、HTTP 入口、带能力的契约条目、Oban 队列。`Fyrlet.Plugin` 行为：
+The interface comes from the seams that the built-in capability packages used repeatedly: supervised processes, migration directories, HTTP entry points, contract entries with capabilities, and Oban queues. The `Fyrlet.Plugin` behaviour:
 
-| 回调 | 作用 |
+| Callback | Purpose |
 | --- | --- |
-| `name/0`、`version/0` | 必需。名称小写，版本 `MAJOR.MINOR.PATCH`；名称决定 HTTP 前缀 `/api/v1/plugins/<name>/` |
-| `capabilities/0` | 新增的能力 `%{名称 => 版本}`；加载成功才向客户端宣告 |
-| `requires/0` | 依赖的能力（核心或排在前面的插件） |
-| `children/1` | 受监督进程 |
-| `migrations/0` | 迁移目录（绝对路径）；只能创建以插件名为前缀的新表，不得修改或重建 Fyrlet 的表 |
-| `definitions/0` | 带来的 `Fyrlet.Definition`，与其他定义经过同样的注册表校验 |
-| `queues/0` | Oban 队列，只能新增，不能改动核心队列 |
-| `call/2` | 处理 `/api/v1/plugins/<name>/…`，收到 `Plug.Conn` 与剩余路径 |
-| `public_paths/0` | 可免凭证访问的路径，默认无 |
+| `name/0`, `version/0` | Required. The name is lowercase and the version is `MAJOR.MINOR.PATCH`; the name determines the HTTP prefix `/api/v1/plugins/<name>/` |
+| `capabilities/0` | New capabilities `%{name => version}`; announced to clients only after loading succeeds |
+| `requires/0` | Capabilities depended on (core, or plugins earlier in the order) |
+| `children/1` | Supervised processes |
+| `migrations/0` | Migration directory (absolute path); may only create new tables prefixed with the plugin name and must not modify or rebuild Fyrlet's tables |
+| `definitions/0` | The `Fyrlet.Definition` modules it brings, which go through the same registry validation as other definitions |
+| `queues/0` | Oban queues; may only be added, and core queues must not be changed |
+| `call/2` | Handles `/api/v1/plugins/<name>/…`, receiving a `Plug.Conn` and the remaining path |
+| `public_paths/0` | Paths reachable without credentials; none by default |
 
-入口统一为 `call/2`，契约经 `definitions/0` 进入，worker 经 `queues/0` 配队列；插件自己的 WebSocket 通道未提供。
+The entry point is uniformly `call/2`, contracts enter through `definitions/0`, and workers get their queues through `queues/0`; a plugin's own WebSocket channel is not provided.
 
-配置：
+Configuration:
 
 ```elixir
 config :fyrlet, plugins: [MyPlugin, {OptionalPlugin, required: false}]
 ```
 
-启动时校验名称、版本、重名、能力冲突、依赖、迁移目录与内容、定义是否可加载。**必需插件失败则 Fyrlet 不启动**；可选插件失败则被隔离：入口返回 404、能力不宣告、`mix fyrlet.plugins` 报告为 degraded，不会退回到无认证路径。插件按配置顺序加载，先加载的保留，后出现的重名或能力冲突者被拒绝。
+At startup, names, versions, duplicate names, capability conflicts, dependencies, migration directories and contents, and whether the definitions can be loaded are validated. **If a required plugin fails, Fyrlet does not start**; if an optional plugin fails it is isolated: its entry point returns 404, its capabilities are not announced, `mix fyrlet.plugins` reports it as degraded, and it never falls back to an unauthenticated path. Plugins are loaded in configuration order; the one loaded first is kept, and a later one with a duplicate name or a capability conflict is rejected.
 
-## 插件硬规则与一致性套件
+## Plugin hard rules and the conformance suite
 
-1. 插件的官方入口必须调用核心受管 API，执行 `authorize`、`run_authorize` 与适用的数据范围策略；不得直接调用业务回调跳过检查。
-2. 插件不得修改核心表结构，不得注册核心协议之外的事件或错误码。
-3. 插件必须声明它增加的能力；客户端通过契约发现能力，不靠"装没装插件"猜测。
-4. 凭证类插件通过核心身份 API 获得受限主体，不自行伪造 Actor 或替代业务授权。插件缺失或加载失败时关闭对应入口，必需依赖失败时阻止就绪。
-5. 插件必须通过 `Fyrlet.Conformance.Plugin` 套件。**已实现的检查**：声明形状、名称与依赖、迁移只增且带前缀、声明的能力与契约一致、契约只含 `operations`/`subscriptions`、入口对无效凭证 fail-closed、进程可正常启停。幂等、断线恢复与能力协商降级不是通用检查，由各插件自己的测试证明。
-6. 插件迁移命名空间与顺序确定，提供升级和回退计划；存在未结束 Run 或未解决 Effect 时，不允许用删表回滚丢弃执行事实。
-7. `mix fyrlet.plugins` 输出当前插件、版本、能力与迁移状态，作为线上排障的基线。
+1. A plugin's official entry points must call the core managed API and execute `authorize`, `run_authorize` and the applicable data scope policy; they must not call business callbacks directly to skip checks.
+2. A plugin must not modify core table structures and must not register events or error codes outside the core protocol.
+3. A plugin must declare the capabilities it adds; clients discover capabilities through the contract and do not guess from "whether the plugin is installed".
+4. Credential-type plugins obtain a restricted principal through the core identity API; they do not forge an Actor or replace business authorization themselves. When a plugin is missing or fails to load, the corresponding entry point is closed, and if a required dependency fails, readiness is blocked.
+5. A plugin must pass the `Fyrlet.Conformance.Plugin` suite. **Checks implemented**: declaration shape, name and dependencies, migrations append-only and prefixed, declared capabilities consistent with the contract, the contract containing only `operations`/`subscriptions`, entry points failing closed on invalid credentials, and the process starting and stopping normally. Idempotency, reconnection recovery and capability negotiation downgrade are not generic checks; each plugin proves them with its own tests.
+6. Plugin migration namespaces and order are deterministic, and an upgrade and revert plan is provided; while unfinished Runs or unresolved Effects exist, dropping tables as a rollback must not discard execution facts.
+7. `mix fyrlet.plugins` outputs the current plugins, versions, capabilities and migration status, as the baseline for production troubleshooting.
 
-同一 BEAM/数据库权限下的插件是可信服务端代码。一致性套件验证官方路径的行为，不构成对恶意插件、原始 SQL 或任意宿主代码的隔离沙箱。
+A plugin under the same BEAM/database privileges is trusted server-side code. The conformance suite verifies the behaviour of the official paths; it is not an isolation sandbox against malicious plugins, raw SQL or arbitrary host code.
 
-## 接缝原则
+## Seam principle
 
-先实现、后抽象。插件 API 只把被反复使用的接缝抽象成接口：
+Implement first, abstract later. The plugin API abstracts only the seams that are used repeatedly into interfaces:
 
-1. 至少两个能力包以**直接调用核心 API、无 hook** 的方式实现；
-2. 记录它们实际触碰的核心位置；
-3. 只把被反复使用的接缝抽象成 hook。
+1. At least two capability packages are implemented by **calling the core API directly, with no hooks**;
+2. Record the core locations they actually touch;
+3. Abstract only the repeatedly used seams into hooks.
 
-当前接口由 Webhooks 与 Ops 两个包验证，运行时代码只通过公共接口接入。接口何时冻结以升级反馈为准，不设日期。接缝以真实接入成本、重复代码与升级反馈为依据，避免提前固化未经验证的 Hook。
+The current interface is verified by two packages, Webhooks and Ops, whose runtime code connects only through public interfaces. When the interface freezes depends on upgrade feedback; no date is set. Seams are based on real integration cost, duplicated code and upgrade feedback, to avoid prematurely fixing hooks that have not been verified.
 
-# 领域包（不是插件）
+# Domain packages (not plugins)
 
-领域包是独立应用，消费核心与能力包，不注册插件，不修改核心。
+A domain package is a standalone application that consumes the core and capability packages; it does not register a plugin and does not modify the core.
 
-一句话区分：**能力包是给框架加零件，领域包是用框架造整车。** 造整车不需要框架作者批准——领域包本质上就是一个依赖 Fyrlet 的普通 Elixir/Phoenix 应用：自己的 Ecto schema、自己的 `Fyrlet.Definition` 模块、自己的迁移、自己的路由与界面。它不注册插件、不实现 hook、不需要出现在任何"官方支持列表"里。
+In one sentence: **a capability package adds parts to the framework; a domain package builds a whole vehicle with the framework.** Building a vehicle needs no approval from the framework authors: a domain package is essentially an ordinary Elixir/Phoenix application that depends on Fyrlet, with its own Ecto schemas, its own `Fyrlet.Definition` modules, its own migrations, and its own routes and UI. It does not register a plugin, does not implement hooks, and does not need to appear on any "officially supported list".
 
-| 领域包 | 范围 | 验证的框架假设 |
+| Domain package | Scope | Framework assumption verified |
 | --- | --- | --- |
-| `Notify` | 事件 API、站内通知、一个外部渠道、回执与投递状态 | Run + Effect + 信号能否表达重试与未知结果 |
-| `Agent` | 单一业务任务、有限工具、人工审批、运行快照 | 不依赖动态 DSL 或 delta，能否复用 Run 闭环 |
-| `Flow` | 顺序 HTTP 节点、等待事件、运行记录；触发调度由应用负责 | 相同 Run/Effect API 能否跨领域复用 |
-| `Chat` | 网页聊天、登录与邀请、多人分配、人工接管、历史记录、共享房间订阅 | 成员授权、共享查询与追加流收益；不提供匿名可写入口 |
+| `Notify` | Event API, in-app notifications, one external channel, receipts and delivery status | Whether Run + Effect + signals can express retries and unknown outcomes |
+| `Agent` | A single business task, limited tools, human approval, run snapshots | Whether the Run loop can be reused without a dynamic DSL or delta |
+| `Flow` | Sequential HTTP nodes, waiting for events, run records; trigger scheduling is the application's responsibility | Whether the same Run/Effect API can be reused across domains |
+| `Chat` | Web chat, login and invitations, multi-person assignment, human takeover, history, shared room subscriptions | Member authorization, shared queries and the benefit of append streams; no anonymous writable entry point is provided |
 
-约束：
+Constraints:
 
-- 领域包不引入框架无法表达的私有协议；需要新协议时先回到核心评审。
-- 每个领域包必须提供端到端验收，证明其依赖的核心能力在真实业务下成立。
-- 领域包可以独立发布，也可以留在仓库内，但不得与核心共享私有模块。
-- 领域包只使用公开 API，不得 fork 或复制核心代码；需要新增公共接缝时，记录它的实际必要性。
+- A domain package does not introduce private protocols that the framework cannot express; when a new protocol is needed, go back to core review first.
+- Each domain package must provide end-to-end acceptance, proving that the core capabilities it depends on hold under real business.
+- A domain package may be released independently or stay in the repository, but it must not share private modules with the core.
+- A domain package uses only public APIs and must not fork or copy core code; when a new public seam needs to be added, record why it is actually necessary.
 
-## 谁可以开发、谁维护
+## Who can develop and who maintains
 
-三层的可开发性不同，不能用同一种"插件"心智去理解：
+The three layers differ in how they can be developed, so they cannot all be understood with the same "plugin" mental model:
 
-| 角色 | 能做什么 | 需要遵守 | 维护者 | 核心升级的影响 |
+| Role | What they can do | What they must follow | Maintainer | Impact of core upgrades |
 | --- | --- | --- | --- | --- |
-| 框架作者 | 核心、协议、插件 API | — | 项目维护者 | — |
-| 能力包作者 | 给核心加零件：入口、执行器、副作用适配器 | 插件协议、fail-closed、一致性套件 | 能力包作者 | **高**：插件 hook 变动会破坏能力包 |
-| 领域包作者 | 用框架造整车：领域模型、表、业务定义、界面 | 只依赖公开 API 与协议 | 领域包作者，完全独立 | **低**：只受协议与公开 API 的破坏性变更影响 |
-| 应用开发者 | 在自己的项目中编写 definition 与订阅 | 同上 | 自己 | 低 |
+| Framework author | Core, protocol, plugin API | — | Project maintainers | — |
+| Capability package author | Add parts to the core: entry points, executors, side-effect adapters | Plugin protocol, fail-closed, conformance suite | Capability package author | **High**: changes to plugin hooks break capability packages |
+| Domain package author | Build a whole vehicle with the framework: domain model, tables, business definitions, UI | Depend only on public APIs and the protocol | Domain package author, fully independent | **Low**: affected only by breaking changes to the protocol and public APIs |
+| Application developer | Write definitions and subscriptions in their own project | Same as above | Themselves | Low |
 
-要点：
+Key points:
 
-1. **领域包不需要注册，也不需要框架审核。** 任何人有 Fyrlet 依赖即可编写、发布、私有维护自己的领域包；框架维护者不负责开发或维护它们。
-2. **能力包的门槛不同。** 它要接插件 API、通过一致性套件、遵守 fail-closed；这类扩展的数量应刻意保持少，且核心需要为它保留兼容窗口。
-3. **框架作者的真正责任是把边界写清楚。** 哪些是公共 API、哪些是内部模块、`protocol_version` / `contract_version` / `capabilities` 如何演进。没有这条边界，第三方领域包会因为升级而碎，生态就无从谈起。
-4. **领域包的安全由作者负责。** `authorize/3` 与领域过滤写在领域包里；框架保证官方受管路径在规定时机执行检查，业务作者仍负责策略、非受管 Repo 调用与公共投影的正确性。一致性套件不能证明任意业务代码都不会泄露数据。
-5. **分发与兼容基线必须先建立。** 第三方需要明确的固定版本源码依赖、公开模块清单、迁移入口和 SDK 安装方式。仓库外的最小应用必须能安装、迁移和运行（见 [INSTALL.md](INSTALL.md)），不能仅以仓库内示例可用作为接入完成。
+1. **A domain package needs no registration and no framework review.** Anyone with a Fyrlet dependency can write, publish and privately maintain their own domain package; the framework maintainers are not responsible for developing or maintaining them.
+2. **The bar for a capability package is different.** It must connect to the plugin API, pass the conformance suite and obey fail-closed; the number of such extensions should be kept deliberately small, and the core needs to keep a compatibility window for them.
+3. **The framework authors' real responsibility is to state the boundary clearly**: which APIs are public, which modules are internal, and how `protocol_version` / `contract_version` / `capabilities` evolve. Without this boundary, third-party domain packages would break on every upgrade, and no ecosystem could form.
+4. **The security of a domain package is the author's responsibility.** `authorize/3` and domain filtering are written in the domain package; the framework guarantees that the official managed paths run the checks at the specified points, while the business author remains responsible for the correctness of policy, unmanaged Repo calls and public projections. The conformance suite cannot prove that arbitrary business code will never leak data.
+5. **A distribution and compatibility baseline must be established first.** Third parties need a clearly pinned-version source dependency, a list of public modules, a migration entry point and an SDK installation method. A minimal application outside the repository must be able to install, migrate and run (see [INSTALL.md](INSTALL.md)); the examples in the repository working is not enough to count integration as done.
 
-领域包和插件生态的分界只有一条：**需要核心没有的能力时，领域包不能自己改核心**——要么把它做成能力包（走插件协议），要么回到上游修改核心。领域包只消费，不扩展。
+There is only one dividing line between domain packages and the plugin ecosystem: **when a capability the core lacks is needed, a domain package cannot modify the core itself** — either build it as a capability package (through the plugin protocol), or go back upstream and change the core. A domain package only consumes and does not extend.
 
 ---
 
-## 复用验证记录
+## Reuse verification record
 
-四个独立 Mix 应用均包含自己的 Ecto schema、迁移、配置和测试，网页通过普通宿主 Plug 接入。共享网页资源放在 `examples/support`，使用真实 TypeScript SDK，不依赖 CDN；服务密钥不进入页面。领域定义使用公开 Run、Effect、Scope、Stream 接口，测试通过 `Fyrlet.Testing` 驱动恢复和手动任务，不直接调用核心 Engine / Recovery。
+The four standalone Mix applications each contain their own Ecto schemas, migrations, configuration and tests, and their web pages connect through an ordinary host Plug. Shared web assets are in `examples/support`, use the real TypeScript SDK, and do not depend on a CDN; service keys never enter the pages. Domain definitions use the public Run, Effect, Scope and Stream interfaces, and tests drive recovery and manual jobs through `Fyrlet.Testing` without calling the core Engine / Recovery directly.
 
-Notify 用受管提交保存通知，通过 Resend 邮件 Effect 与查询对账更新站内列表；Flow 保存 owner 私有流程定义，顺序 HTTP 节点用 Effect、等待节点用信号，重启后继续；Agent 保存有限工具结果并要求 owner 明确批准/拒绝；Chat 保存房间、成员、消息，公共房间投影共享查询，消息用 append，完整历史另走分页。八个真实服务端验收场景覆盖这些闭环及隔离/撤销，源码包解到仓库外再运行 Inbox 与 Agent 安装验收。
+Notify saves notifications with managed commits and updates the in-app list through a Resend email Effect and reconciliation by querying; Flow saves owner-private flow definitions, uses Effects for sequential HTTP nodes and signals for wait nodes, and continues after a restart; Agent saves results of limited tools and requires the owner to explicitly approve/reject; Chat saves rooms, members and messages, the public room projection shares a query, messages use append, and the full history goes through pagination separately. Eight real-server acceptance scenarios cover these loops and isolation/revocation, and the source package is unpacked outside the repository to run the Inbox and Agent installation acceptance.
 
-接入后新增的公共接缝是 `Transaction.run/1`（嵌套受管提交后通知）、`HTTP`（宿主/插件响应）、`Diagnostics`（可信聚合运维查询）、`Testing`（宿主测试驱动）和 `Runs.scope/1`（领域列表随 Run 状态更新）。它们由应用或插件实际复用需求产生。Flow 仍不实现分支、循环或跨节点数据传递；Chat 不提供匿名写入；Agent 不代表模型或 RAG 平台；各自启动步骤与边界见应用 README。
+The public seams added after integration are `Transaction.run/1` (notify after nested managed commits), `HTTP` (host/plugin responses), `Diagnostics` (trusted aggregated operations queries), `Testing` (host test driving) and `Runs.scope/1` (domain lists update with Run status). They arose from actual reuse needs of applications or plugins. Flow still implements no branching, loops or cross-node data passing; Chat provides no anonymous writes; Agent does not represent a model or RAG platform; each one's startup steps and boundaries are in the application README.

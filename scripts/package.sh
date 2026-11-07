@@ -11,7 +11,7 @@ tar --exclude='node_modules' --exclude='deps' --exclude='_build' --exclude='.git
   --exclude='.local' --exclude='.env' --exclude='*/.meteor/local' --exclude='cover' \
   --exclude='*.log' --exclude='erl_crash.dump' --exclude='.DS_Store' \
   -czf "$task_output/fyrlet-source-0.1.0.tar.gz" \
-  mix.exs mix.lock .formatter.exs .gitignore .env.example compose.yaml lib config priv test docs examples packages scripts sdks bench README.md
+  mix.exs mix.lock .formatter.exs .gitignore .env.example compose.yaml lib config priv test docs examples packages scripts sdks bench README.md README.zh-CN.md
 node --input-type=module - "$task_output" <<'NODE'
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";

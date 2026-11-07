@@ -1,136 +1,136 @@
-# 安装与公共接口
+# Installation and public interface
 
-Fyrlet 是服务端依赖：宿主应用把它加进依赖，注册自己的业务定义（`Fyrlet.Definition`），由 Fyrlet 提供契约、身份、事务写入、幂等和实时订阅。仓库内的 [examples/inbox](../examples/inbox) 是一个独立 Mix 项目，只通过本文列出的入口使用 Fyrlet，它的测试就是安装验收。
+Fyrlet is a server-side dependency: the host application adds it as a dependency and registers its own business definitions (`Fyrlet.Definition`); Fyrlet provides contracts, identity, transactional writes, idempotency and realtime subscriptions. [examples/inbox](../examples/inbox) in this repository is a standalone Mix project that uses Fyrlet only through the entry points listed in this document; its tests are the installation acceptance.
 
-源码尚未发布到 Hex，SDK 尚未发布到 npm。可以使用固定提交的源码依赖，或使用本地分发包（见下方“打包与安装验收”）：
+The source has not been published to Hex, and the SDK has not been published to npm. You can use a source dependency pinned to a commit, or a local distribution package (see "Packaging and installation acceptance" below):
 
 ```elixir
-{:fyrlet, git: "…", ref: "<提交>"}      # 或本地 path: "../fyrlet"
+{:fyrlet, git: "…", ref: "<commit>"}      # Or a local dependency: path: "../fyrlet"
 ```
 
-## 安装步骤
+## Installation steps
 
-1. **依赖**：见上。Fyrlet 自带 `Fyrlet.Repo`、`FyrletWeb.Endpoint`（独立端口）和 Oban，随应用启动。
-2. **配置**：依赖里的 `config/*.exs` 不会被宿主加载。宿主在自己的 `config/config.exs` 里写下方“必需配置”，在 `config/runtime.exs` 里调用 `Fyrlet.RuntimeConfig`。
-3. **业务定义**：实现 `Fyrlet.Definition`，在 `definitions` 里注册。
-4. **迁移**：宿主的迁移目录写进 `migration_paths`，用 `mix fyrlet.migrate --create` 一次执行 Fyrlet 与宿主的全部迁移。发布时用 `bin/app eval "Fyrlet.Release.migrate()"`。
-5. **SDK**：从源码构建 `@fyrlet/client`，或安装本地 `.tgz`；契约用 `mix fyrlet.contract priv/contract.json` 导出，再用 `sdks/typescript/scripts/generate.mjs` 生成类型。四个网页应用在编译时嵌入 SDK，先执行 `npm --prefix sdks/typescript ci` 和 `npm --prefix sdks/typescript run build`。
+1. **Dependency**: see above. Fyrlet ships its own `Fyrlet.Repo`, `FyrletWeb.Endpoint` (on a separate port) and Oban, which start with the application.
+2. **Configuration**: the `config/*.exs` files inside a dependency are not loaded by the host. The host writes the "Required configuration" below in its own `config/config.exs` and calls `Fyrlet.RuntimeConfig` in `config/runtime.exs`.
+3. **Business definitions**: implement `Fyrlet.Definition` and register it under `definitions`.
+4. **Migrations**: put the host's migration directory in `migration_paths`, and run all Fyrlet and host migrations at once with `mix fyrlet.migrate --create`. In a release, use `bin/app eval "Fyrlet.Release.migrate()"`.
+5. **SDK**: build `@fyrlet/client` from source, or install the local `.tgz`; export the contract with `mix fyrlet.contract priv/contract.json`, then generate types with `sdks/typescript/scripts/generate.mjs`. The four web applications embed the SDK at compile time, so first run `npm --prefix sdks/typescript ci` and `npm --prefix sdks/typescript run build`.
 
-### 必需配置
+### Required configuration
 
-`config/config.exs`（键名与取值见 [examples/inbox/config/config.exs](../examples/inbox/config/config.exs)）：
+`config/config.exs` (for key names and values see [examples/inbox/config/config.exs](../examples/inbox/config/config.exs)):
 
-| 键 | 含义 |
+| Key | Meaning |
 | --- | --- |
-| `ecto_repos: [Fyrlet.Repo]` | 让 `ecto.*` 任务识别仓库 |
-| `definitions: [MyApp.Definition]` | 业务定义模块 |
-| `migration_paths: [{:my_app, "priv/repo/migrations"}]` | 宿主迁移目录 |
-| `session_ttl`、`max_subscriptions`、`max_snapshot_bytes`、`max_channel_queue`、`snapshot_ack_timeout`、`reconciliation_interval`、`max_observers`、`observer_hibernate_after`、`channel_hibernate_after`、`socket_batch_max_messages`、`socket_batch_max_bytes`、`idempotency_ttl`、`batch_session_checks`、`capabilities` | 运行限制与开关，均需给出（示例里是推荐默认值） |
-| `Fyrlet.Repo`、`Oban`、`FyrletWeb.Endpoint` 三段 | 连接池、队列与清理器、端点 |
-| `config :logger, level: :info`（非测试环境） | 生产日志级别。依赖库自己的配置文件不会被加载，发行版的默认级别是 `:debug`，会把**每条 SQL** 格式化写出：同一负载下实测多耗约 26% 的 CPU（见 [OPTIMIZATIONS.md](OPTIMIZATIONS.md) 的“端到端复测”） |
+| `ecto_repos: [Fyrlet.Repo]` | Lets the `ecto.*` tasks find the repository |
+| `definitions: [MyApp.Definition]` | Business definition modules |
+| `migration_paths: [{:my_app, "priv/repo/migrations"}]` | Host migration directory |
+| `session_ttl`, `max_subscriptions`, `max_snapshot_bytes`, `max_channel_queue`, `snapshot_ack_timeout`, `reconciliation_interval`, `max_observers`, `observer_hibernate_after`, `channel_hibernate_after`, `socket_batch_max_messages`, `socket_batch_max_bytes`, `idempotency_ttl`, `batch_session_checks`, `capabilities` | Runtime limits and switches; all must be given (the example uses the recommended defaults) |
+| The `Fyrlet.Repo`, `Oban` and `FyrletWeb.Endpoint` sections | Connection pool, queues and pruner, endpoint |
+| `config :logger, level: :info` (non-test environments) | Production log level. A dependency's own config files are not loaded, and a release defaults to `:debug`, which formats and writes **every SQL statement**: under the same load this measured about 26% more CPU (see "End-to-end re-measurement" in [OPTIMIZATIONS.md](OPTIMIZATIONS.md)) |
 
-`config/runtime.exs`：
+`config/runtime.exs`:
 
 ```elixir
 import Config
 config :fyrlet, Fyrlet.RuntimeConfig.settings(config_env())
 ```
 
-环境变量：`DATABASE_URL`、`POOL_SIZE`、`PORT`、`PHX_SERVER`、`CORS_ORIGINS`；数值型变量必须是范围内的整数（`POOL_SIZE` 1–10000，`PORT` 1–65535），否则启动时报错并指出变量名；`ALLOWED_ORIGINS`、`CORS_ORIGINS` 的各项会去掉首尾空格；`:prod` 下 `SECRET_KEY_BASE` 与 `ALLOWED_ORIGINS` 必填。网页与 API 同源时自动放行该来源，其他来源仍需 `CORS_ORIGINS` 明确配置。可选的项目配额默认值 `FYRLET_PROJECT_READS_PER_SECOND`、`FYRLET_PROJECT_WRITES_PER_SECOND`、`FYRLET_PROJECT_MAX_SUBSCRIPTIONS`（见 [OPERATIONS.md](OPERATIONS.md#项目配额fyrletquota)）；可选的摄取数据保留期默认值 `FYRLET_INGEST_RETENTION_SECONDS`（秒数，至少 60，或 `forever`；见 [DATABASE.md](DATABASE.md#按项目配置保留期)）；可选 `FYRLET_METRICS_TOKEN`（启用 `GET /metrics`，见 [OPERATIONS.md](OPERATIONS.md#prometheus-指标fyrletmetrics)）；可选 `FYRLET_CLUSTER_NODES` 为逗号分隔的 `name@host`，最多 32 个；配置后必须启用 Erlang 命名节点并使用相同 cookie。部署方法与调优见 [OPERATIONS.md](OPERATIONS.md)。
+Environment variables: `DATABASE_URL`, `POOL_SIZE`, `PORT`, `PHX_SERVER`, `CORS_ORIGINS`. Numeric variables must be integers within range (`POOL_SIZE` 1–10000, `PORT` 1–65535); otherwise startup fails and names the variable. Each entry of `ALLOWED_ORIGINS` and `CORS_ORIGINS` has leading and trailing spaces removed; under `:prod`, `SECRET_KEY_BASE` and `ALLOWED_ORIGINS` are required. When the web pages and the API share an origin, that origin is allowed automatically; other origins still need explicit `CORS_ORIGINS` configuration. Optional project quota defaults: `FYRLET_PROJECT_READS_PER_SECOND`, `FYRLET_PROJECT_WRITES_PER_SECOND`, `FYRLET_PROJECT_MAX_SUBSCRIPTIONS` (see [OPERATIONS.md](OPERATIONS.md#project-quotas-fyrletquota)). Optional default retention period for ingested data: `FYRLET_INGEST_RETENTION_SECONDS` (a number of seconds, at least 60, or `forever`; see [DATABASE.md](DATABASE.md#per-project-retention)). Optional `FYRLET_METRICS_TOKEN` (enables `GET /metrics`, see [OPERATIONS.md](OPERATIONS.md#prometheus-metrics-fyrletmetrics)). Optional `FYRLET_CLUSTER_NODES` is a comma-separated list of `name@host`, at most 32; once configured, Erlang named nodes must be enabled with the same cookie. For deployment and tuning see [OPERATIONS.md](OPERATIONS.md).
 
-### 共享仓库的约束
+### Shared repository constraints
 
-Fyrlet 与宿主共用一个 `Fyrlet.Repo`。这是有意的：业务写入、幂等记录和失效通知作业必须在同一个事务里提交。因此宿主的业务表也在这个仓库里，并建议带上与 Fyrlet 自己的表一致的复合外键 `(subject_id, project_id) → subjects(id, project_id)`，保证记录的主体属于同一项目（示例迁移里有写法）。宿主使用自己的 `Repo` 的方式目前不支持。表结构与宿主表的约定见 [DATABASE.md](DATABASE.md)。
+Fyrlet and the host share one `Fyrlet.Repo`. This is deliberate: business writes, idempotency records and invalidation notification jobs must commit in the same transaction. The host's business tables therefore live in this repository too, and it is recommended that they carry the same composite foreign key as Fyrlet's own tables, `(subject_id, project_id) → subjects(id, project_id)`, so that a record's subject belongs to the same project (the example migration shows how). Having the host use its own `Repo` is currently not supported. For the table structure and the conventions for host tables see [DATABASE.md](DATABASE.md).
 
-需要在同一事务中组合宿主写入和受管 Run 调用时，以 `Fyrlet.Transaction.run/1` 作为最外层边界。嵌套调用加入外层事务，Run 通知与运行 telemetry 在外层提交后发出；回滚时丢弃。不要在外面再包一层普通 `Repo.transaction/1`。回调的返回值直接作为结果，`Repo.rollback(reason)` 返回 `{:error, reason}`。
+To combine host writes and managed Run calls in one transaction, use `Fyrlet.Transaction.run/1` as the outermost boundary. Nested calls join the outer transaction; Run notifications and run telemetry are emitted after the outer transaction commits and are discarded on rollback. Do not wrap it in another plain `Repo.transaction/1`. The callback's return value is the result as is, and `Repo.rollback(reason)` returns `{:error, reason}`.
 
-### 宿主网页路由
+### Host web routes
 
-配置 `config :fyrlet, host_router: MyApp.Web`，其中模块实现 Plug 的 `init/1`、`call/2`。核心和插件路由未匹配时才进入宿主路由，未配置则返回 404。宿主自行处理网页与静态资源的授权和缓存；四个网页应用的共享宿主路由在 `examples/support`，不属于插件。插件仍通过 `plugins` 配置加载。
+Configure `config :fyrlet, host_router: MyApp.Web`, where the module implements the Plug `init/1` and `call/2`. A request reaches the host router only when no core or plugin route matches; if it is not configured, 404 is returned. The host handles authorization and caching of web pages and static assets itself; the shared host router of the four web applications is in `examples/support` and is not a plugin. Plugins are still loaded through the `plugins` configuration.
 
-## 公共接口
+## Public interface
 
-宿主可以依赖下列模块与任务；它们的破坏性变更会随协议或契约版本说明。未列出的模块是内部实现，可能随时变化。
+The host may depend on the following modules and tasks; breaking changes to them are announced with the protocol or contract version. Modules not listed are internal implementation and may change at any time.
 
-| 公共 | 说明 |
+| Public | Description |
 | --- | --- |
-| `Fyrlet.Definition` | 业务定义回调：`contract/0`、`authorize/3`、`execute/3`、`scope/3`，可选 `change/4`、`load_subscription/3`、`update_subscription/5` |
-| `Fyrlet.Schema` | 契约 schema 构造与校验（`object/2`、`validate/2`） |
-| `Fyrlet.Error`、`Fyrlet.Actor` | 错误与调用者结构 |
-| `Fyrlet.Subscriptions.View` | `update_subscription/5` 收到和返回的视图结构 |
-| `Fyrlet.Auth` | 项目与服务密钥、签发/撤销会话、鉴权 |
-| `Fyrlet.Runtime` | `call/4`、`prepare_subscription/3`、`view/4`、`snapshot/2`（服务端内调用与测试） |
-| `Fyrlet.Registry` | `export/1`、`validate!/0` |
-| `Fyrlet.Runs`、`Fyrlet.Runs.Privacy` | 运行：`operation/2`、`start_output/0`、`get/2`、`signal/3`、`cancel/2`、`revoke_grant/2`、集成信号 `signal_from_integration/3`；`scope/1` 返回随该主体 Run 变更而失效的订阅范围；清除 `purge_subject/2` |
-| `Fyrlet.Effects`、`Fyrlet.Effects.Adapter` | 副作用：`receipt/4`、`resolve/5`、适配器行为（HTTP、邮件适配器是 `packages/` 里的独立包） |
-| `Fyrlet.Features.Executors`、`Fyrlet.Runs.Executor` | 外部执行器凭据与协议 |
-| `Fyrlet.Scope` | 受管数据访问 |
-| `Fyrlet.Features.Ingest`、`Fyrlet.Features.Anonymous` | 摄取、匿名只读入口 |
-| `Fyrlet.Features.Stream` | 事务内 `append/3`、窗口读取、`reset/2`、`prune/2`；订阅由 `stream/3` 选流 |
-| `FyrletWebhooks` | 独立 `fyrlet_webhooks` 包的插件入口和 `sign/3` 签名辅助 |
-| `Fyrlet.Transaction` | 组合受管调用与宿主写入的 `run/1` 事务边界 |
-| `Fyrlet.HTTP` | 宿主与插件的 `result/2`、`success/2`、`error/2,3` JSON 响应辅助 |
-| `Fyrlet.Diagnostics` | 可信服务端聚合：`runs/3`、`effects/3`、`limits/1`、`plugins/1`；`cluster/0` 返回本节点及配置/已连接节点。项目由已鉴权上下文选择，`:all` 只供部署运维 |
-| `Fyrlet.Testing` | 测试辅助：创建项目/用户、`snapshot/3`、`step/1`、`recover/0`、`drive/2`、`effects/1`、`wait_step/1`、租约/等待故障模拟；搭配 Ecto Sandbox 与手动 Oban |
-| `Fyrlet.Vault`、`Fyrlet.EncryptedMap` | 可选静态加密 |
-| `Fyrlet.Plugin`、`Fyrlet.Conformance.Plugin` | 插件接口与一致性套件 |
-| `Fyrlet.Capabilities` | 能力声明与协商 |
-| `Fyrlet.Repo` | 与 Fyrlet 共享的仓库 |
-| `Fyrlet.RuntimeConfig`、`Fyrlet.Migrator`、`Fyrlet.Release` | 配置、迁移、发布辅助 |
-| `mix fyrlet.migrate` / `fyrlet.contract` / `fyrlet.prune` / `fyrlet.project` / `fyrlet.revoke` / `fyrlet.runs` / `fyrlet.effects` / `fyrlet.plugins` / `fyrlet.ops` | 运维任务；`fyrlet.ops` 由独立 Ops 包提供 |
-| HTTP `/api/v1/*`、WebSocket `/socket` | 线协议，见 [PROTOCOL.md](PROTOCOL.md) |
+| `Fyrlet.Definition` | Business definition callbacks: `contract/0`, `authorize/3`, `execute/3`, `scope/3`, and optionally `change/4`, `load_subscription/3`, `update_subscription/5` |
+| `Fyrlet.Schema` | Contract schema construction and validation (`object/2`, `validate/2`) |
+| `Fyrlet.Error`, `Fyrlet.Actor` | Error and caller structures |
+| `Fyrlet.Subscriptions.View` | The view structure received and returned by `update_subscription/5` |
+| `Fyrlet.Auth` | Projects and service keys, issuing/revoking sessions, authentication |
+| `Fyrlet.Runtime` | `call/4`, `prepare_subscription/3`, `view/4`, `snapshot/2` (in-server calls and tests) |
+| `Fyrlet.Registry` | `export/1`, `validate!/0` |
+| `Fyrlet.Runs`, `Fyrlet.Runs.Privacy` | Runs: `operation/2`, `start_output/0`, `get/2`, `signal/3`, `cancel/2`, `revoke_grant/2`, integration signal `signal_from_integration/3`; `scope/1` returns the subscription scope invalidated by changes to that subject's Runs; purge with `purge_subject/2` |
+| `Fyrlet.Effects`, `Fyrlet.Effects.Adapter` | Side effects: `receipt/4`, `resolve/5`, the adapter behaviour (the HTTP and email adapters are standalone packages under `packages/`) |
+| `Fyrlet.Features.Executors`, `Fyrlet.Runs.Executor` | External executor credentials and protocol |
+| `Fyrlet.Scope` | Managed data access |
+| `Fyrlet.Features.Ingest`, `Fyrlet.Features.Anonymous` | Ingest, anonymous read-only entry point |
+| `Fyrlet.Features.Stream` | In-transaction `append/3`, window reads, `reset/2`, `prune/2`; a subscription selects a stream with `stream/3` |
+| `FyrletWebhooks` | Plugin entry point of the standalone `fyrlet_webhooks` package and the `sign/3` signing helper |
+| `Fyrlet.Transaction` | The `run/1` transaction boundary that combines managed calls with host writes |
+| `Fyrlet.HTTP` | JSON response helpers `result/2`, `success/2`, `error/2,3` for hosts and plugins |
+| `Fyrlet.Diagnostics` | Trusted server-side aggregation: `runs/3`, `effects/3`, `limits/1`, `plugins/1`; `cluster/0` returns this node and the configured/connected nodes. The project is chosen by the authenticated context; `:all` is for deployment operations only |
+| `Fyrlet.Testing` | Test helpers: create projects/users, `snapshot/3`, `step/1`, `recover/0`, `drive/2`, `effects/1`, `wait_step/1`, lease/wait fault simulation; used with the Ecto Sandbox and manual Oban |
+| `Fyrlet.Vault`, `Fyrlet.EncryptedMap` | Optional encryption at rest |
+| `Fyrlet.Plugin`, `Fyrlet.Conformance.Plugin` | Plugin interface and conformance suite |
+| `Fyrlet.Capabilities` | Capability declaration and negotiation |
+| `Fyrlet.Repo` | The repository shared with Fyrlet |
+| `Fyrlet.RuntimeConfig`, `Fyrlet.Migrator`, `Fyrlet.Release` | Configuration, migration and release helpers |
+| `mix fyrlet.migrate` / `fyrlet.contract` / `fyrlet.prune` / `fyrlet.project` / `fyrlet.revoke` / `fyrlet.runs` / `fyrlet.effects` / `fyrlet.plugins` / `fyrlet.ops` | Operations tasks; `fyrlet.ops` is provided by the standalone Ops package |
+| HTTP `/api/v1/*`, WebSocket `/socket` | Wire protocol, see [PROTOCOL.md](PROTOCOL.md) |
 
-内部（不要直接依赖）：`Fyrlet.Subscriptions.Observer`、`Fyrlet.Subscriptions.SessionChecks`、`Fyrlet.Subscriptions.Tracker`、`Fyrlet.Subscriptions.Delta`、`Fyrlet.Subscriptions.RecordIndex`、`Fyrlet.InvalidationWorker`、`Fyrlet.PruneWorker`、`Fyrlet.Runs.Engine` / `Store` / `Recovery` / `Dynamic` / `Plan` / `Resolver` / `Worker`、`Fyrlet.Effects.Worker`、`FyrletWeb.*`。
+Internal (do not depend on them directly): `Fyrlet.Subscriptions.Observer`, `Fyrlet.Subscriptions.SessionChecks`, `Fyrlet.Subscriptions.Tracker`, `Fyrlet.Subscriptions.Delta`, `Fyrlet.Subscriptions.RecordIndex`, `Fyrlet.InvalidationWorker`, `Fyrlet.PruneWorker`, `Fyrlet.Runs.Engine` / `Store` / `Recovery` / `Dynamic` / `Plan` / `Resolver` / `Worker`, `Fyrlet.Effects.Worker`, `FyrletWeb.*`.
 
-## 协议版本与能力
+## Protocol version and capabilities
 
-| 维度 | 规则 |
+| Dimension | Rule |
 | --- | --- |
-| 协议版本 | `protocol_version` 目前只有 `1`，加入通道时必须带；其他值返回 `UNSUPPORTED_VERSION` |
-| 契约 | 导出服务端能提供的全部条目，并列出已启用的能力；依赖能力的条目只在对应能力启用时出现 |
-| 能力 | 连接在加入时可声明 `capabilities`（`{名称: 版本}` 或名称数组），启用的是与服务端的交集，版本取较小者；未声明而使用依赖能力的订阅会得到 `UNSUPPORTED_CAPABILITY`（HTTP 400） |
-| 定义 | 只实现基础回调的定义可以注册；其余回调只对声明了对应种类的操作要求 |
-| 数据库 | 迁移只追加；回退不得丢弃进行中的执行事实 |
+| Protocol version | `protocol_version` is currently only `1` and must be supplied when joining the channel; any other value returns `UNSUPPORTED_VERSION` |
+| Contract | Exports every entry the server can provide and lists the enabled capabilities; entries that depend on a capability appear only when that capability is enabled |
+| Capabilities | A connection may declare `capabilities` when joining (`{name: version}` or an array of names); what is enabled is the intersection with the server, with the lower version taken; a subscription that uses a dependent capability without declaring it gets `UNSUPPORTED_CAPABILITY` (HTTP 400) |
+| Definitions | A definition that implements only the base callbacks can be registered; the other callbacks are required only for operations that declare the corresponding kind |
+| Database | Migrations are append-only; a revert must not discard in-progress execution facts |
 
-### 自动化验证覆盖
+### Automated verification coverage
 
-| 内容 | 验证 |
+| Content | Verification |
 | --- | --- |
-| 类型生成器读取检入的契约，拒绝其他协议版本 | `sdks/typescript/test/unit.test.mjs`（读取 `priv/contract.json`） |
-| SDK 的业务调用与订阅 | `scripts/integration.sh` 的 9 个真实 HTTP / WebSocket 场景 |
-| SDK 的 Run / append 路径 | 同脚本的 4 个真实服务端场景，含信号、重启恢复、隔离与窗口 |
-| 未协商能力的连接收不到能力事件，协商了的得到协商结果 | `test/fyrlet_web/capability_channel_test.exs` |
-| 协商规则、契约导出、`run` 操作的启用校验 | `test/fyrlet/capabilities_test.exs` |
-| 仓库外应用安装、迁移、运行 | `scripts/install_smoke.sh` 在仓库外解包，运行 Inbox / Agent 测试，并在独立 npm consumer 中安装 SDK `.tgz` |
-| 四个网页应用的真实业务闭环 | `scripts/domains.sh` 的 8 个 HTTP / WebSocket 场景（含静态资源与无 CDN 的浏览器 SDK） |
-| 四应用的浏览器交互与布局 | `scripts/browser.sh`：桌面、Android Chromium 模拟、iPhone WebKit 模拟，共 12 个流程，保存截图并检查横向溢出 |
-| 同机双节点通知与恢复 | `scripts/cluster.sh`：共享/append、幂等、跨节点撤销、故障切换、审批恢复及 120 秒持续流量；报告含会话续期与资源清理 |
+| The type generator reads the checked-in contract and rejects other protocol versions | `sdks/typescript/test/unit.test.mjs` (reads `priv/contract.json`) |
+| SDK business calls and subscriptions | 9 real HTTP / WebSocket scenarios in `scripts/integration.sh` |
+| SDK Run / append paths | 4 real-server scenarios in the same script, including signals, restart recovery, isolation and windows |
+| A connection that has not negotiated a capability receives no capability events; one that has negotiated gets the negotiation result | `test/fyrlet_web/capability_channel_test.exs` |
+| Negotiation rules, contract export, enablement validation of `run` operations | `test/fyrlet/capabilities_test.exs` |
+| Installing, migrating and running an application outside the repository | `scripts/install_smoke.sh` unpacks outside the repository, runs the Inbox / Agent tests, and installs the SDK `.tgz` in a separate npm consumer |
+| Real business loops of the four web applications | 8 HTTP / WebSocket scenarios in `scripts/domains.sh` (including static assets and the browser SDK without a CDN) |
+| Browser interaction and layout of the four applications | `scripts/browser.sh`: desktop, Android Chromium emulation and iPhone WebKit emulation, 12 flows in total, with screenshots saved and horizontal overflow checked |
+| Same-machine two-node notification and recovery | `scripts/cluster.sh`: shared/append, idempotency, cross-node revocation, failover, approval recovery and 120 seconds of sustained traffic; the report includes session renewal and resource cleanup |
 
-## 打包与安装验收
+## Packaging and installation acceptance
 
 ```sh
 bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-打包先运行 SDK 类型检查与单元测试，生成 `.local/releases/fyrlet-source-0.1.0.tar.gz`、`fyrlet-client-0.1.0.tgz` 和带大小、SHA256 的 `manifest.json`。源码包包含核心、领域应用、能力包、文档与验证脚本，排除依赖、构建缓存及本地凭证。安装验收解包到独立临时目录，复用已下载的 Elixir 依赖与 TypeScript 工具链，再运行宿主测试；npm consumer 实际从 `.tgz` 安装依赖。这验证了分发内容与路径依赖，不等于离线安装或注册表发布。
+Packaging first runs the SDK type check and unit tests, then produces `.local/releases/fyrlet-source-0.1.0.tar.gz`, `fyrlet-client-0.1.0.tgz` and a `manifest.json` with sizes and SHA256. The source package contains the core, domain applications, capability packages, documentation and verification scripts, and excludes dependencies, build caches and local credentials. Installation acceptance unpacks into a separate temporary directory, reuses the already downloaded Elixir dependencies and TypeScript toolchain, and then runs the host tests; the npm consumer actually installs its dependencies from the `.tgz`. This verifies the distributed contents and path dependencies; it is not the same as an offline installation or a registry release.
 
-将源码包解到固定目录后，宿主使用 `{:fyrlet, path: "/固定目录"}`；SDK 使用 `npm install /固定目录/fyrlet-client-0.1.0.tgz`。`private: true` 保留，Hex/npm 发布及许可证决策仍需维护者完成。
+After unpacking the source package into a fixed directory, the host uses `{:fyrlet, path: "/path/to/fyrlet"}`; the SDK uses `npm install /path/to/fyrlet/fyrlet-client-0.1.0.tgz`. `private: true` is kept; the Hex/npm release and the licence decision still have to be made by the maintainers.
 
-## 示例应用
+## Example applications
 
-| 目录 | 内容 | 验证 |
+| Directory | Contents | Verification |
 | --- | --- | --- |
-| `examples/inbox` | 参考业务：个人收件箱，增量窗口 | `cd examples/inbox && mix test`（也是安装验收） |
-| [`examples/notify`](../examples/notify/README.md) | 通知模型、站内列表、Resend 邮件供应商、Run 状态与网页 | `cd examples/notify && mix test` |
-| [`examples/flow`](../examples/flow/README.md) | 私有流程保存、顺序 HTTP / 等待节点、运行记录与网页 | `cd examples/flow && mix test` |
-| [`examples/agent`](../examples/agent/README.md) | 有限文本工具、人工审批、任务模型与网页；未接入 LLM | `cd examples/agent && mix test` |
-| [`examples/chat`](../examples/chat/README.md) | 登录会话、邀请成员、分配、人工接管、历史、共享与 append 网页聊天 | `cd examples/chat && mix test` |
+| `examples/inbox` | Reference business: a personal inbox with a delta window | `cd examples/inbox && mix test` (also the installation acceptance) |
+| [`examples/notify`](../examples/notify/README.md) | Notification model, in-app list, Resend email provider, Run status and web page | `cd examples/notify && mix test` |
+| [`examples/flow`](../examples/flow/README.md) | Private flow storage, sequential HTTP / wait nodes, run records and web page | `cd examples/flow && mix test` |
+| [`examples/agent`](../examples/agent/README.md) | Limited text tools, human approval, task model and web page; no LLM is connected | `cd examples/agent && mix test` |
+| [`examples/chat`](../examples/chat/README.md) | Login sessions, member invitations, assignment, human takeover, history, shared and append web chat | `cd examples/chat && mix test` |
 
-它们都以路径依赖引用主库，使用自己的配置和数据库。使用 Run 的应用在 `config :fyrlet` 中加 `capabilities: %{"runs" => 1}`；使用在线状态（房间成员与“正在输入”）的应用加 `"presence" => 1`，并在定义的契约里声明 `presence` 段（见 [PROTOCOL.md](PROTOCOL.md) 的“在线状态”）；用到副作用则注册适配器 `effect_adapters: %{"http" => FyrletEffectHTTP}`（依赖 `{:fyrlet_effect_http, path: "…/packages/fyrlet_effect_http"}`），并配置 `config :fyrlet_effect_http, allowed_hosts: […]`（允许的主机）与 `config :fyrlet, :effect_secrets`。
+They all reference the main library as a path dependency and use their own configuration and database. An application that uses Runs adds `capabilities: %{"runs" => 1}` to `config :fyrlet`; one that uses presence (room members and "typing") adds `"presence" => 1` and declares a `presence` section in the definition's contract (see "Presence" in [PROTOCOL.md](PROTOCOL.md)); one that uses side effects registers the adapter `effect_adapters: %{"http" => FyrletEffectHTTP}` (depending on `{:fyrlet_effect_http, path: "…/packages/fyrlet_effect_http"}`) and configures `config :fyrlet_effect_http, allowed_hosts: […]` (the allowed hosts) and `config :fyrlet, :effect_secrets`.
 
-四个应用的启动、浏览器登录和功能边界见各自 README。真实邮件发送需要 `RESEND_API_KEY` 和已经验证的 `MAIL_FROM`；本仓库用本地供应商模拟验证协议，没有外部真实投递验收。所有领域定义与测试通过公共入口调用，插件运行时代码通过 `Transaction`、`HTTP`、`Diagnostics` 等公共接口接入核心。
+For how to start the four applications, log in through the browser and what their functional boundaries are, see their own READMEs. Sending real email requires `RESEND_API_KEY` and a verified `MAIL_FROM`; this repository verifies the protocol with a local provider simulation, and there is no external real-delivery acceptance. All domain definitions and tests call through the public entry points, and plugin runtime code connects to the core through public interfaces such as `Transaction`, `HTTP` and `Diagnostics`.
 
-浏览器、双节点和真实邮件的复现步骤、证据及剩余环境要求见 [ACCEPTANCE.md](ACCEPTANCE.md)。真实邮件工具 `scripts/mail_live.sh --check` 只检查配置；正常运行需要额外指定 `MAIL_TO`，会向该地址发送一封验收邮件并等待供应商确认投递。
+For the reproduction steps, evidence and remaining environment requirements for the browser, two-node and real-email checks see [ACCEPTANCE.md](ACCEPTANCE.md). The real-email tool `scripts/mail_live.sh --check` only checks the configuration; a normal run additionally requires `MAIL_TO`, sends one acceptance email to that address and waits for the provider to confirm delivery.
 
-**迁移提示：** 项目尚未发布，核心迁移已合并为一份（`priv/repo/migrations/20261106000000_create_fyrlet.exs`，含 Oban 的表）。若你的开发数据库执行过更早的迁移，请重建该数据库。
+**Migration note:** the project has not been released, and the core migrations have been merged into one (`priv/repo/migrations/20261106000000_create_fyrlet.exs`, including Oban's tables). If your development database ran earlier migrations, recreate that database.

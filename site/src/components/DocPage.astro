@@ -1,0 +1,68 @@
+---
+import { render, getCollection } from "astro:content";
+import Base from "../layouts/Base.astro";
+import { groups, desc, href, ui, type Lang } from "../i18n";
+interface Props { lang: Lang; entry: any }
+const { lang, entry } = Astro.props;
+const t = ui[lang];
+const { Content, headings } = await render(entry);
+const slug = entry.id;
+const title = headings.find((h: any) => h.depth === 1)?.text ?? slug;
+const toc = headings.filter((h: any) => h.depth === 2 || h.depth === 3);
+const all = await getCollection(lang === "zh" ? "docsZh" : "docsEn");
+const titleOf = new Map<string, string>();
+for (const e of all) {
+  const m = /^#\s+(.+)$/m.exec(e.body ?? "");
+  titleOf.set(e.id, m ? m[1].trim() : e.id);
+}
+const alt = href(lang === "zh" ? "en" : "zh", `/docs/${slug}/`);
+---
+<Base lang={lang} alt={alt} title={`${title} · Fyrlet`} description={desc[slug]?.[lang] ?? title}>
+  <div class="wrap docs">
+    <aside class="sidebar" aria-label={t.menu}>
+      <details open>
+        <summary>{t.menu}</summary>
+        {groups.map((g) => (
+          <>
+            <h2>{g[lang]}</h2>
+            <ul>{g.slugs.filter((s) => titleOf.has(s)).map((s) => (
+              <li><a href={href(lang, `/docs/${s}/`)} aria-current={s === slug ? "page" : undefined}>{titleOf.get(s)}</a></li>
+            ))}</ul>
+          </>
+        ))}
+      </details>
+    </aside>
+    <article class="prose">
+      <div class="doc-meta"><a href={href(lang, "/")}>{t.back}</a></div>
+      <Content />
+      <div class="doc-foot"><span>{desc[slug]?.[lang]}</span></div>
+    </article>
+    <nav class="toc" aria-label={t.onThis}>
+      <h2>{t.onThis}</h2>
+      <ul>{toc.map((h: any) => <li class={`d${h.depth}`}><a href={`#${h.slug}`}>{h.text}</a></li>)}</ul>
+    </nav>
+  </div>
+  <script is:inline>
+    (() => {
+      const sidebar = document.querySelector(".sidebar");
+      if (!sidebar) return;
+      const key = `fyrlet:docs-sidebar:${document.documentElement.lang}`;
+      const restore = () => {
+        try {
+          const stored = sessionStorage.getItem(key);
+          const position = stored === null ? NaN : Number(stored);
+          if (Number.isFinite(position) && position >= 0) sidebar.scrollTop = position;
+        } catch {}
+      };
+      const save = () => {
+        try {
+          sessionStorage.setItem(key, String(sidebar.scrollTop));
+        } catch {}
+      };
+      restore();
+      sidebar.addEventListener("click", save);
+      window.addEventListener("pagehide", save);
+      window.addEventListener("pageshow", restore);
+    })();
+  </script>
+</Base>
