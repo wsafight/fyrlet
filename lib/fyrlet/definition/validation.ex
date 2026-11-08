@@ -2,7 +2,7 @@ defmodule Fyrlet.Definition.Validation do
   @moduledoc false
 
   def validate!(definitions) do
-    for kind <- ["operations", "subscriptions"] do
+    Enum.each(["operations", "subscriptions"], fn kind ->
       Enum.reduce(definitions, MapSet.new(), fn module, names ->
         Code.ensure_loaded!(module)
 
@@ -42,7 +42,7 @@ defmodule Fyrlet.Definition.Validation do
           MapSet.put(seen, name)
         end)
       end)
-    end
+    end)
 
     validate_presence!(definitions)
     :ok
