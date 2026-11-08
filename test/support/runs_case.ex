@@ -1,10 +1,19 @@
 defmodule Fyrlet.RunsCase do
-  @moduledoc "Shared helpers for run tests: starting, driving and manipulating time."
+  @moduledoc """
+  Shared helpers for run tests: starting, driving and manipulating time.
+
+  Defaults to `async: false` because most run tests reconfigure global application env
+  (`put_runs/1`, `inject/1`, vault keys) or assert on global Oban state. A test file that
+  does neither may opt in with `use Fyrlet.RunsCase, async: true`; it must also run all
+  database work in the test process (no channel processes, which need the shared sandbox).
+  """
   use ExUnit.CaseTemplate
 
-  using do
+  using options do
+    async = Keyword.get(options, :async, false)
+
     quote do
-      use Fyrlet.DataCase, async: false
+      use Fyrlet.DataCase, async: unquote(async)
       use Oban.Testing, repo: Fyrlet.Repo
       import Fyrlet.RunsCase
       alias Fyrlet.Runs
