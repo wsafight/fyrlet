@@ -518,7 +518,11 @@ defmodule Fyrlet.Runtime do
     callback.()
   rescue
     error ->
-      Logger.error("Business execution failed: #{inspect(error.__struct__)}")
+      # The client gets a generic error; the log keeps the full reason and stack.
+      Logger.error(
+        "Business execution failed:\n" <> Exception.format(:error, error, __STACKTRACE__)
+      )
+
       {:error, Error.new("INTERNAL_ERROR", "The operation could not be completed")}
   end
 

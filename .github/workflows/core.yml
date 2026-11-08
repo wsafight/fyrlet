@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RESTORE_DOCKER: '1'
+      # Keep boot crashes diagnosable instead of a 5 MB dump in an unknown directory.
+      ERL_CRASH_DUMP: /home/runner/work/_temp/erl_crash.dump
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -55,6 +57,26 @@ jobs:
             sdks/typescript/package-lock.json
             sdks/react/package-lock.json
             examples/inbox-react/package-lock.json
+      - name: Cache Elixir dependencies and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build
+            deps
+            ~/.hex
+            ~/.mix
+            examples/*/_build
+            examples/*/deps
+            packages/*/_build
+            packages/*/deps
+          key: beam-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mix.lock', 'examples/*/mix.lock', 'packages/*/mix.lock') }}
+          restore-keys: beam-${{ matrix.elixir }}-${{ matrix.otp }}-
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('examples/inbox-react/package-lock.json') }}
+          restore-keys: playwright-
       - name: Install dependencies
         run: |
           mix deps.get
@@ -93,5 +115,6 @@ jobs:
           path: |
             .local/integration/*.log
             .local/readiness/**
+            /home/runner/work/_temp/erl_crash.dump
           include-hidden-files: true
           if-no-files-found: ignore

@@ -30,13 +30,19 @@ defmodule Fyrlet.MixProject do
       {:postgrex, "~> 0.21"},
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.8"},
-      {:oban, "~> 2.19"}
+      {:oban, "~> 2.19"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 
   defp aliases do
     [
       setup: ["deps.get", "ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
+      quality: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "credo --only warning,consistency"
+      ],
       test: ["fyrlet.migrate --create --quiet", "test"]
     ]
   end

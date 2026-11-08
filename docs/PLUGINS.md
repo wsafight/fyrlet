@@ -36,7 +36,7 @@ The interface comes from the seams that the built-in capability packages used re
 | `definitions/0` | The `Fyrlet.Definition` modules it brings, which go through the same registry validation as other definitions |
 | `queues/0` | Oban queues; may only be added, and core queues must not be changed |
 | `call/2` | Handles `/api/v1/plugins/<name>/…`, receiving a `Plug.Conn` and the remaining path |
-| `public_paths/0` | Paths reachable without credentials; none by default |
+| `public_paths/0` | Paths reachable without credentials; none by default. `dispatch` enforces this: all other paths require a valid service key or user session. Entries are relative paths (`"ping"`, `"events/recent"`); the segment `*` matches one segment. List a path only when the plugin authenticates it another way (e.g. the webhooks HMAC signature) |
 
 The entry point is uniformly `call/2`, contracts enter through `definitions/0`, and workers get their queues through `queues/0`; a plugin's own WebSocket channel is not provided.
 

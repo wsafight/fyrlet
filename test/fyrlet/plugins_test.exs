@@ -183,6 +183,36 @@ defmodule Fyrlet.PluginsTest do
       assert build_conn() |> get("/api/v1/plugins/mirror/x") |> Map.fetch!(:status) == 401
     end
 
+    test "dispatch itself refuses anonymous calls to non-public paths" do
+      project = project()
+      alice = user(project, "alice")
+
+      # The "open" route checks nothing internally; only dispatch protects it.
+      assert build_conn() |> get("/api/v1/plugins/counter/open") |> Map.fetch!(:status) == 401
+
+      assert build_conn()
+             |> put_req_header("authorization", "Bearer rts_wrong")
+             |> get("/api/v1/plugins/counter/open")
+             |> Map.fetch!(:status) == 401
+
+      assert build_conn()
+             |> put_req_header("authorization", "Bearer " <> project.service_key)
+             |> get("/api/v1/plugins/counter/open")
+             |> Map.fetch!(:resp_body) == "open"
+
+      assert build_conn()
+             |> put_req_header("authorization", "Bearer " <> alice.token)
+             |> put_req_header("x-project-id", project.project.id)
+             |> get("/api/v1/plugins/counter/open")
+             |> Map.fetch!(:resp_body) == "open"
+
+      # A session token without its project header is not enough.
+      assert build_conn()
+             |> put_req_header("authorization", "Bearer " <> alice.token)
+             |> get("/api/v1/plugins/counter/open")
+             |> Map.fetch!(:status) == 401
+    end
+
     test "closing the plugin closes the entry, with no fallback to an open path" do
       configure([])
       assert build_conn() |> get("/api/v1/plugins/counter/ping") |> Map.fetch!(:status) == 404

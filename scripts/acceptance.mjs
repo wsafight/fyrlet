@@ -11,7 +11,7 @@ const execute = promisify(execFile);
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const groups = {
-  core: [["mix", "format", "--check-formatted"], ["mix", "compile", "--warnings-as-errors"], ["bash", "scripts/test_all.sh"]],
+  core: [["mix", "format", "--check-formatted"], ["mix", "compile", "--warnings-as-errors"], ["mix", "credo", "--only", "warning,consistency"], ["bash", "scripts/test_all.sh"]],
   client: [["npm", "--prefix", "sdks/typescript", "run", "test:coverage"], ["npm", "--prefix", "sdks/typescript", "run", "typecheck"],
     ["npm", "--prefix", "sdks/react", "run", "test:coverage"], ["npm", "--prefix", "sdks/react", "run", "typecheck"],
     ["npm", "--prefix", "examples/inbox-react", "run", "test:coverage"]],

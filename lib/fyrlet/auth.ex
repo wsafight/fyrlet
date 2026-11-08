@@ -41,6 +41,7 @@ defmodule Fyrlet.Auth do
          :ok <- reserved_issuer(input["issuer"]) do
       Repo.transaction(fn ->
         key = unwrap!(authenticate_key(service_token, true))
+        check_issue_rate!(key)
 
         Repo.insert!(
           %Subject{
@@ -86,6 +87,38 @@ defmodule Fyrlet.Auth do
     do: {:error, Error.new("VALIDATION_FAILED", "The issuer \"anonymous\" is reserved")}
 
   defp reserved_issuer(_issuer), do: :ok
+
+  # A leaked key must not be able to flood the sessions table. Counted per key per minute in
+  # the issuing transaction; without a row lock concurrent issuers can overshoot slightly,
+  # which is acceptable for a rate limit. nil means unlimited.
+  defp check_issue_rate!(key) do
+    case Application.get_env(:fyrlet, :session_issue_per_minute, 600) do
+      nil ->
+        :ok
+
+      limit when is_integer(limit) and limit >= 1 ->
+        recent =
+          Repo.aggregate(
+            from(s in Session,
+              where:
+                s.service_key_id == ^key.id and
+                  s.inserted_at > ^DateTime.add(now(), -60, :second)
+            ),
+            :count
+          )
+
+        if recent >= limit do
+          Repo.rollback(
+            Error.new(
+              "LIMIT_EXCEEDED",
+              "Too many sessions issued by this key; try again shortly",
+              %{"limit" => limit, "retry_after_ms" => 60_000},
+              true
+            )
+          )
+        end
+    end
+  end
 
   def authenticate_key(token, locked \\ false) do
     if is_binary(token) and byte_size(token) < 200 and String.starts_with?(token, "rtk_") do

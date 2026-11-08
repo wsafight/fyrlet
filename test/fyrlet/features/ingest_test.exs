@@ -110,6 +110,17 @@ defmodule Fyrlet.IngestTest do
     assert {:ok, %{"accepted" => 1}} = submit(bob, [item("same")])
   end
 
+  test "a repeated key inside one batch reports duplicate or conflict", %{alice: alice} do
+    assert {:ok, %{"accepted" => 1, "batch_id" => batch, "results" => results}} =
+             submit(alice, [item("k"), item("k"), item("k", 2, "other")])
+
+    assert Enum.map(results, & &1["status"]) == ["accepted", "duplicate:pending", "conflict"]
+    assert statuses(batch) == [{"k", "pending"}]
+
+    Ingest.process(batch)
+    assert rows() == 1
+  end
+
   test "a failing handler's database writes are rolled back with it", %{alice: alice} do
     Application.put_env(:fyrlet, :ingest_handler, fn
       7 -> {:error, Error.new("BAD", "no", %{}, false)}

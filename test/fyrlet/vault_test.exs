@@ -77,26 +77,30 @@ defmodule Fyrlet.VaultTest do
       short = %{sealed | "d" => Base.encode64(:crypto.strong_rand_bytes(5))}
       assert :error = Vault.decrypt(short)
 
-      # A stored value that is not even base64 is corrupt data: decrypt refuses to guess.
-      assert_raise ArgumentError, fn ->
-        Vault.decrypt(%{"__enc" => 1, "k" => "2026-11", "d" => "%%%not-base64%%%"})
-      end
+      # A stored value that is not even base64 is corrupt data: refuse it without crashing.
+      assert :error = Vault.decrypt(%{"__enc" => 1, "k" => "2026-11", "d" => "%%%not-base64%%%"})
     end
 
-    test "no usable configuration means plaintext storage" do
+    test "no configuration means plaintext storage" do
       Application.delete_env(:fyrlet, :vault)
       refute Vault.enabled?()
       assert Vault.encrypt(%{"x" => 1}) == %{"x" => 1}
+      assert Vault.validate!() == :ok
+    end
 
-      Application.put_env(:fyrlet, :vault, keys: %{"k" => @key})
-      refute Vault.enabled?()
+    test "a broken configuration raises instead of silently storing plaintext" do
+      for config <- [
+            [keys: %{"k" => @key}],
+            [keys: %{"k" => @key}, current: "missing"],
+            [keys: %{"short" => "tiny"}, current: "short"],
+            [current: "k"],
+            :not_a_keyword_list
+          ] do
+        Application.put_env(:fyrlet, :vault, config)
 
-      Application.put_env(:fyrlet, :vault, keys: %{"k" => @key}, current: "missing")
-      refute Vault.enabled?()
-
-      configure("short", "tiny")
-      refute Vault.enabled?()
-      assert Vault.encrypt(%{"x" => 1}) == %{"x" => 1}
+        assert_raise ArgumentError, fn -> Vault.validate!() end
+        assert_raise ArgumentError, fn -> Vault.encrypt(%{"x" => 1}) end
+      end
     end
   end
 

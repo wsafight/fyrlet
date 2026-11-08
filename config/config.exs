@@ -6,6 +6,10 @@ config :fyrlet,
   definitions: [],
   migration_paths: [],
   session_ttl: 600,
+  # Sessions one service key may issue per minute (counted in the issuing transaction, so it
+  # holds across nodes; concurrent bursts may slightly overshoot). Bounds session-table growth
+  # if a key leaks. nil disables.
+  session_issue_per_minute: 600,
   reconciliation_interval: 30_000,
   max_subscriptions: 20,
   max_subscriptions_per_node: 10_000,

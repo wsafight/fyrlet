@@ -1,5 +1,6 @@
 defmodule FyrletWeb.RunsHTTPTest do
-  use Fyrlet.RunsCase
+  # No global env changes, no global Oban assertions, all queries in the test process.
+  use Fyrlet.RunsCase, async: true
   import Plug.Conn
   import Phoenix.ConnTest
   @endpoint FyrletWeb.Endpoint

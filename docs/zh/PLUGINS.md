@@ -36,7 +36,7 @@ Webhooks / Ops 是独立插件包，HTTP / Email 是独立适配器包；改变�
 | `definitions/0` | 带来的 `Fyrlet.Definition`，与其他定义经过同样的注册表校验 |
 | `queues/0` | Oban 队列，只能新增，不能改动核心队列 |
 | `call/2` | 处理 `/api/v1/plugins/<name>/…`，收到 `Plug.Conn` 与剩余路径 |
-| `public_paths/0` | 可免凭证访问的路径，默认无 |
+| `public_paths/0` | 可免凭证访问的路径，默认无。`dispatch` 会强制执行：其余路径一律要求有效 service key 或用户会话。条目为相对路径（如 `"ping"`、`"events/recent"`），段 `*` 匹配任意单段。仅当插件以其他方式自行认证（如 webhooks 的 HMAC 签名）时才应列出 |
 
 入口统一为 `call/2`，契约经 `definitions/0` 进入，worker 经 `queues/0` 配队列；插件自己的 WebSocket 通道未提供。
 

@@ -33,4 +33,17 @@ defmodule Fyrlet.Runs.InvalidationModeTest do
     assert_receive message
     assert elem(message, 1) == id
   end
+
+  test "step transitions also stay transient in default mode", %{alice: alice} do
+    Application.put_env(:fyrlet, :durable_invalidation, false)
+    Phoenix.PubSub.subscribe(Fyrlet.PubSub, Runs.scope(alice.actor))
+
+    id = start_run!(alice, "runs.demo")
+    drive(id)
+
+    assert invalidation_jobs() == []
+    assert_receive message
+    assert elem(message, 0) == :invalidated
+    assert elem(message, 1) < 0
+  end
 end

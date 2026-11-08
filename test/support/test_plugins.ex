@@ -64,6 +64,9 @@ defmodule Fyrlet.TestPlugins.Counter do
   @impl true
   def call(conn, ["ping"]), do: Plug.Conn.send_resp(conn, 200, "pong")
 
+  # Deliberately no credential check of its own: the framework dispatch must close it.
+  def call(conn, ["open"]), do: Plug.Conn.send_resp(conn, 200, "open")
+
   def call(conn, ["hits"]) do
     with ["Bearer " <> token] <- Plug.Conn.get_req_header(conn, "authorization"),
          [project_id] <- Plug.Conn.get_req_header(conn, "x-project-id"),
