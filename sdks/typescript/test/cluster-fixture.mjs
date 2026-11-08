@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
-import { open } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 import { once } from "node:events";
 import { hostname } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -27,7 +27,11 @@ export async function clusterFixture() {
   const cookie = crypto.randomUUID().replaceAll("-", "");
   const endpoints = [base, base + 1].map(port => `http://127.0.0.1:${port}`);
   const metrics = [base + 2, base + 3].map(port => `http://127.0.0.1:${port}`);
-  const logs = await Promise.all(names.map((name, index) => open(`${root}/.local/integration/${domain}-cluster-${index}.log`, "a")));
+  const reportDirectory = process.env.CLUSTER_REPORT_DIR;
+  if (reportDirectory) await mkdir(reportDirectory, { recursive: true, mode: 0o700 });
+  const logs = await Promise.all(names.map((name, index) => reportDirectory ?
+    open(`${reportDirectory}/${domain}-node-${index}.log`, "wx", 0o600) :
+    open(`${root}/.local/integration/${domain}-cluster-${index}.log`, "a", 0o600)));
   const servers = [];
   const sockets = new Set();
   let active = 0;

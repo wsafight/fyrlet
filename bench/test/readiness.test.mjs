@@ -39,15 +39,21 @@ test("release artifact checks reject stale fingerprints, tampering and traversal
   context.after(() => rm(directory, { recursive: true, force: true }));
   const bytes = Buffer.from("artifact");
   const fingerprint = { digest: "current" };
-  const artifacts = ["core.tgz", "sdk.tgz", "react.tgz"].map((filename) => ({ filename, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }));
+  const expectedArtifacts = ["fyrlet-source-1.2.3.tar.gz", "fyrlet-1.2.3.tar", "fyrlet-client-1.2.3.tgz", "fyrlet-react-1.2.3.tgz"];
+  const artifacts = expectedArtifacts.map((filename) => ({ filename, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }));
   for (const artifact of artifacts) await writeFile(join(directory, artifact.filename), bytes);
-  const manifest = { source_fingerprint: fingerprint, artifacts };
+  const manifest = {
+    version: "1.2.3", git_revision: "a".repeat(40), working_tree_clean: true,
+    registry_published: false, publication: "not-performed", source_fingerprint: fingerprint, expected_artifacts: expectedArtifacts, artifacts,
+  };
+  const expectations = { version: "1.2.3", expectedRevision: "a".repeat(40), expectedArtifacts, requireClean: true };
   const save = () => writeFile(join(directory, "manifest.json"), JSON.stringify(manifest));
   await save();
-  assert.equal(await verifyArtifacts(directory, fingerprint), true);
-  assert.equal(await verifyArtifacts(directory, { digest: "stale" }), false);
-  await writeFile(join(directory, "sdk.tgz"), "tampered");
+  assert.equal(await verifyArtifacts(directory, fingerprint, expectations), true);
+  assert.equal(await verifyArtifacts(directory, { digest: "stale" }, expectations), false);
   assert.equal(await verifyArtifacts(directory, fingerprint), false);
-  manifest.artifacts[0].filename = "../core.tgz"; await save();
-  assert.equal(await verifyArtifacts(directory, fingerprint), false);
+  await writeFile(join(directory, "fyrlet-client-1.2.3.tgz"), "tampered");
+  assert.equal(await verifyArtifacts(directory, fingerprint, expectations), false);
+  manifest.artifacts[0].filename = "../fyrlet-source-1.2.3.tar.gz"; await save();
+  assert.equal(await verifyArtifacts(directory, fingerprint, expectations), false);
 });

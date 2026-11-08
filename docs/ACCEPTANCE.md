@@ -1,5 +1,34 @@
 # Local acceptance record
 
+## November 8, 2026: pre-release production readiness
+
+On `feat/pre-release-production-readiness`, based on merged PR #10 at `c03e7e72bd8383f876590a6c081ebbfca5ade075`, the complete frozen-source local run **passed all 21 stages**. Report: `.local/readiness/pre-release-20261108-final/result.json`; per-stage logs are beside it. SHA-256 source fingerprint `21167b253602163d9a1bb37696a7bd06d989eae1604bdb69afc35fa371343723` covers 712 Git-tracked/non-ignored files. This is the code snapshot before adding this acceptance record; package/site verification is repeated after the record update, and distributable artifacts must be rebuilt again on the clean final commit.
+
+```sh
+node scripts/acceptance.mjs --out .local/readiness/pre-release-20261108-final
+```
+
+| Verification | Result | Evidence in the report directory |
+| --- | --- | --- |
+| Elixir format, warning-free compile and Credo | Passed | `core-1.log` through `core-3.log` |
+| Core, examples and standalone packages | **788 passed**: 718 core, 35 examples, 35 packages | `core-4.log` |
+| TypeScript SDK and typecheck | **304 passed**; line/branch coverage **99.27% / 95.66%** | `client-1.log`, `client-2.log` |
+| React adapter and typecheck | **20 passed**; line/branch coverage **100% / 100%** | `client-3.log`, `client-4.log` |
+| Host unit/startup/deployment tests | **68 passed** | `client-5.log` |
+| Host tests with real PostgreSQL shared storage | **78 passed**; loaded server-module line/branch coverage **90.47% / 91.78%** | `host-1.log` |
+| Benchmark/readiness tools | **46 passed** | `bench-1.log` |
+| Offline staging, multi-host and release-helper regressions | **96 passed** | `bench-2.log` |
+| Contract export and checked-in generated types | Passed | `contract-1.log`, `contract-2.log` |
+| Real local HTTP/WebSocket integration | **20 passed** | `integration-1.log` |
+| Isolated snapshot restore and repeated migration | Passed | `restore-1.log`; nested report `.local/readiness/restore-1794151426766/result.json` |
+| Browser workflow | **14 passed**, including the parent; signed local test IdP | `browser-1.log` |
+| Four-artifact build and repository-external install | Passed, including unpacked Hex compilation, offline SDK/React imports and strict TypeScript consumer compilation with `skipLibCheck=false` | `package-1.log`, `package-2.log` |
+| Documentation site | **70 pages** built; **3,498 internal links and 35 repository targets**, no broken links | `site-1.log`, `site-2.log` |
+
+This run covers the consolidated migration baseline and removal of pre-release compatibility entry points. Current capability negotiation, explicit definition-version pinning, security validation and snapshot recovery remain in scope. Apache-2.0 and the coordinated Fyrlet Core / `@fyrlet/client` / `@fyrlet/react` 0.1.0 scope are selected; the other seven SDKs remain experimental. The four local archives are source, Hex, TypeScript and React artifacts. The pre-commit manifest records `working_tree_clean: false`, so it is not release approval.
+
+No live 24-hour stability run was performed in this pass. Real external IdP/staging lifecycle, production backup restore, distinct-physical-host faults, physical devices and real mail remain `not-run`; local test IdPs, isolated databases, browser emulation, stubbed control hooks and same-host drills do not replace them. Multi-host example configuration validation remains `not-run`; the staging example fails closed because its private environment file is absent. `publicationApproved` and `ownershipVerified` remain false, no Hex/npm publication occurred, and the new branch commit still needs its own exact-head Core PR CI. Release preflight without that run must fail rather than reuse the PR #10 baseline.
+
 ## November 8, 2026: sequential roadmap follow-up
 
 Continued on `feat/readiness-and-performance` in CI, shared host storage, performance, reliability and release-preparation order. The final code run **passed all 15 stages**: `.local/readiness/followup-20261108-guarded/result.json`, SHA-256 source fingerprint `ff647bdd4eacfe1e87225da197cb60056df1973dfef2e9298f5b55ff46ade615` over 683 Git-tracked/non-ignored files. This is the code snapshot before adding this record; the earlier 13-stage checkpoint below retains its historical counts.
@@ -33,7 +62,7 @@ The short stability wrapper passed with four clients for 30 seconds: **527 write
 
 A separate Notify snapshot/restore preserved all 22 public-table manifests, including **11 Runs, 10 Effects, 16 idempotency records and 10 notifications**; two Notify migrations changed no facts. Only its newly created destination database was dropped and its private dump removed. Report: `.local/readiness/restore-notify-followup-20261108/result.json`. These are local simulated-provider facts, not real mail, production recovery or cross-version upgrade proof.
 
-Artifact/install/site verification for the documentation snapshot is recorded separately in `.local/readiness/followup-20261108-artifacts/result.json`; release preflight is `.local/readiness/followup-20261108-release-check.json`. Consult those reports independently of the code run above. Packaging records source fingerprints, revision, clean/dirty state and checksums. Release preflight never publishes; this branch is uncommitted/unpublished, with no maintainer-approved license/release policy or exact-revision hosted CI. External IdP/production shared-host deployment, multi-host faults, 24-hour execution, physical devices and real mail remain separate gates in the [release checklist](RELEASE_CHECKLIST.md).
+Artifact/install/site verification for that earlier documentation snapshot is recorded separately in `.local/readiness/followup-20261108-artifacts/result.json`; release preflight is `.local/readiness/followup-20261108-release-check.json`. Consult those reports independently of the code run above. Packaging records source fingerprints, revision, clean/dirty state and checksums. At that historical checkpoint the branch was uncommitted/unpublished and had no maintainer-approved license/release policy or exact-revision hosted CI; the current pre-release record above supersedes those license/artifact details. Release preflight never publishes. External IdP/production shared-host deployment, multi-host faults, 24-hour execution, physical devices and real mail remain separate gates in the [release checklist](RELEASE_CHECKLIST.md).
 
 ## November 8, 2026: readiness and performance follow-up
 
@@ -81,7 +110,7 @@ This pass adds **108 executable tests** plus compile-time contract assertions on
 | OIDC host bridge | 16 → **56 passed** (+40) | **100% / 98.26%** | `npm --prefix examples/inbox-react run test:coverage`; `.local/roadmap-auth-coverage.log` |
 | Real browser workflow | 10 → **14 passed** (+4) | Not measured by the unit coverage reports | `bash scripts/react.sh`; `.local/roadmap-browser-tests.log` |
 
-SDK regressions cover retry defaults and invalid budgets, accepted Run recovery, transient versus permanent errors, independent concurrent keys and cancellation, authentication failure during another call's backoff, abort/close during receipt lookup, HTTP-date and numeric retry delays, selector lifecycle and metadata, deterministic generation, all operation kinds and nested schema/default semantics. Compile-time assertions cover operation-kind filtering, typed Run inputs/results, required Presence parameters/meta, legacy compatibility and projected React data with an unprojected subscription handle.
+SDK regressions cover retry defaults and invalid budgets, accepted Run recovery, transient versus permanent errors, independent concurrent keys and cancellation, authentication failure during another call's backoff, abort/close during receipt lookup, HTTP-date and numeric retry delays, selector lifecycle and metadata, deterministic generation, all operation kinds and nested schema/default semantics. Compile-time assertions cover operation-kind filtering, typed Run inputs/results, required Presence parameters/meta and projected React data with an unprojected subscription handle. The former legacy-contract assertions from this historical pass were removed during pre-release cleanup; current assertions require contracts without `kind` or `presence` declarations to fail compilation.
 
 React regressions cover direct use without a Provider, missing-provider errors, client/name/mode changes, stale private deliveries, selector changes, equal parameters, independent listener release, 120 successive parameter switches, SSR with a populated client, malformed and oversized JSON, idempotent release and shared consumers at capacity. OIDC regressions exercise callback ambiguity, state expiry, signature/claim failures, discovery and configuration rejection, confidential-client authentication, wrong-project credentials, failed issuance and rotation, concurrent refreshes, bounded pending/host capacity, expiry, revocation concurrency/backoff and shutdown racing token issuance. Fake-clock identity tests mint their signed `iat` against that same clock.
 
@@ -106,7 +135,7 @@ The `feat/react-contract-auth-retry` branch completes roadmap milestones 2–5 l
 | CORS | **10 passed**, including exposure of `Retry-After` | `mix test test/fyrlet_web/cors_test.exs`; `.local/roadmap-cors-tests.log` |
 | Elixir quality and contract agreement | Formatting, compilation without warnings, and fresh Inbox contract comparison passed | `mix format --check-formatted`, `mix compile --warnings-as-errors`, `node scripts/check_contract.mjs .local/roadmap-contract.json` |
 | Production example and documentation | Production app build, site build and link checks passed | `npm --prefix examples/inbox-react run build`, `npm --prefix site run build`, `npm --prefix site run check`; `.local/roadmap-web-build.log`, `.local/roadmap-site-build.log`, `.local/roadmap-site-check.log` |
-| Distribution | Three local artifacts built; packed core and React imports passed in an external consumer | `bash scripts/package.sh`, `bash scripts/install_smoke.sh`; `.local/roadmap-package.log`, `.local/roadmap-install.log`, `.local/releases/manifest.json` |
+| Distribution | At that time, three local artifacts were built; packed core and React imports passed in an external consumer | `bash scripts/package.sh`, `bash scripts/install_smoke.sh`; `.local/roadmap-package.log`, `.local/roadmap-install.log`, `.local/releases/manifest.json` |
 
 React checks cover shared consumers and final-reference cleanup, canonical parameters, client and mode isolation, Strict Mode, abandoned renders, selectors, bounded query storage and deterministic SSR/hydration. Browser scenarios cover login, shared subscriptions, optimistic writes and authoritative confirmation, a discarded response after commit, header-only retry delays, two tabs, parameter changes, reconnects, token refresh, logout, user/issuer isolation and host revocation. The browser workflow checks the narrow layout without capturing screenshots.
 
@@ -129,11 +158,11 @@ The `fix/reliability-and-subscription-improvements` branch completes operation-l
 
 Confirmation regression tests cover unrelated and stale snapshots, deltas, concurrent writes, independent subscriptions, unchanged/empty append snapshots, timeout, cancellation, reconnection, permission revocation, unsupported servers and malformed confirmation lists. Unsubscribing before the operation response produces an unconfirmed view while preserving the committed result. Duplicate confirmation IDs cannot disturb another waiter. Server tests exercise private and shared queries, warm-cache bypass and append reset before an old ACK. Cleanup tests verify shared row/time budgets, continuation, stream floors and retention protections; readiness tests verify both successful queries and sanitized HTTP 503 failures.
 
-The CI workflow runs the suites, typecheck, contract comparison and integration on Elixir 1.18 / OTP 27 and Elixir 1.20 / OTP 29 with PostgreSQL 17 and Node 24. Only the local environment recorded below has been executed in this pass; no GitHub-hosted result is claimed. Existing databases need `mix fyrlet.migrate` for the session-expiry index. Cleanup duration is checked between statements and does not interrupt running SQL; row accounting excludes foreign-key cascades. No new throughput, multi-host or long-duration performance claim is made.
+The CI workflow runs the suites, typecheck, contract comparison and integration on Elixir 1.18 / OTP 27 and Elixir 1.20 / OTP 29 with PostgreSQL 17 and Node 24. Only the local environment recorded below has been executed in this pass; no GitHub-hosted result is claimed. After this historical pass, the session-expiry index was folded into the single core baseline; development/test databases that ran the earlier split migrations must be recreated rather than upgraded in place. Cleanup duration is checked between statements and does not interrupt running SQL; row accounting excludes foreign-key cascades. No new throughput, multi-host or long-duration performance claim is made.
 
 ## November 7, 2026: earlier verification
 
-This round continued the development and verification that can be run on this machine; the official Hex/npm release and the licence decision are deferred as requested. Real email credentials and a recipient have not been provided, and physical mobile devices, multi-host production environments and 24-hour stability are still pending verification and are not counted as passed results.
+This historical round continued the development and verification that could be run on this machine; at that time the official Hex/npm release and the licence decision were deferred as requested. Real email credentials and a recipient have not been provided, and physical mobile devices, multi-host production environments and 24-hour stability are still pending verification and are not counted as passed results.
 
 ### Verifications that passed
 
@@ -171,7 +200,7 @@ bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-The SDK integration script uses the independent `fyrlet_integration` database and port 4100 by default (`INTEGRATION_PORT` overrides it), and verifies 19 real HTTP / WebSocket scenarios covering multiple devices, concurrent idempotency, isolation, revocation, restart, Run, append, shared client queries, view confirmation and mixed channels. The domain script uses ports 4180/4181 by default, which can be changed as in the example above, and runs the 8 business and web resource scenarios of the four applications in turn. Every script starts and stops its own services; credentials and logs are in `.local/integration/`. The distribution packages and SHA256 manifest are in `.local/releases/` and have not been published to any external registry. Verification of browsers, two nodes and real email is described in the sections below.
+The SDK integration script uses the independent `fyrlet_integration` database and port 4100 by default (`INTEGRATION_PORT` overrides it), and currently verifies 20 real HTTP / WebSocket scenarios covering multiple devices, concurrent idempotency, isolation, revocation, restart, Run, append, shared client queries, view confirmation and mixed channels. The domain script uses ports 4180/4181 by default, which can be changed as in the example above, and runs the 8 business and web resource scenarios of the four applications in turn. Every script starts and stops its own services; credentials and logs are in `.local/integration/`. The distribution packages and SHA256 manifest are in `.local/releases/` and have not been published to any external registry. Verification of browsers, two nodes and real email is described in the sections below.
 
 ## Browser coverage
 
