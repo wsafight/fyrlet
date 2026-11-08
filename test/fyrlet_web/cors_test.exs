@@ -55,7 +55,7 @@ defmodule FyrletWeb.CORSTest do
     assert allowed_headers =~ "authorization"
     assert allowed_headers =~ "x-fyrlet-capabilities"
 
-    assert get_resp_header(conn, "access-control-expose-headers") == ["x-request-id"]
+    assert get_resp_header(conn, "access-control-expose-headers") == ["x-request-id, retry-after"]
   end
 
   test "a preflight from an allowed origin is answered 204 and halted" do

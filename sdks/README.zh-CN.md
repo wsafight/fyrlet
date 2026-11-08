@@ -15,6 +15,7 @@ sdks/
     examples/
     test/
     package.json
+  react/         独立 React 包、Hook 与生命周期 / SSR 测试
   python/        pyproject.toml、src/、tests/、examples/
   go/            go.mod、*.go、examples/
   swift/         Package.swift、Sources/、Tests/、Examples/
@@ -26,7 +27,7 @@ sdks/
 
 未来实际实现某种语言时，再增加 `dart/`、`flutter/` 等目录。当前不创建空 SDK，也不承诺这些语言的交付顺序。每个语言目录拥有自己的依赖、版本和包管理方式，服务端继续位于仓库根目录。
 
-React 适配基于 TypeScript 核心；需要独立发布时可在 `typescript/packages/` 下拆包。React Native 同样复用 TypeScript 核心，并补充前后台、网络恢复与令牌存储适配。Flutter、原生 iOS 和原生 Android 的 SDK 则分别在相应语言目录实现。
+[独立 React 包](react/README.zh-CN.md)基于 TypeScript 核心，以 `@fyrlet/react` 单独分发；[随记](../examples/inbox-react/README.zh-CN.md)串联 Hook 与 OIDC 登录。React Native 同样复用 TypeScript 核心，并补充前后台、网络恢复与令牌存储适配。Flutter、原生 iOS 和原生 Android 的 SDK 则分别在相应语言目录实现。
 
 ## 共享约定
 
@@ -48,4 +49,4 @@ React 适配基于 TypeScript 核心；需要独立发布时可在 `typescript/p
 
 ## 近期顺序
 
-先完善 TypeScript 核心的浏览器验证和契约生成，再根据实际界面开发需要补充 React 适配、共享订阅和 React Native 生命周期验证。其他语言由真实应用需求驱动，避免同时维护多个未验证的客户端。
+React 适配、Presence 契约类型、可选重试与 OIDC Inbox 已完成本地实现。后续浏览器和运行时工作，包括 React Native 生命周期验证，按实际应用需求推进。其他语言由真实应用需求驱动，避免同时维护多个未验证的客户端。

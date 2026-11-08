@@ -6,6 +6,8 @@ Notify、Flow、Agent、Chat 是四个独立 Mix 应用，共用 Fyrlet 的公�
 
 ## 最小收件箱
 
+需要包含查询复用、视图确认和 OIDC 登录的 React 应用时，使用 [随记](inbox-react/README.zh-CN.md)。它复用已有 Inbox API 宿主，增加独立的 Node 登录后端。
+
 先看 [Inbox](inbox/README.zh-CN.md)，通过 Node CLI 理解最小宿主、业务定义、私有数据与实时订阅。[完整接入教程](../docs/zh/TUTORIAL.md)进一步串起后端会话接口与浏览器客户端。
 
 ## 本地启动与登录

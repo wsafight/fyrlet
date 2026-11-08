@@ -9,6 +9,7 @@ import { PROTOCOL_VERSION } from "./protocol.js";
 import type { Identity } from "./protocol.js";
 import { awaitAbortable, RequestExecutor } from "./requests.js";
 import { queryParameters } from "./query.js";
+import { retryOperation, retryPolicy } from "./retry.js";
 import { SubscriptionEntry as Entry } from "./subscription.js";
 import type { Overlay, SubscriptionEvent } from "./subscription.js";
 import type {
@@ -38,7 +39,7 @@ function capabilityHeader(capabilities: Record<string, number>): string {
 }
 
 export function createClient<Contract extends FyrletContract>(options: ClientOptions): Client<Contract> {
-  return new FyrletClient(options) as Client<Contract>;
+  return new FyrletClient(options) as unknown as Client<Contract>;
 }
 
 class FyrletClient implements Client<FyrletContract> {
@@ -52,6 +53,7 @@ class FyrletClient implements Client<FyrletContract> {
   private readonly queryKeys = new Map<Entry, string>();
   private readonly references = new Map<Entry, number>();
   private readonly requests: RequestExecutor;
+  private readonly retryControllers = new Set<AbortController>();
   private socket: Socket | undefined;
   private operationChannel: Channel | undefined;
   private operationJoin: Promise<Channel> | undefined;
@@ -144,6 +146,9 @@ class FyrletClient implements Client<FyrletContract> {
 
   mutate(name: string, input: unknown, options: CallOptions = {}): Mutation<unknown> {
     this.assertOpen();
+    const policy = options.retry ? retryPolicy(options.retry) : undefined;
+    const kind = this.options.operationMetadata?.[name]?.kind;
+    if (policy && (!kind || !["read", "write", "run"].includes(kind))) throw new TypeError("Automatic retry requires explicit read, write or run operation metadata");
     const body = JSON.stringify({ input });
     const key = options.idempotencyKey ?? this.createId();
     const targets = [...new Set([...(options.confirm ?? []), ...(options.optimistic ?? []).map((item) => item.subscription)])].map((subscription) => {
@@ -152,9 +157,21 @@ class FyrletClient implements Client<FyrletContract> {
       return { subscription, entry };
     });
     const predicted = this.predict(options.optimistic);
-    return new MutationTask(key, async () => {
+    return new MutationTask(key, async (report) => {
       try {
-        const receipt = await this.execute(name, body, key, options.signal);
+        let receipt: OperationReceipt<unknown>;
+        if (policy && kind) {
+          const controller = this.requests.controller(options.signal, policy.maxElapsedMs);
+          this.retryControllers.add(controller);
+          try {
+            receipt = await retryOperation(kind, policy, controller.signal,
+              () => this.execute(name, body, key, controller.signal),
+              () => this.lookup(name, body, key, controller.signal), report);
+          } finally {
+            this.retryControllers.delete(controller);
+            this.requests.release(controller);
+          }
+        } else receipt = await this.execute(name, body, key, options.signal);
         for (const { entry, overlay } of predicted) entry.settle(overlay);
         return receipt;
       } catch (error) {
@@ -625,6 +642,7 @@ class FyrletClient implements Client<FyrletContract> {
   }
 
   private failAll(error: ApiError): void {
+    for (const controller of this.retryControllers) controller.abort(error);
     this.detach();
     this.token = undefined;
     for (const entry of this.entries.values()) this.fail(entry, error);

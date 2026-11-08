@@ -23,7 +23,7 @@ defmodule FyrletWeb.CORS do
               "access-control-allow-headers",
               "authorization, content-type, x-project-id, idempotency-key, x-request-id, x-fyrlet-capabilities"
             )
-            |> put_resp_header("access-control-expose-headers", "x-request-id")
+            |> put_resp_header("access-control-expose-headers", "x-request-id, retry-after")
 
           if conn.method == "OPTIONS", do: conn |> send_resp(204, "") |> halt(), else: conn
         else

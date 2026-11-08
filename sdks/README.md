@@ -15,6 +15,7 @@ sdks/
     examples/
     test/
     package.json
+  react/         independent React adapter, hooks and lifecycle/SSR tests
   python/        pyproject.toml, src/, tests/, examples/
   go/            go.mod, *.go, examples/
   swift/         Package.swift, Sources/, Tests/, Examples/
@@ -26,7 +27,7 @@ sdks/
 
 Add directories such as `dart/` or `flutter/` when an implementation actually begins. There are no empty SDKs or promised delivery order. Each language controls its dependencies, version and package manager. The server stays at the repository root.
 
-React adapters build on the TypeScript core and may use `typescript/packages/` if independent releases are needed. React Native also reuses that core, adding lifecycle, network recovery and token storage integration. Flutter, native iOS and native Android SDKs belong in their corresponding language directories.
+The independent [React adapter](react/README.md) builds on the TypeScript core and ships separately as `@fyrlet/react`. The [Suiji](../examples/inbox-react/README.md) exercises its hooks with OIDC login. React Native also reuses the core, adding lifecycle, network recovery and token storage integration. Flutter, native iOS and native Android SDKs belong in their corresponding language directories.
 
 ## Shared conventions
 
@@ -48,4 +49,4 @@ Before implementing a second language, the plan is to extract reusable protocol 
 
 ## Near-term order
 
-Improve browser verification and contract generation in the TypeScript core first. Add React integration, shared-subscription integration and React Native lifecycle verification according to real application needs. Other languages are driven by actual usage rather than maintaining several unverified clients at once.
+React integration, typed Presence contracts, optional retries and the OIDC Inbox example are implemented locally. Further browser/runtime work, including React Native lifecycle verification, follows actual application needs. Other languages are driven by actual usage rather than maintaining several unverified clients at once.

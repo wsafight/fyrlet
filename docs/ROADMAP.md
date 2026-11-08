@@ -2,7 +2,7 @@
 
 English | [简体中文](zh/ROADMAP.md)
 
-Updated November 8, 2026. This document sets priorities, dependencies and completion criteria without committing to release dates. The project has not launched; changes may replace interfaces directly, with the server, SDK, examples and documentation updated together. Milestones 1A and 1B and optional client query reuse are delivered. React integration and the remaining milestones are planned. Capabilities and verification records are maintained in [STATUS.md](STATUS.md) and [ACCEPTANCE.md](ACCEPTANCE.md).
+Updated November 8, 2026. This document sets priorities, dependencies and completion criteria without committing to release dates. The project has not launched; changes may replace interfaces directly, with the server, SDK, examples and documentation updated together. Milestones 1–5 are delivered locally, including React bindings, contract types, bounded retries and an OIDC login example. External IdP deployments, production operation and publication retain separate acceptance boundaries. Capabilities and verification records are maintained in [STATUS.md](STATUS.md) and [ACCEPTANCE.md](ACCEPTANCE.md).
 
 ## Direction
 
@@ -25,7 +25,7 @@ P0 addresses outcomes and consistency, P1 improves application development, and 
 ## Execution order and decision points
 
 - Preserve the delivered 1A outcome categories, idempotency-key lifecycle and receipt recovery, and 1B's correlated authoritative refresh. A committed operation and a confirmed view remain separately observable.
-- Build on query reuse with a React adapter and page. Contract types and login integration can proceed independently; validate a minimum workflow in a real application before extending each API.
+- Query reuse now supports a React adapter and Inbox page with typed calls and an OIDC login bridge. Further API changes should follow actual application feedback.
 - Bounded retries require 1A and endpoint idempotency guarantees, without waiting for 1B. Applications separately choose whether to wait for updated views; a committed write and a caught-up UI remain distinct results.
 - Define observable behavior, resource bounds and failure handling before implementing each deliverable. Undecided work remains planned; [STATUS.md](STATUS.md) records implementation progress.
 
@@ -55,14 +55,14 @@ Correlation identifiers match requests and responses. Channel `seq`, Observer re
 
 ## Milestone 2: shared client queries and React integration
 
-Progress: **query reuse delivered; React, selectors and SSR integration pending.** With `shareSubscriptions: true`, identical snapshot and append queries share one active Entry and Channel. Independent handles use reference counting, the final release removes the entry immediately, and active entries default to a limit of 100. Canonical JSON parameters have a 64 KiB encoded limit.
+Progress: **delivered.** The core provides `selectSubscription`; the independent [React package](../sdks/react/README.md) provides a Provider, `useQuery` and deterministic empty SSR state. The [Suiji page](../examples/inbox-react/README.md) exercises the complete workflow. Core sharing and the React store default to at most 100 active queries, limit canonical JSON parameters to 64 KiB and immediately clean up the final reference.
 
-Planned deliverables:
+Delivered:
 
 - **Delivered:** an optional reference-counted query store within one client, keyed by identity context, query name, structurally defined parameters and delivery mode.
 - Pure selectors and a separate React adapter using `useSyncExternalStore`. Keep the core SDK independent of UI frameworks.
 - An Inbox or Chat React page demonstrating shared queries, parameter changes, optimistic updates and connection state.
-- Defined SSR initial state and request isolation. The initial implementation can use a deterministic empty state.
+- Defined SSR initial state and request isolation, using a deterministic empty initial state.
 
 Completion criteria:
 
@@ -76,9 +76,9 @@ The first implementation reuses identical query results and manages Presence han
 
 ## Milestone 3: complete contract types
 
-The contract generator mainly covers operation and subscription inputs and outputs. Complete types for existing capabilities to reduce string-based calls and hand-written definitions.
+Progress: **delivered.** Generated contracts include operation/subscription inputs and outputs, Presence names, parameters and meta, operation kinds, and an explicit `operationMetadata` constant. `startRun` restricts names by kind; legacy hand-written contracts without the new fields remain usable.
 
-Planned deliverables:
+Delivered:
 
 - Generated Presence room names, parameters and meta types, plus operation kinds.
 - Explicit runtime metadata where needed for capability checks and retry policy. Treat TypeScript types and runtime policy separately.
@@ -90,9 +90,9 @@ Completion criteria: invalid names, meta and inputs fail type checking; valid ex
 
 ## Milestone 4: bounded transient-failure retries
 
-After defining milestone 1A outcome semantics, provide disabled-by-default retries for temporary network failures. Configure retries and waiting for updated subscriptions separately.
+Progress: **delivered.** `CallOptions.retry` is disabled by default and requires explicit operation metadata. Read/write/run calls are eligible; signal, cancel and ingest are excluded. Bounds are at most 10 attempts and 60 seconds total, defaulting to 3 attempts / 15 seconds. Reads and definitely rejected calls can be attempted again. Once a write or Run becomes uncertain, subsequent attempts only look up its receipt; missing or expired receipts remain unknown, preventing replay beyond retention. `pending.retry` exposes progress; view confirmation remains separate.
 
-Planned deliverables:
+Delivered:
 
 - A fixed idempotency key, attempt and total-time limits, backoff with jitter and server retry-after handling.
 - A defined set of eligible managed calls, with signals, ingest and other entry points reviewed independently.
@@ -105,6 +105,8 @@ Interruption or timeout does not cancel a server transaction. External effects r
 ## Milestone 5: login bridge and application acceptance
 
 Provide an example where the host backend derives Fyrlet sessions from its verified login context, covering browser login, renewal and logout. Existing identity systems continue to own passwords, recovery and OAuth authorization services.
+
+Progress: **local example delivered.** Suiji uses OIDC authorization code, PKCE and signed ID tokens, covering renewal, logout, revocation, account changes, cross-tab cleanup and issuer isolation. Tests run the real Fyrlet API and a signed local IdP; external provider deployment and multi-instance session storage remain host responsibilities.
 
 Completion criteria:
 
@@ -144,4 +146,4 @@ Ship each milestone independently with public interfaces, boundaries, relevant t
 
 Reuse current tests, telemetry and benchmarks. Verify new reliability guarantees through failures and races. State workload, topology and measurement scope for performance claims, following [PERFORMANCE.md](PERFORMANCE.md). Update [STATUS.md](STATUS.md) on completion and record evidence in [ACCEPTANCE.md](ACCEPTANCE.md).
 
-Next, add the React adapter and a page exercising query reuse and view confirmation. Contract types and the login example can proceed independently. Production load and multi-host failure verification retain their separate acceptance boundaries.
+Next, iterate on delivered APIs from application feedback and collect the remote CI, external IdP, production load and multi-host failure evidence required by the chosen release scope. P2 evaluations retain their individual triggers.

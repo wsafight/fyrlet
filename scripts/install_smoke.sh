@@ -33,5 +33,6 @@ mix test
 mkdir -p "$task_temp/consumer"
 cd "$task_temp/consumer"
 npm init -y >/dev/null
-npm install "$task_root/.local/releases/fyrlet-client-0.1.0.tgz" --ignore-scripts --no-audit --no-fund >/dev/null
+npm install "$task_root/.local/releases/fyrlet-client-0.1.0.tgz" "$task_root/.local/releases/fyrlet-react-0.1.0.tgz" react@19.3.1 --ignore-scripts --no-audit --no-fund >/dev/null
 node --input-type=module -e 'import {createClient} from "@fyrlet/client"; import {createSessionService} from "@fyrlet/client/server"; if(typeof createClient !== "function" || typeof createSessionService !== "function") process.exit(1); console.log("Packed SDK imports passed")'
+node --input-type=module -e 'import {FyrletProvider,useQuery} from "@fyrlet/react"; if(typeof FyrletProvider !== "function" || typeof useQuery !== "function") process.exit(1); console.log("Packed React adapter imports passed")'

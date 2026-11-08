@@ -1,5 +1,7 @@
 import { immutable } from "./delta.js";
 
+export function queryKey(value: unknown): string { return queryParameters(value).key; }
+
 export function queryParameters(value: unknown): { key: string; value: unknown } {
   const seen = new Set<object>();
   function encode(value: unknown): string {

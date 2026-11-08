@@ -1,5 +1,49 @@
 # 本地验收记录
 
+## 2026-11-08：路线图回归测试扩充
+
+本轮在 `feat/react-contract-auth-retry` 新增 **108 项可执行测试**，另补充编译期契约断言；未修改生产实现。下表统计完整 SDK、React、宿主单元测试，以及包含父用例的浏览器测试；更早的实现记录保留当时数量。
+
+| 测试集 | 原数量 → 当前数量 | 单元测试行 / 分支覆盖率 | 命令 / 证据 |
+| --- | --- | --- | --- |
+| TypeScript SDK | 253 → **304 项通过**（+51） | **99.27% / 95.66%** | `npm --prefix sdks/typescript run test:coverage`；`.local/roadmap-sdk-coverage.log` |
+| React 适配包 | 7 → **20 项通过**（+13） | **100% / 100%** | `npm --prefix sdks/react run test:coverage`；`.local/roadmap-react-coverage.log` |
+| OIDC 宿主桥接 | 16 → **56 项通过**（+40） | **100% / 98.26%** | `npm --prefix examples/inbox-react run test:coverage`；`.local/roadmap-auth-coverage.log` |
+| 真实浏览器流程 | 10 → **14 项通过**（+4） | 不计入单元测试覆盖率 | `bash scripts/react.sh`；`.local/roadmap-browser-tests.log` |
+
+SDK 回归覆盖重试默认值与非法预算、Run 受理回执恢复、临时与永久错误、并发幂等键及取消隔离、其他调用认证失败时终止退避、回执查询期间取消 / 关闭、HTTP 日期及数字重试等待、选择器生命周期和状态元数据、确定性生成、全部操作种类，以及嵌套 schema / 默认值语义。编译期断言验证操作种类筛选、Run 输入与结果、Presence 必填参数和 meta、旧契约兼容，以及 React 投影数据与原始订阅句柄的类型。
+
+React 回归覆盖无需 Provider 的直接调用、缺失 Provider 报错、客户端 / 查询名 / 模式切换、旧私有消息隔离、选择器切换、等价参数、独立监听释放、连续 120 次参数切换、已有客户端数据时的 SSR、非法及超大 JSON、重复释放和满容量时共享查询。OIDC 回归覆盖回调歧义、state 到期、签名 / 声明失败、发现及配置拒绝、机密客户端认证、错误项目令牌、签发与轮换失败、并发刷新、待登录 / 宿主会话容量上限、到期、撤销并发与退避，以及关闭和签发竞态。假时钟身份测试的签名 `iat` 使用同一时钟生成。
+
+新增浏览器场景验证生产静态资源与源码边界、永久错误时乐观回滚、自动恢复耗尽后的手动恢复，以及退避期间退出。测试连接真实 PostgreSQL 和 Fyrlet，使用签名本地测试 IdP。未知预测仍遵循文档中的显示 TTL；手动恢复断言只执行一次业务写入，最终只显示一条记录。不生成截图。
+
+Node 覆盖率仅统计单元测试加载的 SDK / React `dist/**/*.js` 和宿主 `server/*.mjs` 模块，不覆盖浏览器构建产物、Elixir 或生产身份服务。CI 已改为运行这三组覆盖率命令和浏览器测试；远程 CI 仍待执行。
+
+SDK、React 类型检查及 **20 项真实 HTTP/WebSocket 集成测试**也已通过（`INTEGRATION_PORT=4203 bash scripts/integration.sh`；`.local/roadmap-integration-tests.log`）。文档站和本地产物随本轮扩充记录重新构建。
+
+## 2026-11-08：React、契约类型、登录桥接与有界重试
+
+分支 `feat/react-contract-auth-retry` 在本地完成路线图里程碑 2–5：独立 React 适配包及 Inbox 页面、Presence 与操作种类类型生成、宿主 OIDC 登录桥接，以及可选的有界重试。下方可靠性记录属于更早一轮，保留当时的数量。
+
+| 验证 | 结果 | 命令 / 证据 |
+| --- | --- | --- |
+| Elixir 核心、示例与独立包 | **764 项通过**：核心 694、示例 35、包 35 | `bash scripts/test_all.sh`；`.local/roadmap-server-tests.log` |
+| TypeScript SDK | **253 项通过**，类型检查通过 | `npm --prefix sdks/typescript test`、`npm --prefix sdks/typescript run typecheck`；`.local/roadmap-sdk-tests.log` |
+| React 适配包 | **7 项通过**，类型检查通过 | `npm --prefix sdks/react test`、`npm --prefix sdks/react run typecheck`；`.local/roadmap-react-tests.log` |
+| OIDC 宿主桥接 | **16 项通过** | `npm --prefix examples/inbox-react test`；`.local/roadmap-auth-tests.log` |
+| 真实 HTTP / WebSocket 集成 | **20 项通过**，含响应丢失后的回执恢复与不重放验证 | `INTEGRATION_PORT=4203 bash scripts/integration.sh`；`.local/roadmap-integration-tests.log` |
+| 浏览器流程 | **10 项通过**：1 个父用例与 9 个场景，连接真实 PostgreSQL、Fyrlet 和签名测试 OIDC 提供方 | `bash scripts/react.sh`；`.local/roadmap-browser-tests.log` |
+| CORS | **10 项通过**，含向浏览器暴露 `Retry-After` | `mix test test/fyrlet_web/cors_test.exs`；`.local/roadmap-cors-tests.log` |
+| Elixir 质量与契约一致性 | 格式、无警告编译、Inbox 新导出契约比较通过 | `mix format --check-formatted`、`mix compile --warnings-as-errors`、`node scripts/check_contract.mjs .local/roadmap-contract.json` |
+| 生产示例与文档 | 应用生产构建、文档站构建及链接检查通过 | `npm --prefix examples/inbox-react run build`、`npm --prefix site run build`、`npm --prefix site run check`；`.local/roadmap-web-build.log`、`.local/roadmap-site-build.log`、`.local/roadmap-site-check.log` |
+| 分发 | 构建 3 个本地产物，核心与 React 安装包在外部消费者中导入通过 | `bash scripts/package.sh`、`bash scripts/install_smoke.sh`；`.local/roadmap-package.log`、`.local/roadmap-install.log`、`.local/releases/manifest.json` |
+
+React 验证覆盖多组件共享与最后引用释放、参数规范化、客户端及模式隔离、Strict Mode、未提交渲染、选择器、查询数量上限，以及一致的 SSR / hydration 初态。浏览器场景覆盖登录、共享订阅、乐观写入与权威视图确认、提交后丢失响应、仅响应头提供的重试等待、双标签页、参数切换、断线重连、令牌刷新、退出、用户 / issuer 隔离和宿主撤销。浏览器流程保留窄屏布局检查，不生成截图。
+
+重试默认关闭，启用时必须提供操作元数据；所有尝试固定序列化输入与幂等键。写入或 Run 一旦结果未知，后续只恢复回执；回执不存在或过期时继续保持未知，不重放业务操作。测试覆盖尝试次数与总时长上限、取消、认证失败和 `Retry-After`；操作结果与视图确认仍分别报告。
+
+[Inbox 配置说明](../../examples/inbox-react/README.zh-CN.md)提供真实身份服务的接入方式。本地 OIDC 测试使用签名测试提供方，验证 PKCE、state、nonce、issuer / audience 校验和服务端持有会话，不等于完成生产身份服务验收。宿主在单进程内维护有界会话，退出、到期或宿主作废会清理登录态；外部 IdP 撤销仍依赖宿主作废或到期。远程 CI、实体设备、多主机部署、24 小时稳定性和注册表发布不计入本次验收。
+
 ## 2026-11-08：可靠性修复与订阅能力补齐
 
 分支 `fix/reliability-and-subscription-improvements` 完成业务 403 隔离、监听器异常隔离、关联式权威视图确认、可选客户端查询复用、带续排和指标的清理预算、数据库就绪探针与核心 CI。React 接入、生产容量和远程 CI 执行不计入本轮本地验收。下方按日期保留旧轮次的数量与状态。

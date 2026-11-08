@@ -39,7 +39,13 @@ export async function request<Data>(
     if (body.error && (typeof body.error.code !== "string" || typeof body.error.message !== "string")) {
       throw new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid error response" }, response.status);
     }
-    throw new ApiError(body.error ?? { code: "HTTP_ERROR", message: "The request was rejected" }, response.status, body.request_id);
+    const error = body.error ?? { code: "HTTP_ERROR", message: "The request was rejected" };
+    const header = response.headers.get("retry-after");
+    const delay = header === null ? NaN : /^\d+(\.\d+)?$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now();
+    throw new ApiError({ ...error, details: {
+      ...error.details,
+      ...(Number.isFinite(delay) && delay >= 0 ? { retry_after_ms: Math.max(delay, typeof error.details?.retry_after_ms === "number" ? error.details.retry_after_ms : 0) } : {}),
+    } }, response.status, body.request_id);
   }
   if (!("data" in body)) throw new ApiError({ code: "PROTOCOL_ERROR", message: "Missing response data" }, response.status);
   return decode(body);

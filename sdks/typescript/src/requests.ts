@@ -54,10 +54,10 @@ export class RequestExecutor {
     }
   }
 
-  controller(signal?: AbortSignal): ManagedController {
+  controller(signal?: AbortSignal, timeoutMs = this.timeoutMs): ManagedController {
     const controller = new AbortController() as ManagedController;
     const abortExternal = () => controller.abort(signal?.reason);
-    const timer = setTimeout(() => controller.abort(new ApiError({ code: "TIMEOUT", message: "The request timed out", retryable: true })), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(new ApiError({ code: "TIMEOUT", message: "The request timed out", retryable: true })), timeoutMs);
     controller.dispose = () => { clearTimeout(timer); signal?.removeEventListener("abort", abortExternal); };
     if (signal) {
       if (signal.aborted) controller.abort(signal.reason);

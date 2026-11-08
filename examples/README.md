@@ -6,6 +6,8 @@ Notify, Flow, Agent and Chat are four standalone Mix applications using Fyrlet's
 
 ## Minimal inbox
 
+For a complete React application with query reuse, view confirmation and verified OIDC login, use [Suiji](inbox-react/README.md). It reuses the existing Inbox API host and adds an independent Node login backend.
+
 Start with [Inbox](inbox/README.md) to see a small host application, business definitions, private data and live subscriptions through the Node CLI. The [integration tutorial](../docs/TUTORIAL.md) connects that host to a backend session endpoint and a browser client.
 
 ## Local startup and login

@@ -1,0 +1,30 @@
+{
+  "name": "fyrlet-inbox-react-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env server/index.mjs",
+    "build": "tsc --noEmit && vite build",
+    "start": "node --env-file-if-exists=.env server/index.mjs --production",
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --experimental-test-coverage --test --test-coverage-include=\"server/*.mjs\" test/*.test.mjs",
+    "test:e2e": "node --test test/browser.e2e.mjs"
+  },
+  "dependencies": {
+    "@fyrlet/client": "file:../../sdks/typescript",
+    "@fyrlet/react": "file:../../sdks/react",
+    "jose": "6.2.15",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.6"
+  },
+  "engines": {"node": ">=22.12"}
+}

@@ -2,6 +2,8 @@
 
 鉴权分为身份与会话、授权执行点、业务授权规则和新增入口的凭证方案四块，分层边界见 [ARCHITECTURE.md](ARCHITECTURE.md#鉴权的分层边界)。
 
+可运行的 [随记 登录桥接](../../examples/inbox-react/README.zh-CN.md)通过授权码、PKCE 和已验证 ID token 接入配置的 OIDC 服务，覆盖续期、退出、撤销、换号与客户端清理，并明确单进程会话存储和外部 IdP 撤销的生效边界。
+
 ## 身份分层
 
 | 身份 | 凭证 | 使用位置 | 能力 |

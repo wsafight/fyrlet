@@ -4,7 +4,7 @@
 
 SDK 核心提供业务调用与实时订阅，不依赖 React、浏览器存储或 Cookie 登录。当前包为 private 包，构建产物在 dist，支持 `npm pack` 后本地安装，尚未发布到 npm。
 
-本 SDK 位于 `sdks/typescript/`，供 JavaScript / TypeScript 应用使用；多语言布局和新增 SDK 的要求见 [SDK 总览](../README.zh-CN.md)。React 适配包后续基于本 SDK 实现，React Native 的运行时适配也属于 TypeScript 生态。
+本 SDK 位于 `sdks/typescript/`，供 JavaScript / TypeScript 应用使用；多语言布局和新增 SDK 的要求见 [SDK 总览](../README.zh-CN.md)。[独立 React 包](../react/README.zh-CN.md)和[带 OIDC 的 Inbox 页面](../../examples/inbox-react/README.zh-CN.md)已可使用；React Native 的运行时适配也属于 TypeScript 生态。
 
 从服务端到浏览器的完整流程见[接入教程](../../docs/zh/TUTORIAL.md)。
 
@@ -49,7 +49,7 @@ await client.call("inbox.update", {
 });
 ```
 
-SDK 为每次 call 自动生成幂等键，认证失效最多刷新一次并复用该键。网络中断后的业务重试由调用者决定，需要显式复用同一键。CONFLICT 不自动重试。宿主登录失效时，getToken 应抛出 code 为 UNAUTHENTICATED 的 ApiError，结束自动恢复并清空订阅数据。
+SDK 为每次 call 自动生成幂等键，认证失效最多刷新一次并复用该键。网络重试默认关闭；手动重复调用时需要显式复用原键。CONFLICT 不自动重试。宿主登录失效时，getToken 应抛出 code 为 UNAUTHENTICATED 的 ApiError，结束自动恢复并清空订阅数据。
 
 默认通过 HTTP 调用业务。需要复用实时连接时可选择 Socket RPC：
 
@@ -67,6 +67,24 @@ Socket 模式的调用共用一个 operations channel，与订阅共用连接；
 ApiError 包含 code、message、details、retryable、status、requestId。HTTP 与调用等待默认 10 秒超时，可用 timeoutMs 调整；AbortSignal 和 close 可以取消客户端等待。开始发送后的不确定错误会抛出 `OutcomeUnknownError`，保留操作名、幂等键与原始原因。先恢复回执，再决定是否重新发起业务调用。
 
 `client.mutate(name, input, options?)` 返回包含 `idempotencyKey`、`result`、`getState()`、`onChange()` 与 `recover()` 的句柄，区分 `pending`、读完成 `completed`、写提交 `committed`、Run / ingest 受理 `accepted`、确定失败 `failed` 与 `unknown`。`call` 仍直接返回业务结果。`mutation.recover()` 或 `client.recover(name, originalInput, { idempotencyKey })` 只查询 write/run 回执，不执行业务；回执缺失或过期时保持未知。示例、持久化与确认边界见[操作结果与恢复](../../docs/zh/MUTATIONS.md)。
+
+## 可选的有限重试
+
+将生成的 `operationMetadata` 传入 `createClient`，再按调用或 mutation 启用 `retry`：
+
+```ts
+import { operationMetadata } from "@fyrlet/client/example-contract";
+
+const client = createClient<AppContract>({ endpoint, projectId, getToken, operationMetadata });
+const mutation = client.mutate("inbox.add", { text: "Hello" }, {
+  retry: { maxAttempts: 3, maxElapsedMs: 15_000, baseDelayMs: 250, maxDelayMs: 5_000 },
+});
+await mutation.result;
+```
+
+仅显式声明 read/write/run 元数据的调用可启用；signal、cancel、ingest 不自动重试。默认值如上；尝试次数限 1–10，总时长限 1–60,000 毫秒。指数退避采用全抖动，数字或 HTTP 日期形式的 `Retry-After` 和 `details.retry_after_ms` 作为最小等待时间；服务端 CORS 暴露 `Retry-After`。认证刷新复用冻结输入和原键；次数统计外层尝试，每次内部最多刷新一次认证。
+
+短暂读失败与确定拒绝后的调用可以重新尝试。写入或 Run 发送后结果未知时，后续仅查询原回执；缺失、过期或已清理仍为未知，不重放业务。因此，服务端未收到的写入也可能保持未知，由应用决定如何对账。权限、校验、冲突和协议错误不触发后续尝试；取消、总时限、认证失效和 client 关闭会停止等待与后续尝试。恢复失败保留原未知结果。`mutation.getState()` 的 `pending.retry` 暴露次数、阶段（`call` / `recover`）及可选的下次尝试时间。成功后的视图确认单独执行，不提供持久重试队列。
 
 ## 订阅状态
 
@@ -180,7 +198,7 @@ SDK 在 snapshot / append Channel 自动协商 `view_confirmation=1`，每份活
 
 创建 client 时设置 `shareSubscriptions: true`，复用相同的 snapshot / append 查询。`maxSharedSubscriptions` 限制活跃共享条目数，默认 100。共享键在当前 client 身份上下文内包含项目、名称、模式和规范化 JSON 参数；对象键顺序不影响相等，数组顺序保留。参数会复制冻结，编码大小最多 64 KiB；拒绝 undefined、非有限数、循环引用和自定义对象。
 
-每次 subscribe 返回独立句柄与监听注册；释放一个句柄不影响其他句柄，最后一个释放后立即离开 Channel 并删除条目，不保留无引用缓存。Presence 单独管理。认证失败和身份变化会清空私有状态。此选项复用同一 client 的查询，服务端 Observer 共享仍遵守应用契约。React 适配与 SSR 接入仍待开发。
+每次 subscribe 返回独立句柄与监听注册；释放一个句柄不影响其他句柄，最后一个释放后立即离开 Channel 并删除条目，不保留无引用缓存。Presence 单独管理。认证失败和身份变化会清空私有状态。此选项复用同一 client 的查询，服务端 Observer 共享仍遵守应用契约。[独立 React 包](../react/README.zh-CN.md)提供 Hook 和确定的空 SSR 状态。`selectSubscription(source, selector, isEqual?)` 提供纯投影并复用相等的选中值，`queryKey(params)` 暴露相同的规范化 JSON 参数键。
 
 ## 在线状态（能力 `presence`）
 
@@ -197,7 +215,7 @@ room.self();                           // 自己的 subject_id（加入后可用
 room.unsubscribe();                    // 离开房间，别人会看到你消失
 ```
 
-- 房间名、参数和 `meta` 的 schema 来自契约的 `presence` 段（见 [PROTOCOL.md](../../docs/zh/PROTOCOL.md)）。**生成的类型暂不覆盖这一段**，所以方法按字符串名字调用。
+- 房间名、参数和 `meta` 从契约的 `presence` 段生成（见 [PROTOCOL.md](../../docs/zh/PROTOCOL.md)）。`subscribePresence`、`update` 和名册 meta 均推导对应类型，错误名称和输入会在类型检查时失败。没有 presence 段的旧契约保留字符串 API。操作 `kind` 为旧契约保持可选，生成契约按 kind 限制 `startRun` 名称；运行时重试策略显式读取独立导出的 `operationMetadata` 常量。
 - 名册按 `ref` 增量更新，重复收到同一个 diff 无害。重连后会以**最新一次 `update` 的 meta** 重新加入，并整体替换名册，不会留下过期成员。
 - `update` 受服务端频率限制，过于频繁会以可重试的 `LIMIT_EXCEEDED` 拒绝；meta 不符合 schema 返回 `VALIDATION_FAILED`；房间未就绪时返回 `NOT_READY`。
 - 匿名会话不能进入房间；房间里的所有成员能看到彼此的 `subject_id` 和 `meta`。

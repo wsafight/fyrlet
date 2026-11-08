@@ -46,6 +46,8 @@ After dispatch, a lost connection, timeout, cancelled wait, invalid response or 
 
 `AbortSignal` and `close()` stop waiting; they do not undo a submitted transaction. Interrupted business calls are not automatically replayed. Run signal/cancel and session-service requests do not use this mutation lifecycle.
 
+Optional [bounded retries](../sdks/typescript/README.md#opt-in-bounded-retries) require explicit runtime operation metadata and `CallOptions.retry`. While active, `pending.retry` exposes the attempt, call/recover phase and next retry time. An uncertain write or Run switches exclusively to receipt queries; it never resumes business replay after missing or expired receipts. Cancellation and deadlines preserve any earlier unknown outcome. The final successful operation can then confirm views independently.
+
 ## Recovering a result
 
 `mutation.recover({ signal? })` only queries a stored receipt. Concurrent recovery calls on one handle share the current query and its first caller's signal. Recovery has a fresh deadline and does not reuse the original call's abort signal. A terminal handle returns its existing state without querying. A recovery error rejects its promise while preserving the unknown state.

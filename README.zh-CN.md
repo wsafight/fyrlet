@@ -8,6 +8,7 @@
 - **项目与用户隔离**：服务密钥换取短期用户令牌，会话与授权在每次推送前复核。
 - **可靠写入**：事务、幂等键、Oban 持久化的失效通知。
 - **实时订阅**：完整快照加 ACK，可协商字段级增量，断线后取回当前快照。
+- **React 应用流程**：[类型化共享查询 Hook](sdks/react/README.zh-CN.md)与[带 OIDC 登录的 Inbox](examples/inbox-react/README.zh-CN.md)，串联乐观更新、视图确认和可选重试。
 - **可选能力**：持久 Run 与 Effect、追加订阅、共享订阅、在线状态、插件、项目配额、Prometheus 指标。
 
 状态：已验证单节点、Node SDK、四个领域应用和同机双节点；**尚未发布到 Hex / npm**，生产容量未验证（见[验收记录](docs/zh/ACCEPTANCE.md)）。
