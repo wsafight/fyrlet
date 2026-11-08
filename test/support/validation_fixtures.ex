@@ -31,6 +31,11 @@ defmodule Fyrlet.ValidationFixtures.StaticRun do
   def run(_name, _actor, _input), do: {:ok, steps: []}
   @impl true
   def step(_name, _input, _context), do: {:ok, %{}}
+  @impl true
+  def definition_version(_name), do: "1"
+  @impl true
+  def implementation("demo.run", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
 end
 
 defmodule Fyrlet.ValidationFixtures.DynamicRun do
@@ -39,6 +44,31 @@ defmodule Fyrlet.ValidationFixtures.DynamicRun do
   def advance(_name, _state, _context), do: {:done, %{}}
   @impl true
   def step(_name, _input, _context), do: {:ok, %{}}
+  @impl true
+  def definition_version(_name), do: "1"
+  @impl true
+  def implementation("demo.run", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+end
+
+defmodule Fyrlet.ValidationFixtures.RunWithoutVersion do
+  use Fyrlet.ValidationFixtures.Base
+  @impl true
+  def run(_name, _actor, _input), do: {:ok, steps: []}
+  @impl true
+  def step(_name, _input, _context), do: {:ok, %{}}
+  @impl true
+  def implementation(_name, _version), do: __MODULE__
+end
+
+defmodule Fyrlet.ValidationFixtures.RunWithoutImplementation do
+  use Fyrlet.ValidationFixtures.Base
+  @impl true
+  def run(_name, _actor, _input), do: {:ok, steps: []}
+  @impl true
+  def step(_name, _input, _context), do: {:ok, %{}}
+  @impl true
+  def definition_version(_name), do: "1"
 end
 
 defmodule Fyrlet.ValidationFixtures.RunWithoutStep do
@@ -65,12 +95,22 @@ defmodule Fyrlet.ValidationFixtures.SharedWithoutMembership do
   def shared_query(_name, _actor, _input), do: {:ok, [], %{}}
 end
 
+defmodule Fyrlet.ValidationFixtures.SharedWithoutVersion do
+  use Fyrlet.ValidationFixtures.Base
+  @impl true
+  def shared_query(_name, _actor, _input), do: {:ok, [], %{}}
+  @impl true
+  def membership(_name, _actor, _input), do: :member
+end
+
 defmodule Fyrlet.ValidationFixtures.Shared do
   use Fyrlet.ValidationFixtures.Base
   @impl true
   def shared_query(_name, _actor, _input), do: {:ok, [], %{}}
   @impl true
   def membership(_name, _actor, _input), do: :member
+  @impl true
+  def definition_version(_name), do: "1"
   @impl true
   def stream(_name, _actor, _input), do: {:ok, "test:stream"}
 end

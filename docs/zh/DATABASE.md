@@ -81,7 +81,7 @@ Run 删除时，步骤、尝试、信号、事件、Effect 都级联删除。
 
 `Fyrlet.PruneWorker`（Oban 定时任务，每 10 分钟）使用有界批次和共享行数 / 时间预算，达到预算后安排续排并轮换起始类别。时间在语句之间检查，不中断运行中的 SQL；行数统计不含外键级联。配置与指标见 [OPERATIONS.md](OPERATIONS.md)。
 
-`20261108000000_index_session_expiry` 迁移为 `sessions.expires_at` 增加到期清理索引；已有数据库执行 `mix fyrlet.migrate` 应用。
+唯一的预发布核心基线已包含到期清理、会话签发速率及热点路径索引，包括 `sessions.expires_at`。执行过旧拆分迁移的开发／测试数据库必须重建，不提供原地兼容迁移。
 
 | 表 | 清理条件 | 说明 |
 | --- | --- | --- |

@@ -54,6 +54,9 @@ Fyrlet 是基于 Phoenix 的实时应用框架：在服务端定义业务操作�
 | --- | --- |
 | [DATABASE.md](DATABASE.md) | 表结构设计：约定、约束与索引的作用、清理与保留、宿主表的约定 |
 | [OPERATIONS.md](OPERATIONS.md) | 运维命令、数据保留与容量、项目配额、遥测与 Prometheus 指标、双节点部署 |
+| [STAGING.md](STAGING.md) | 显式启用的真实 staging／OIDC 浏览器与 SDK 验收、私有配置及结果边界 |
+| [MULTIHOST.md](MULTIHOST.md) | 运维控制的跨物理主机故障演练、拓扑声明与控制钩子 |
+| [STABILITY.md](STABILITY.md) | 同机长时采样、显式资源／积压阈值与 24 小时证据边界 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | 排查启动、Origin、登录、订阅、冲突和外部 Effect |
 | [PERFORMANCE.md](PERFORMANCE.md) | 与 Meteor 的同资源对照，单核剖析，共享房间与追加流的端到端对照 |
 | [OPTIMIZATIONS.md](OPTIMIZATIONS.md) | 优化记录：做法、证据、回退的试验与决定不做的方向 |

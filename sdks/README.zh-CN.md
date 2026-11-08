@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-`sdks/` 收纳 Fyrlet 的客户端 SDK，按语言建立子目录，每个 SDK 独立构建、测试和发布。[TypeScript SDK](typescript/README.zh-CN.md)（本地包名 `@fyrlet/client`）最完整；[Python](python/README.zh-CN.md)（`fyrlet`）、[Go](go/README.zh-CN.md)（`github.com/wsafight/fyrlet/sdks/go`）、[Swift](swift/README.zh-CN.md)（`Fyrlet`）、[.NET](dotnet/README.zh-CN.md)（`Fyrlet`）、[Rust](rust/README.zh-CN.md)（`fyrlet`）、[Java](java/README.zh-CN.md)（`com.fyrlet:fyrlet`）和 [Kotlin](kotlin/README.zh-CN.md)（`com.fyrlet:fyrlet-kotlin`）SDK 覆盖会话交换、带幂等与恢复的业务调用和可恢复订阅，Run、append、presence、乐观写入和 Socket RPC 暂时只有 TypeScript 提供。所有包均未发布，npm scope 可用性尚未确认。
+`sdks/` 收纳 Fyrlet 的客户端 SDK，按语言建立子目录，每个 SDK 独立构建和测试。首发正式范围为 Fyrlet 核心、[TypeScript SDK](typescript/README.zh-CN.md)（`@fyrlet/client`）与 [React 适配包](react/README.zh-CN.md)（`@fyrlet/react`）。[Python](python/README.zh-CN.md)（`fyrlet`）、[Go](go/README.zh-CN.md)（`github.com/wsafight/fyrlet/sdks/go`）、[Swift](swift/README.zh-CN.md)（`Fyrlet`）、[.NET](dotnet/README.zh-CN.md)（`Fyrlet`）、[Rust](rust/README.zh-CN.md)（`fyrlet`）、[Java](java/README.zh-CN.md)（`com.fyrlet:fyrlet`）和 [Kotlin](kotlin/README.zh-CN.md)（`com.fyrlet:fyrlet-kotlin`）SDK 保持**实验性**：继续执行构建／集成检查，但不属于首次发布或其兼容承诺。它们覆盖会话交换、带幂等与恢复的业务调用和可恢复订阅，Run、append、presence、乐观写入和 Socket RPC 暂时只有 TypeScript 提供。目前所有包均未正式发布，注册表所有者／scope 可用性仍是外部发布门槛。
 
 ## 目录约定
 

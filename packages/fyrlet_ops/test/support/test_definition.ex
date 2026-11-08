@@ -23,5 +23,12 @@ defmodule FyrletOps.TestDefinition do
     do: {:ok, steps: [%{type: :wait, name: "hold", signal: "go", timeout_ms: 86_400_000}]}
 
   @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
+  def implementation("ops.hold", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+
+  @impl true
   def step(_name, _input, _context), do: {:ok, %{}}
 end

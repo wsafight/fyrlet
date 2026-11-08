@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-SDK 核心提供业务调用与实时订阅，不依赖 React、浏览器存储或 Cookie 登录。当前包为 private 包，构建产物在 dist，支持 `npm pack` 后本地安装，尚未发布到 npm。
+SDK 核心提供业务调用与实时订阅，不依赖 React、浏览器存储或 Cookie 登录。`@fyrlet/client` 属于首发正式范围，构建产物在 dist，支持 `npm pack` 后本地安装，目前尚未发布到 npm。
 
 本 SDK 位于 `sdks/typescript/`，供 JavaScript / TypeScript 应用使用；多语言布局和新增 SDK 的要求见 [SDK 总览](../README.zh-CN.md)。[独立 React 包](../react/README.zh-CN.md)和[带 OIDC 的 Inbox 页面](../../examples/inbox-react/README.zh-CN.md)已可使用；React Native 的运行时适配也属于 TypeScript 生态。
 
@@ -215,7 +215,7 @@ room.self();                           // 自己的 subject_id（加入后可用
 room.unsubscribe();                    // 离开房间，别人会看到你消失
 ```
 
-- 房间名、参数和 `meta` 从契约的 `presence` 段生成（见 [PROTOCOL.md](../../docs/zh/PROTOCOL.md)）。`subscribePresence`、`update` 和名册 meta 均推导对应类型，错误名称和输入会在类型检查时失败。没有 presence 段的旧契约保留字符串 API。操作 `kind` 为旧契约保持可选，生成契约按 kind 限制 `startRun` 名称；运行时重试策略显式读取独立导出的 `operationMetadata` 常量。
+- 房间名、参数和 `meta` 从契约必需的 `presence` 段生成（见 [PROTOCOL.md](../../docs/zh/PROTOCOL.md)），没有房间时使用空对象。`subscribePresence`、`update` 和名册 meta 均推导对应类型，错误名称和输入会在类型检查时失败。每个操作必须声明 `kind`，并据此限制 `startRun` 名称；缺少任一声明的契约无法通过类型检查。运行时重试策略显式读取独立导出的 `operationMetadata` 常量。
 - 名册按 `ref` 增量更新，重复收到同一个 diff 无害。重连后会以**最新一次 `update` 的 meta** 重新加入，并整体替换名册，不会留下过期成员。
 - `update` 受服务端频率限制，过于频繁会以可重试的 `LIMIT_EXCEEDED` 拒绝；meta 不符合 schema 返回 `VALIDATION_FAILED`；房间未就绪时返回 `NOT_READY`。
 - 匿名会话不能进入房间；房间里的所有成员能看到彼此的 `subject_id` 和 `meta`。

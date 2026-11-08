@@ -135,7 +135,7 @@ defmodule Fyrlet.Definition.Validation do
         if specification["shared"] == true,
           do: raise("Subscription #{name} cannot be both shared and sharing identical")
 
-        for {function, arity} <- [shared_query: 3, membership: 3] do
+        for {function, arity} <- [shared_query: 3, membership: 3, definition_version: 1] do
           unless function_exported?(module, function, arity),
             do:
               raise(
@@ -173,7 +173,7 @@ defmodule Fyrlet.Definition.Validation do
         other -> raise("Run operation #{name} has unknown planning #{inspect(other)}")
       end
 
-    for {function, arity} <- callbacks do
+    for {function, arity} <- callbacks ++ [definition_version: 1, implementation: 2] do
       unless function_exported?(module, function, arity),
         do: raise("Run operation #{name} needs #{function}/#{arity} in #{inspect(module)}")
     end

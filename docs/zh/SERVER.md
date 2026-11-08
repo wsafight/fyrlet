@@ -94,9 +94,9 @@ batch_session_checks 默认开启。8 个节点内分片按 session_id 接收检
 | `run/3`、`step/3` | 静态规划的 Run：`run/3` 返回 `{:ok, steps: […], business_key: …, ttl_seconds: …}`，`step/3` 执行一步 |
 | `advance/3`、`plan_options/3` | 动态规划（操作声明 `planning: :dynamic`），与 `run/3` 二选一 |
 | `run_authorize/4` | 授权 `:start`、`:view`、`:signal`、`:cancel`；缺省只有发起者可以 |
-| `definition_version/1`、`implementation/2` | 固定运行所用的定义版本；版本缺失时运行暂停为 `definition_unavailable` |
+| `definition_version/1`、`implementation/2` | Run 两者皆必需：声明受理版本并解析准确实现；映射缺失时运行暂停为 `definition_unavailable`，绝不转向当前代码 |
 | `data_scope/3` | 受管数据访问的行级策略 |
-| `shared_query/3`、`membership/3`、`policy_version/1` | `sharing: "identical"` 的共享订阅 |
+| `shared_query/3`、`membership/3`、`definition_version/1`、`policy_version/1` | `sharing: "identical"` 的共享订阅；投影版本必需，授权策略版本可选 |
 | `ingest/3` | 批量摄取的单条处理，在完成该条的同一事务内执行 |
 | `stream/3` | 追加订阅（`mode: "append"`）：返回 `Fyrlet.Features.Stream` 的流名，在 `authorize/3` 之后调用 |
 

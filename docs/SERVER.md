@@ -94,9 +94,9 @@ For the semantics of each capability see [RUNS.md](RUNS.md), [EFFECTS.md](EFFECT
 | `run/3`, `step/3` | Statically planned Run: `run/3` returns `{:ok, steps: […], business_key: …, ttl_seconds: …}`, and `step/3` executes one step |
 | `advance/3`, `plan_options/3` | Dynamic planning (the operation declares `planning: :dynamic`); an alternative to `run/3` |
 | `run_authorize/4` | Authorizes `:start`, `:view`, `:signal`, `:cancel`; by default only the initiator may |
-| `definition_version/1`, `implementation/2` | Pin the definition version a run uses; when the version is missing the run is paused as `definition_unavailable` |
+| `definition_version/1`, `implementation/2` | Both required for Runs: declare the accepted version and resolve its exact implementation; when the mapping is missing the run is paused as `definition_unavailable`, never redirected to current code |
 | `data_scope/3` | Row-level policy for managed data access |
-| `shared_query/3`, `membership/3`, `policy_version/1` | Shared subscriptions with `sharing: "identical"` |
+| `shared_query/3`, `membership/3`, `definition_version/1`, `policy_version/1` | Shared subscriptions with `sharing: "identical"`; the projection version is required, the policy version optional |
 | `ingest/3` | Handling of a single item in batch ingestion, executed in the same transaction that completes the item |
 | `stream/3` | Append subscription (`mode: "append"`): returns the stream name of `Fyrlet.Features.Stream`, called after `authorize/3` |
 

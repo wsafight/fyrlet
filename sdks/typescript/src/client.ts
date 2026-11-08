@@ -242,7 +242,7 @@ class FyrletClient implements Client<FyrletContract> {
     return this.subscribeEntry(name, params, true);
   }
 
-  subscribePresence(name: string, params: unknown, meta: Record<string, unknown> = {}): PresenceSubscription {
+  subscribePresence(name: string, params: unknown, meta: Record<string, unknown> = {}): PresenceSubscription<any> {
     this.requireCapability("presence");
     const presence = { meta, self: undefined as string | undefined };
     const subscription = this.subscribeEntry(name, params, false, presence);

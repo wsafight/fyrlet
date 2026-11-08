@@ -5,6 +5,10 @@ defmodule Fyrlet.MixProject do
     [
       app: :fyrlet,
       version: "0.1.0",
+      description: "Durable workflows and typed subscriptions for Phoenix applications",
+      package: package(),
+      source_url: "https://github.com/wsafight/fyrlet",
+      homepage_url: "https://github.com/wsafight/fyrlet",
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -22,6 +26,15 @@ defmodule Fyrlet.MixProject do
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_environment), do: ["lib"]
+
+  defp package do
+    [
+      files: ["lib", "priv", "mix.exs", "README.md", "README.zh-CN.md", "LICENSE"],
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => "https://github.com/wsafight/fyrlet"},
+      build_tools: ["mix"]
+    ]
+  end
 
   defp deps do
     [

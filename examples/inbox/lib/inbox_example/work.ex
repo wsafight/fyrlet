@@ -60,6 +60,13 @@ defmodule InboxExample.Work do
   end
 
   @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
+  def implementation("work.start", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+
+  @impl true
   def step(_name, input, _context), do: {:ok, input}
 
   @impl true

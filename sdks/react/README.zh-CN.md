@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-`@fyrlet/react` 是独立、尚未发布的 React 18.3 / 19 适配包，核心 TypeScript SDK 保持框架无关。先构建核心，再构建本包：
+`@fyrlet/react` 是首发正式范围内的独立 React 18.3 / 19 适配包，目前尚未发布；核心 TypeScript SDK 保持框架无关。先构建核心，再构建本包：
 
 ```sh
 npm --prefix sdks/typescript ci
@@ -42,4 +42,4 @@ function Application({ client }: { client: import("@fyrlet/client").Client<AppCo
 
 服务端渲染与首次水合都采用确定的空 `connecting` 状态，没有私有数据和活跃订阅；首版不提供预加载服务端数据的 API。服务端按请求创建 client，浏览器按登录身份创建 client，禁止跨用户复用服务端实例。查询条目只在活跃期间保留，并按 client 对象隔离。
 
-[带 OIDC 登录的 随记](../../examples/inbox-react/README.zh-CN.md) 展示相同查询的两个消费者、参数切换、乐观写入、权威视图确认、可选重试和账号清理。`bash scripts/package.sh` 会生成 client 与 React 两份 tgz；在仓库外使用时，将两份包与 React 一起安装。
+[带 OIDC 登录的 随记](../../examples/inbox-react/README.zh-CN.md) 展示相同查询的两个消费者、参数切换、乐观写入、权威视图确认、可选重试和账号清理。`bash scripts/package.sh` 会生成 client 与 React 两份 tgz；在仓库外使用时，将两份包与 React 一起安装。TypeScript 消费者还必须安装 `@types/react` 与 `@types/phoenix`，以提供打包类型声明引用的 React 和 Phoenix 类型。

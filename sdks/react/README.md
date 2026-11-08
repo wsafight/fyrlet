@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`@fyrlet/react` is an independent, unpublished package for React 18.3 and 19. The TypeScript core remains framework independent. Build the core before this package:
+`@fyrlet/react` is an independent React 18.3 and 19 adapter in the initial formal release scope; it has not yet been published. The TypeScript core remains framework independent. Build the core before this package:
 
 ```sh
 npm --prefix sdks/typescript ci
@@ -42,4 +42,4 @@ The adapter uses `useSyncExternalStore`. Rendering creates no subscription, incl
 
 Server rendering and the first hydration snapshot use a deterministic empty `connecting` state, with no data or active subscriptions. There is no preloaded server-data API. Create clients per request and per authenticated browser session; never reuse a server client across users. Private entries are held only for active subscriptions and are scoped by the client object.
 
-The [Suiji with OIDC login](../../examples/inbox-react/README.md) demonstrates two consumers of the same query, parameter changes, optimistic writes, authoritative view confirmation, optional retries and account cleanup. For distribution, `bash scripts/package.sh` creates both client and React tarballs; install both together with React before using the adapter outside this repository.
+The [Suiji with OIDC login](../../examples/inbox-react/README.md) demonstrates two consumers of the same query, parameter changes, optimistic writes, authoritative view confirmation, optional retries and account cleanup. For distribution, `bash scripts/package.sh` creates both client and React tarballs; install both together with React before using the adapter outside this repository. TypeScript consumers must also install `@types/react` and `@types/phoenix` for the React and Phoenix declarations referenced by the packed types.

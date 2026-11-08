@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "maintainerApproved": true,
+  "publicationApproved": false,
+  "license": "Apache-2.0",
+  "licenseFile": "LICENSE",
+  "sourceRepository": "https://github.com/wsafight/fyrlet",
+  "formalPackages": {
+    "hex": "fyrlet",
+    "npm": [
+      "@fyrlet/client",
+      "@fyrlet/react"
+    ]
+  },
+  "experimentalSdks": [
+    "dotnet",
+    "go",
+    "java",
+    "kotlin",
+    "python",
+    "rust",
+    "swift"
+  ],
+  "artifactInventory": [
+    "fyrlet-source-{version}.tar.gz",
+    "fyrlet-{version}.tar",
+    "fyrlet-client-{version}.tgz",
+    "fyrlet-react-{version}.tgz"
+  ],
+  "compatibility": "Core Fyrlet, @fyrlet/client and @fyrlet/react are released together at the same version. During 0.x, consumers must use the matching release line and review the contract before upgrading.",
+  "deprecation": "Before 1.0.0, incompatible changes may occur in minor versions. Deprecations must identify the affected release and replacement; removal requires a subsequent release and migration path.",
+  "registries": "The intended public registries are Hex.pm for fyrlet and npm for @fyrlet/client and @fyrlet/react. Package-name ownership, registry credentials and publication approval remain external maintainer gates.",
+  "publication": {
+    "performed": false,
+    "ownershipVerified": false,
+    "credentialsStoredInRepository": false,
+    "mode": "manual-maintainer-action-only"
+  }
+}

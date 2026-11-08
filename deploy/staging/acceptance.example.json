@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "environmentFile": "./inbox-react.env",
+  "deployment": {
+    "id": "inbox-staging",
+    "sourceRevision": "0000000000000000000000000000000000000000",
+    "hostArtifactDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "apiArtifactDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "hostRelease": "replace-with-immutable-host-release",
+    "apiRelease": "replace-with-immutable-api-release"
+  },
+  "timeoutMs": 30000,
+  "hosts": [
+    {
+      "id": "staging-host-a",
+      "origin": "https://staging-host-a.internal.example.com"
+    },
+    {
+      "id": "staging-host-b",
+      "origin": "https://staging-host-b.internal.example.com"
+    }
+  ],
+  "revocation": {
+    "strategy": "bounded-host-expiry",
+    "maxHostSessionSeconds": 3600,
+    "maxTokenSeconds": 600,
+    "clockSkewSeconds": 5
+  },
+  "accounts": {
+    "primary": {
+      "provider": "first",
+      "allowedBrowserOrigins": [
+        "https://staging.inbox.example.com",
+        "https://api-staging.example.com",
+        "https://first-id.example.com"
+      ],
+      "steps": [
+        {
+          "action": "fill",
+          "selector": "input[name='username']",
+          "valueFromEnv": "STAGING_PRIMARY_USERNAME"
+        },
+        {
+          "action": "click",
+          "selector": "button[type='submit']"
+        },
+        {
+          "action": "fill",
+          "selector": "input[name='password']",
+          "valueFromEnv": "STAGING_PRIMARY_PASSWORD"
+        },
+        {
+          "action": "click",
+          "selector": "button[type='submit']"
+        }
+      ]
+    },
+    "secondary": {
+      "provider": "second",
+      "allowedBrowserOrigins": [
+        "https://staging.inbox.example.com",
+        "https://api-staging.example.com",
+        "https://second-id.example.com"
+      ],
+      "steps": [
+        {
+          "action": "fill",
+          "selector": "input[name='username']",
+          "valueFromEnv": "STAGING_SECONDARY_USERNAME"
+        },
+        {
+          "action": "click",
+          "selector": "button[type='submit']"
+        },
+        {
+          "action": "fill",
+          "selector": "input[name='password']",
+          "valueFromEnv": "STAGING_SECONDARY_PASSWORD"
+        },
+        {
+          "action": "click",
+          "selector": "button[type='submit']"
+        }
+      ]
+    }
+  }
+}

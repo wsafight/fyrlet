@@ -1,18 +1,41 @@
 {
   "name": "@fyrlet/react",
   "version": "0.1.0",
-  "private": true,
   "description": "React bindings for Fyrlet shared subscriptions",
+  "license": "Apache-2.0",
   "type": "module",
-  "files": ["dist", "README.md", "README.zh-CN.md"],
-  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wsafight/fyrlet.git",
+    "directory": "sdks/react"
+  },
+  "homepage": "https://github.com/wsafight/fyrlet/tree/main/sdks/react#readme",
+  "bugs": "https://github.com/wsafight/fyrlet/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:coverage": "npm run build && node --experimental-test-coverage --test --test-coverage-include=\"dist/**/*.js\" test/*.test.mjs"
   },
-  "peerDependencies": {"@fyrlet/client": "^0.1.0", "react": "^18.3.0 || ^19.0.0"},
+  "peerDependencies": {
+    "@fyrlet/client": "^0.1.0",
+    "react": "^18.3.0 || ^19.0.0"
+  },
   "devDependencies": {
     "@fyrlet/client": "file:../typescript",
     "@types/react": "^19.0.0",
@@ -22,5 +45,7 @@
     "react-dom": "^19.0.0",
     "typescript": "7.0.2"
   },
-  "engines": {"node": ">=22"}
+  "engines": {
+    "node": ">=22"
+  }
 }

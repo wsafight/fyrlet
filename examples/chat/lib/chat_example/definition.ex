@@ -139,6 +139,9 @@ defmodule ChatExample.Definition do
   def stream("chat.messages", _actor, %{"room_id" => id}), do: {:ok, "chat.#{id}"}
 
   @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
   def membership(_name, actor, %{"room_id" => id}),
     do: if(member?(actor.project_id, id, actor.subject_id), do: :member, else: :not_member)
 

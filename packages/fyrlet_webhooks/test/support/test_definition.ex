@@ -29,5 +29,12 @@ defmodule FyrletWebhooks.TestDefinition do
   end
 
   @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
+  def implementation("webhooks.demo", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+
+  @impl true
   def step(_name, _input, _context), do: {:ok, %{}}
 end

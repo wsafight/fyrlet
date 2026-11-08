@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "execution": {
+    "realMultiHostOptIn": false,
+    "allowLoopbackEndpoints": false,
+    "timeoutMs": 20000,
+    "sessionTtlSeconds": 900
+  },
+  "project": {
+    "projectIdEnv": "FYRLET_MULTIHOST_PROJECT_ID",
+    "serviceKeyEnv": "FYRLET_MULTIHOST_SERVICE_KEY"
+  },
+  "attestation": {
+    "operator": "REPLACE_WITH_RELEASE_OPERATOR",
+    "attestedAt": "2026-11-08T00:00:00Z",
+    "evidenceRef": "REPLACE_WITH_CHANGE_OR_TOPOLOGY_RECORD",
+    "distinctPhysicalHosts": true,
+    "sharedPostgreSQL": true,
+    "sameRelease": true,
+    "sameSchema": true
+  },
+  "deployment": {
+    "release": "chat@sha256:REPLACE_WITH_IMMUTABLE_RELEASE_DIGEST",
+    "schema": "migrations-sha256:REPLACE_WITH_SCHEMA_DIGEST",
+    "database": "postgresql-cluster-a/fyrlet_chat"
+  },
+  "recoveryEndpoint": "https://chat-acceptance.example.internal",
+  "nodes": [
+    {
+      "id": "node-a",
+      "endpoint": "https://chat-node-a.example.internal",
+      "physicalHostId": "physical-host-a",
+      "expectedInstanceId": "provider-instance-a"
+    },
+    {
+      "id": "node-b",
+      "endpoint": "https://chat-node-b.example.internal",
+      "physicalHostId": "physical-host-b",
+      "expectedInstanceId": "provider-instance-b"
+    }
+  ],
+  "fault": {
+    "victim": "node-a",
+    "survivor": "node-b"
+  },
+  "control": {
+    "adapter": "./executable_control.mjs",
+    "executable": "/absolute/path/to/operator-supplied-multihost-control",
+    "fixedArgs": [
+      "--deployment",
+      "chat-multihost-acceptance"
+    ],
+    "timeoutMs": 30000
+  },
+  "workload": {
+    "adapter": "./chat_workload.mjs",
+    "kind": "chat",
+    "runs": false
+  }
+}

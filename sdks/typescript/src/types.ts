@@ -1,16 +1,16 @@
 export interface FyrletContract {
-  operations: Record<string, { input: unknown; output: unknown; kind?: OperationKind }>;
+  operations: Record<string, { input: unknown; output: unknown; kind: OperationKind }>;
   subscriptions: Record<string, { input: unknown; output: unknown }>;
-  presence?: Record<string, { input: unknown; meta: Record<string, unknown> }>;
+  presence: Record<string, { input: unknown; meta: Record<string, unknown> }>;
 }
 
 export type OperationKind = "read" | "write" | "run" | "ingest";
 export type OperationMetadata = Readonly<Record<string, { readonly kind: OperationKind }>>;
 export type OperationNames<Contract extends FyrletContract, Kind extends OperationKind> = {
   [Name in keyof Contract["operations"] & string]: Contract["operations"][Name] extends { kind: infer Category }
-    ? Category extends Kind ? Name : never : Name;
+    ? Category extends Kind ? Name : never : never;
 }[keyof Contract["operations"] & string];
-export type PresenceName<Contract extends FyrletContract> = Contract extends { presence: infer Rooms } ? keyof Rooms & string : string;
+export type PresenceName<Contract extends FyrletContract> = Contract extends { presence: infer Rooms } ? keyof Rooms & string : never;
 export type PresenceInput<Contract extends FyrletContract, Name extends string> =
   Contract extends { presence: Record<Name, { input: infer Input }> } ? Input : unknown;
 export type PresenceData<Contract extends FyrletContract, Name extends string> =
@@ -193,7 +193,7 @@ export interface Client<Contract extends FyrletContract> {
   ): Subscription<Contract["subscriptions"][Name]["output"]>;
   /**
    * Joins a presence room (needs the "presence" capability). `data` is the roster. Presence
-   * Names, parameters and meta come from the contract. Legacy contracts retain untyped rooms.
+   * names, parameters and meta come from the contract's required `presence` section.
    */
   subscribePresence<Name extends PresenceName<Contract>>(
     name: Name, params: PresenceInput<Contract, Name>, meta?: PresenceData<Contract, Name>,

@@ -1,5 +1,34 @@
 # 本地验收记录
 
+## 2026-11-08：预发布生产就绪
+
+`feat/pre-release-production-readiness` 基于已合并 PR #10 的 `c03e7e72bd8383f876590a6c081ebbfca5ade075`，完整冻结源码本地验收的 **21 个阶段全部通过**。报告为 `.local/readiness/pre-release-20261108-final/result.json`，逐阶段日志位于同目录。SHA-256 源码指纹 `21167b253602163d9a1bb37696a7bd06d989eae1604bdb69afc35fa371343723` 覆盖 712 个 Git 已跟踪／未忽略文件。这是补写本验收记录前的代码快照；记录更新后会重跑 package／site，分发产物还必须在干净的最终提交上再次重建。
+
+```sh
+node scripts/acceptance.mjs --out .local/readiness/pre-release-20261108-final
+```
+
+| 验证 | 结果 | 报告目录中的证据 |
+| --- | --- | --- |
+| Elixir 格式、无警告编译与 Credo | 通过 | `core-1.log` 至 `core-3.log` |
+| 核心、示例与独立包 | **788 项通过**：核心 718、示例 35、包 35 | `core-4.log` |
+| TypeScript SDK 与类型检查 | **304 项通过**；行／分支覆盖率 **99.27% / 95.66%** | `client-1.log`、`client-2.log` |
+| React 适配与类型检查 | **20 项通过**；行／分支覆盖率 **100% / 100%** | `client-3.log`、`client-4.log` |
+| 宿主单元／启动／部署检查 | **68 项通过** | `client-5.log` |
+| 含真实 PostgreSQL 共享存储的宿主检查 | **78 项通过**；已加载服务端模块行／分支覆盖率 **90.47% / 91.78%** | `host-1.log` |
+| 性能／就绪工具 | **46 项通过** | `bench-1.log` |
+| staging、多主机与发布辅助离线回归 | **96 项通过** | `bench-2.log` |
+| 契约导出与检入的生成类型 | 通过 | `contract-1.log`、`contract-2.log` |
+| 真实本地 HTTP／WebSocket 集成 | **20 项通过** | `integration-1.log` |
+| 独立快照恢复与重复迁移 | 通过 | `restore-1.log`；嵌套报告 `.local/readiness/restore-1794151426766/result.json` |
+| 浏览器流程 | **14 项通过**，含父用例；签名本地测试 IdP | `browser-1.log` |
+| 四产物构建与仓库外安装 | 通过，包括解包 Hex 编译、离线 SDK／React 导入及 `skipLibCheck=false` 的严格 TypeScript 消费方编译 | `package-1.log`、`package-2.log` |
+| 文档站点 | 构建 **70 页**；检查 **3,498 个内部链接与 35 个仓库目标**，无失效链接 | `site-1.log`、`site-2.log` |
+
+本轮覆盖合并后的唯一迁移基线及预发布兼容入口删除。当前能力协商、显式定义版本固定、安全校验和快照恢复继续保留。已选择 Apache-2.0 及 Fyrlet Core／`@fyrlet/client`／`@fyrlet/react` 0.1.0 协同首发范围，其余七种 SDK 仍为实验性。四份本地产物分别是源码、Hex、TypeScript 和 React 包。预提交清单记录了 `working_tree_clean: false`，因此它不是发布批准。
+
+本轮未执行真实 24 小时稳定性运行。真实外部 IdP／staging 生命周期、生产备份恢复、不同物理主机故障、实体设备及真实邮件仍为 `not-run`；本地测试 IdP、隔离数据库、浏览器模拟、打桩控制钩子和同机演练不能替代这些证据。多主机示例配置检查保持 `not-run`；staging 示例因缺少私有环境文件而失败关闭。`publicationApproved` 与 `ownershipVerified` 仍为 false，未执行 Hex／npm 发布；本分支新提交仍需精确 head 的 Core PR CI。缺少该运行的发布预检查必须失败，不能复用 PR #10 的基线结果。
+
 ## 2026-11-08：按顺序推进路线图
 
 继续在 `feat/readiness-and-performance` 按 CI、共享宿主存储、性能、可靠性、发布准备的顺序处理。最终代码验收的 **15 个阶段全部通过**：`.local/readiness/followup-20261108-guarded/result.json`，SHA-256 源码指纹 `ff647bdd4eacfe1e87225da197cb60056df1973dfef2e9298f5b55ff46ade615`，覆盖 683 个 Git 已跟踪／未忽略文件。这是补写本记录前的代码快照；下方较早的 13 阶段记录保留当时数量。
@@ -33,7 +62,7 @@ CI 使用同一冻结源码入口，包含 host／restore 阶段，并始终上�
 
 另一次 Notify 快照／恢复保留全部 22 张 public 表的事实清单，包括 **11 个 Run、10 个 Effect、16 条幂等记录、10 条通知**；两次 Notify 迁移均未改变事实。只删除本次新建的目标库，私有 dump 已移除。报告 `.local/readiness/restore-notify-followup-20261108/result.json`。这些是本地模拟供应商的事实，不是真实邮件、生产恢复或跨版本升级证明。
 
-文档快照对应的分发包／安装／站点检查另记于 `.local/readiness/followup-20261108-artifacts/result.json`；发布预检查为 `.local/readiness/followup-20261108-release-check.json`，应独立查看结果，不从上述代码回归推断。打包记录源码指纹、提交、干净／脏状态及校验和。预检查从不发布；本分支尚未提交／推送，也没有维护者批准的许可证／发布策略和精确提交托管 CI。外部 IdP／生产共享宿主、多主机故障、24 小时执行、实体设备与真实邮件仍是[发布检查单](RELEASE_CHECKLIST.md)中的独立关卡。
+该较早文档快照对应的分发包／安装／站点检查另记于 `.local/readiness/followup-20261108-artifacts/result.json`；发布预检查为 `.local/readiness/followup-20261108-release-check.json`，应独立查看结果，不从上述代码回归推断。打包记录源码指纹、提交、干净／脏状态及校验和。在这个历史检查点，分支尚未提交／推送，也尚无维护者批准的许可证／发布策略和精确提交托管 CI；当前预发布记录已替代这些许可证／产物状态。预检查从不发布。外部 IdP／生产共享宿主、多主机故障、24 小时执行、实体设备与真实邮件仍是[发布检查单](RELEASE_CHECKLIST.md)中的独立关卡。
 
 ## 2026-11-08：就绪性与性能后续
 
@@ -81,7 +110,7 @@ node scripts/acceptance.mjs --groups package,site \
 | OIDC 宿主桥接 | 16 → **56 项通过**（+40） | **100% / 98.26%** | `npm --prefix examples/inbox-react run test:coverage`；`.local/roadmap-auth-coverage.log` |
 | 真实浏览器流程 | 10 → **14 项通过**（+4） | 不计入单元测试覆盖率 | `bash scripts/react.sh`；`.local/roadmap-browser-tests.log` |
 
-SDK 回归覆盖重试默认值与非法预算、Run 受理回执恢复、临时与永久错误、并发幂等键及取消隔离、其他调用认证失败时终止退避、回执查询期间取消 / 关闭、HTTP 日期及数字重试等待、选择器生命周期和状态元数据、确定性生成、全部操作种类，以及嵌套 schema / 默认值语义。编译期断言验证操作种类筛选、Run 输入与结果、Presence 必填参数和 meta、旧契约兼容，以及 React 投影数据与原始订阅句柄的类型。
+SDK 回归覆盖重试默认值与非法预算、Run 受理回执恢复、临时与永久错误、并发幂等键及取消隔离、其他调用认证失败时终止退避、回执查询期间取消 / 关闭、HTTP 日期及数字重试等待、选择器生命周期和状态元数据、确定性生成、全部操作种类，以及嵌套 schema / 默认值语义。编译期断言验证操作种类筛选、Run 输入与结果、Presence 必填参数和 meta，以及 React 投影数据与原始订阅句柄的类型；该历史轮次中的旧契约兼容断言已在预发布清理时移除，当前断言要求缺少 kind 或 presence 的契约编译失败。
 
 React 回归覆盖无需 Provider 的直接调用、缺失 Provider 报错、客户端 / 查询名 / 模式切换、旧私有消息隔离、选择器切换、等价参数、独立监听释放、连续 120 次参数切换、已有客户端数据时的 SSR、非法及超大 JSON、重复释放和满容量时共享查询。OIDC 回归覆盖回调歧义、state 到期、签名 / 声明失败、发现及配置拒绝、机密客户端认证、错误项目令牌、签发与轮换失败、并发刷新、待登录 / 宿主会话容量上限、到期、撤销并发与退避，以及关闭和签发竞态。假时钟身份测试的签名 `iat` 使用同一时钟生成。
 
@@ -106,7 +135,7 @@ SDK、React 类型检查及 **20 项真实 HTTP/WebSocket 集成测试**也已�
 | CORS | **10 项通过**，含向浏览器暴露 `Retry-After` | `mix test test/fyrlet_web/cors_test.exs`；`.local/roadmap-cors-tests.log` |
 | Elixir 质量与契约一致性 | 格式、无警告编译、Inbox 新导出契约比较通过 | `mix format --check-formatted`、`mix compile --warnings-as-errors`、`node scripts/check_contract.mjs .local/roadmap-contract.json` |
 | 生产示例与文档 | 应用生产构建、文档站构建及链接检查通过 | `npm --prefix examples/inbox-react run build`、`npm --prefix site run build`、`npm --prefix site run check`；`.local/roadmap-web-build.log`、`.local/roadmap-site-build.log`、`.local/roadmap-site-check.log` |
-| 分发 | 构建 3 个本地产物，核心与 React 安装包在外部消费者中导入通过 | `bash scripts/package.sh`、`bash scripts/install_smoke.sh`；`.local/roadmap-package.log`、`.local/roadmap-install.log`、`.local/releases/manifest.json` |
+| 分发 | 当时构建 3 个本地产物，核心与 React 安装包在外部消费者中导入通过 | `bash scripts/package.sh`、`bash scripts/install_smoke.sh`；`.local/roadmap-package.log`、`.local/roadmap-install.log`、`.local/releases/manifest.json` |
 
 React 验证覆盖多组件共享与最后引用释放、参数规范化、客户端及模式隔离、Strict Mode、未提交渲染、选择器、查询数量上限，以及一致的 SSR / hydration 初态。浏览器场景覆盖登录、共享订阅、乐观写入与权威视图确认、提交后丢失响应、仅响应头提供的重试等待、双标签页、参数切换、断线重连、令牌刷新、退出、用户 / issuer 隔离和宿主撤销。浏览器流程保留窄屏布局检查，不生成截图。
 
@@ -129,11 +158,11 @@ React 验证覆盖多组件共享与最后引用释放、参数规范化、客�
 
 确认回归覆盖无关与旧快照、delta、连续写入、多订阅、结果不变 / 空 append 快照、超时、取消、重连、权限撤销、旧服务端与畸形确认列表。写入响应前退订会返回视图未确认，保留操作的已提交结果；重复确认 ID 不影响其他等待者。服务端覆盖私有 / 共享查询、热缓存旁路和旧快照尚未 ACK 时的 append 重置。清理测试验证共享行数 / 时间预算、续排、流 floor 与保留保护；就绪测试验证正常查询及脱敏 HTTP 503。
 
-CI 配置在 Elixir 1.18 / OTP 27 与 Elixir 1.20 / OTP 29 上运行上述测试、类型检查、契约比较和集成，使用 PostgreSQL 17 与 Node 24。本轮仅执行下文记录的本地环境，不宣称 GitHub 托管运行已通过。已有数据库需执行 `mix fyrlet.migrate` 补充会话到期索引。清理时间在 SQL 之间检查，不中断运行中的语句；行数统计不含外键级联。本轮未新增吞吐、多主机或长期稳定性的性能结论。
+CI 配置在 Elixir 1.18 / OTP 27 与 Elixir 1.20 / OTP 29 上运行上述测试、类型检查、契约比较和集成，使用 PostgreSQL 17 与 Node 24。本轮仅执行下文记录的本地环境，不宣称 GitHub 托管运行已通过。该历史轮次之后，会话到期索引已折入唯一核心基线；执行过旧拆分迁移的开发／测试数据库需重建，不能靠重复迁移原地升级。清理时间在 SQL 之间检查，不中断运行中的语句；行数统计不含外键级联。本轮未新增吞吐、多主机或长期稳定性的性能结论。
 
 ## 2026-11-07：历史验证
 
-本轮继续完成本机可执行的开发与验证；Hex/npm 正式发布及许可证决策按要求暂缓。真实邮件凭证与收件人尚未提供，实体移动设备、多主机生产环境与 24 小时稳定性仍待验收，不计入已通过结果。
+本历史轮次继续完成当时本机可执行的开发与验证；彼时 Hex/npm 正式发布及许可证决策按要求暂缓。真实邮件凭证与收件人尚未提供，实体移动设备、多主机生产环境与 24 小时稳定性仍待验收，不计入已通过结果。
 
 ### 已通过的验证
 
@@ -171,7 +200,7 @@ bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-SDK 集成脚本使用独立的 `fyrlet_integration` 数据库，默认端口为 4100，可用 `INTEGRATION_PORT` 覆盖；验证 19 个真实 HTTP / WebSocket 场景，覆盖多设备、幂等并发、隔离、撤销、重启、Run、append、客户端查询复用、视图确认与混合通道。领域脚本默认用 4180/4181 端口，可按上例改端口，依次运行四个应用的 8 个业务与网页资源场景。所有脚本启动和关闭自己的服务，凭证和日志在 `.local/integration/`。分发包和 SHA256 清单在 `.local/releases/`，未发布到外部注册表。浏览器、双节点和真实邮件的验证见下文各节。
+SDK 集成脚本使用独立的 `fyrlet_integration` 数据库，默认端口为 4100，可用 `INTEGRATION_PORT` 覆盖；当前验证 20 个真实 HTTP / WebSocket 场景，覆盖多设备、幂等并发、隔离、撤销、重启、Run、append、客户端查询复用、视图确认与混合通道。领域脚本默认用 4180/4181 端口，可按上例改端口，依次运行四个应用的 8 个业务与网页资源场景。所有脚本启动和关闭自己的服务，凭证和日志在 `.local/integration/`。分发包和 SHA256 清单在 `.local/releases/`，未发布到外部注册表。浏览器、双节点和真实邮件的验证见下文各节。
 
 ## 浏览器覆盖
 

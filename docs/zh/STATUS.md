@@ -11,12 +11,13 @@
 | 操作结果与恢复（路线图 1A） | mutation 生命周期；读完成、写提交与受理；未知结果；HTTP / Socket 只读查询 write/run 回执 | 已实现 | `runtime.ex`、`mutation.ts`、`client.ts` | `operation_outcomes_test`、HTTP / Channel 测试、SDK 单元与真实丢响应集成 |
 | 权威视图确认（路线图 1B） | 成功后关联刷新、重新查询完整快照、独立的 `mutation.views` 结果、显式 `subscription.confirm()` | snapshot / append 已实现；TTL 不确认视图 | `subscriptions/observation.ex`、`subscription_channel.ex`、`append_channel.ex`、`subscription.ts` | 私有 / 共享 / append Channel 测试、`confirmation.test.mjs`、真实 SDK 集成 |
 | 客户端查询与 React（路线图 2） | snapshot / append 引用计数、selector、独立 React 包、确定空 SSR 与真实 Inbox 页面 | 已实现；React 最多 100 个活跃查询，无引用立即清理 | `client.ts`、`selector.ts`、`sdks/react`、`examples/inbox-react` | 共享查询、React 生命周期 / SSR、`scripts/react.sh` |
-| 契约类型（路线图 3） | Presence 名称 / 参数 / meta、操作 kind、显式运行时元数据、兼容旧契约 | 已实现 | `scripts/generate.mjs`、`types.ts` | 生成器测试、SDK / React 类型检查、契约漂移检查 |
+| 契约类型（路线图 3） | Presence 名称 / 参数 / meta、必需的操作 kind 与 Presence 声明、显式运行时元数据 | 已实现 | `scripts/generate.mjs`、`types.ts` | 生成器测试、SDK / React 类型检查、编译期负向断言、契约漂移检查 |
 | 有限重试（路线图 4） | 默认关闭、固定输入与键、次数 / 总时限、抖动、retry-after、未知后只读恢复 | read/write/run 已实现；signal/cancel/ingest 不自动重试 | `retry.ts`、`client.ts`、`requests.ts` | `retry.test.mjs`、真实丢响应集成、React 浏览器流程 |
 | 登录桥接（路线图 5） | OIDC / PKCE、续期、退出、撤销、换号与跨标签私有状态清理 | 本地示例与可选加密 PostgreSQL 宿主共享存储已实现；真实 IdP／生产部署待验收 | `examples/inbox-react/server`、`src/session.ts` | OIDC 单元／竞态、`scripts/host_store.sh`、`scripts/react.sh` |
-| 核心 CI | 核心／示例／包、SDK／React／OIDC、压测工具、契约和浏览器集成 | 已定位上游 main 失败；本地遥测隔离修复通过，新远程运行待验 | `.github/workflows/core.yml`、`scripts/acceptance.mjs` | 命令记录在 `ACCEPTANCE.md` |
+| 核心 CI | 核心／示例／包、SDK／React／OIDC、压测工具、契约和浏览器集成 | PR #10 基线已通过并以 `c03e7e7` 合并；当前预发布分支的后续提交仍需独立托管运行 | `.github/workflows/core.yml`、`scripts/acceptance.mjs` | 命令记录在 `ACCEPTANCE.md` |
 | 部署检查与告警规则 | 冻结源码的 CI／本地验收、HTTPS／OIDC／存储预检查、Ops 指标与 Prometheus 规则 | 本地已实现；新托管 CI、真实 IdP 与生产 SLO 调整仍未验收 | `scripts/acceptance.mjs`、`examples/inbox-react/server/check.mjs`、`deploy/prometheus/alerts.yml` | 部署检查、共享存储、指标和工具测试 |
-| 恢复与发布检查 | 本地一致性快照恢复、重复迁移、长时采样、产物／源码／发布策略检查 | 工具、非空 Run／Effect 恢复及同机短演练已在本地验证；生产恢复、多主机故障、24 小时运行、维护策略与正式发布仍待验收 | `scripts/restore_smoke.mjs`、`scripts/stability.mjs`、`scripts/release_check.mjs` | 工具测试与 `ACCEPTANCE.md` 中的本地演练报告 |
+| 恢复与发布检查 | 本地一致性快照恢复、重复迁移、长时采样、产物／源码／发布策略检查 | 工具、非空 Run／Effect 恢复及同机短演练已在本地验证；生产恢复、多主机故障、24 小时运行与真实注册表发布仍待验收；已选择 Apache-2.0 与首发范围 | `scripts/restore_smoke.mjs`、`scripts/stability.mjs`、`scripts/release_check.mjs` | 工具测试与 `ACCEPTANCE.md` 中的本地演练报告 |
+| 真实 staging 与多主机验收入口 | 显式启用的部署 IdP／浏览器／SDK 检查，以及运维控制的跨物理主机故障演练 | 离线校验与回归已实现；不宣称真实 staging、外部 IdP 或跨物理主机验收结果 | `scripts/staging_acceptance.mjs`、`scripts/multihost_acceptance.mjs`、`deploy/staging`、`deploy/multihost` | 离线工具测试；操作边界见 `STAGING.md` 与 `MULTIHOST.md` |
 | 混合负载与密度扫描 | 新增／更新／归档／恢复／删除、分页历史、显式确认及用户／设备／速率组合 | 短时低速运行已验证，不作为饱和、加速或生产容量结论 | `bench/lib/mixed.mjs`、`bench/fair/scan.mjs` | 混合／工具测试与 `PERFORMANCE.md` 证据 |
 | 事务通知替代路径 | 显式 PostgreSQL 通知、本地转发、超大载荷回退 | 已实现；默认不变，监听缺口需对账，持久模式优先 | `invalidation_notifications.ex`、`runtime.ex` | 通知提交／回滚、失效模式测试 |
 | 有界保留清理 | 共享行数 / 时间预算、有界删除、轮换续排与清理指标 | 已实现；运行中的 SQL 与级联删除遵守文档所述边界 | `pruning.ex`、`prune_worker.ex`、`metrics.ex` | `pruning_test`、`ingest_retention_test`、保留策略测试 |
@@ -44,7 +45,7 @@
 | 插件接口与一致性套件 | 插件接口、启动校验、失败隔离、一致性套件、`mix fyrlet.plugins` | 已实现 | `plugin.ex`、`plugins.ex`、`conformance/plugin.ex` | `plugins_test` |
 | 数据保护 | 字段脱敏、清除、可选静态加密、保留期 | 已实现 | `runs/privacy.ex`、`vault.ex` | `runs/privacy_test` |
 | 限额 | 限额：节点、负载、事件、信号收件箱、每项目排队与并发、派发速率（并发上限在项目级 advisory 锁下统计并创建租约，同一项目的并发认领不会超过上限） | 已实现 | `runs/limits.ex` | `runs_test`、`effects/effects_test` |
-| TypeScript SDK | TypeScript SDK 的 Run、能力协商、append 订阅 API | 已实现：`capabilities`、`startRun/getRun/signalRun/cancelRun/subscribeRun/subscribeRecentRuns/subscribeAppend`；snapshot / append 自动协商视图确认，其他可选能力仍须声明 | `sdks/typescript/src` | 单元、真实服务端集成、较早服务端兼容、领域端到端 |
+| TypeScript SDK | TypeScript SDK 的 Run、能力协商、append 订阅 API | 已实现：`capabilities`、`startRun/getRun/signalRun/cancelRun/subscribeRun/subscribeRecentRuns/subscribeAppend`；snapshot / append 自动协商视图确认，其他可选能力仍须声明 | `sdks/typescript/src` | 单元、真实服务端集成、当前协议契约检查、领域端到端 |
 | 浏览器交互与布局 | 网页交互与布局 | 已实现：四应用 × 桌面 Chromium、Android Chromium 模拟、iPhone WebKit 模拟；含截图、无横向溢出、长标题、纯文本防注入、历史与撤销。未覆盖实体设备和像素差分回归 | `scripts/browser.sh` | `browser.test.mjs`（12） |
 | 双节点发现与故障恢复 | 集群发现、跨节点通知与故障恢复 | 已实现可选静态节点列表；真实同机双节点验证共享/append、跨节点撤销、幂等、SIGKILL 后切换/重入、持久审批、会话续期与资源清理。多主机生产与 24h 待验 | `cluster.ex`、`scripts/cluster.sh` | `runtime_config_test`、`cluster.test.mjs`（3） |
 | 项目配额 | 按项目的读、写调用速率与订阅数上限，默认不限制；超限返回 429 加 `Retry-After`（单节点计数） | 已实现 | `quota.ex`、`subscriptions/tracker.ex` | `quota_test` |

@@ -72,6 +72,9 @@ defmodule Fyrlet.Repo.Migrations.CreateFyrlet do
     create index(:sessions, [:project_id, :subject_id])
     create index(:sessions, [:subject_id, :project_id])
     create index(:sessions, [:service_key_id, :project_id])
+    create index(:sessions, [:expires_at])
+    # Auth.check_issue_rate!/1 counts a key's sessions from the last minute on every issue.
+    create index(:sessions, [:service_key_id, :inserted_at])
 
     create index(:sessions, [:project_id, :inserted_at],
              where: "kind = 'anonymous'",
@@ -168,6 +171,8 @@ defmodule Fyrlet.Repo.Migrations.CreateFyrlet do
     )
 
     create index(:fyrlet_runs, [:project_id, :subject_id, :inserted_at])
+    # Grant pruning and recovery both join runs through their execution grant.
+    create index(:fyrlet_runs, [:execution_grant_id])
 
     create index(:fyrlet_runs, [:status, :updated_at],
              where: "status NOT IN ('completed','failed','cancelled','expired')",
@@ -249,6 +254,12 @@ defmodule Fyrlet.Repo.Migrations.CreateFyrlet do
 
     create unique_index(:fyrlet_run_attempts, [:step_id, :attempt])
 
+    # Store.leased_attempts/1 and abandon_leases/1 run on every step claim and run close.
+    create index(:fyrlet_run_attempts, [:run_id],
+             where: "status = 'leased'",
+             name: :fyrlet_run_attempts_leased_run_index
+           )
+
     create index(:fyrlet_run_attempts, [:lease_expires_at],
              where: "status = 'leased'",
              name: :fyrlet_run_attempts_leased_index
@@ -274,6 +285,8 @@ defmodule Fyrlet.Repo.Migrations.CreateFyrlet do
 
     create unique_index(:fyrlet_run_signals, [:run_id, :idempotency_key])
     create index(:fyrlet_run_signals, [:run_id, :wait_id, :status])
+    # Runs.check_signal_limits/2 counts recent signals per run on every signal.
+    create index(:fyrlet_run_signals, [:run_id, :received_at])
     create index(:fyrlet_run_signals, [:received_at])
 
     create table(:fyrlet_run_events, primary_key: false) do
@@ -331,6 +344,8 @@ defmodule Fyrlet.Repo.Migrations.CreateFyrlet do
 
     create unique_index(:fyrlet_effects, [:step_id, :effect_key])
     create index(:fyrlet_effects, [:run_id])
+    # Effects.over_rate?/2 counts claims per project within the last second on every dispatch.
+    create index(:fyrlet_effects, [:project_id, :claimed_at], where: "claimed_at IS NOT NULL")
 
     create index(:fyrlet_effects, [:status, :next_attempt_at],
              where: "status IN ('pending','claimed','accepted','unknown')",

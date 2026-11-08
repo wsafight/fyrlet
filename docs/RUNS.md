@@ -31,6 +31,8 @@ Doing the work is separated from deciding the next step:
 | `run/3` | Produces a sequential plan from the operation name, the verified initiator and the input; performs no external calls |
 | `step/3` | Returns a business result or an Effect intent from the step name, the persisted input and the execution context |
 | `advance/3` | Decides the next step from the persisted state, the event and the context; performs no IO (dynamic advancement) |
+| `definition_version/1` | Returns the explicit version recorded when the Run is accepted; there is no implicit `"1"` default |
+| `implementation/2` | Resolves an operation and pinned version to the exact implementation module, or `nil` when unavailable |
 
 A static plan contains work nodes and explicit wait nodes:
 
@@ -45,6 +47,8 @@ A static plan contains work nodes and explicit wait nodes:
 The return value of `step/3` is `{:ok, output}`, `{:error, %Fyrlet.Error{}}` or `{:effect, effect_spec}`; it may also return `{:ok, output, commit: fun}`, where `fun` runs inside the **same transaction** that commits the result, so that a business write and the step result are committed atomically (managed commit). If `fun` returns `{:error, error}` or raises, the whole commit rolls back and is then recorded as a failed attempt. An Effect intent is handed to the core to be committed and dispatched, see [EFFECTS.md](EFFECTS.md); a Step does not return a "next step" instruction. The execution context provides previously committed outputs; the resolved input of the current Step is fixed before its first execution and reused on retry.
 
 When the plan is created, stable Step instances and `wait_id`s are assigned, and steps with the same name are distinguished by instance ID/sequence number. The input, output and signal payload of every node must have a contract and a size limit.
+
+Every Run definition must implement both `definition_version/1` and `implementation/2`; startup validation rejects either omission. A typical initial implementation returns `"1"` and maps its Run operation plus `"1"` to `__MODULE__`, returning `nil` for every other pair. Recovery never substitutes the currently registered module when the pinned mapping is absent.
 
 The two planning modes `run/3` and `advance/3` are chosen explicitly, one or the other, per operation. `advance/3` can return `{:step, name, input}`, `{:wait, wait_spec}`, `{:done, output}` or `{:error, error}`; the advancement decision and the new node are persisted in the same transaction, and a committed decision cannot be re-executed on recovery. The operation declares `planning: :dynamic` (`Fyrlet.Runs.operation/2`) and the definition implements `advance(operation, state, event)`; `state` contains `input`, the `outputs` of completed nodes, `run_id`, `project_id` and `initiator_subject_id`; `event` is `:start`, `{:step_succeeded, name, output}`, `{:wait_satisfied, name, payload}` or `{:wait_timed_out, name}`. The business key and the expiry are provided by the optional `plan_options/3`. Dynamic nodes go through the same validation as static nodes, and the total node count is bound by the same limit; if `advance/3` raises, the run is terminated with `ADVANCE_CRASHED`, and the exception content is not leaked.
 

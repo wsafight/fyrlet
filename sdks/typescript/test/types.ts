@@ -44,12 +44,19 @@ declare const rooms: Client<RoomsContract>;
 export const roster = rooms.subscribePresence("room.members", { room: "lobby" }, { typing: false });
 export const typedMeta: Promise<void> = roster.update({ typing: true });
 export type RosterMeta = Expect<Equal<NonNullable<ReturnType<typeof roster.getState>["data"]>[string][number]["data"]["typing"], boolean>>;
-interface LegacyContract { operations: { "legacy.action": { input: {}; output: string } }; subscriptions: {} }
-declare const legacy: Client<LegacyContract>;
-export const legacyPresence = legacy.subscribePresence("legacy.room", {}, { custom: true });
-export type LegacyRunsRemainUsable = Expect<Equal<OperationNames<LegacyContract, "run">, "legacy.action">>;
-export type LegacyRoomsRemainUntyped = Expect<Equal<PresenceName<LegacyContract>, string>>;
-export type LegacyRoomInput = Expect<Equal<PresenceInput<LegacyContract, "any.room">, unknown>>;
+interface MissingKindContract {
+  operations: { "invalid.action": { input: {}; output: string } };
+  subscriptions: {};
+  presence: {};
+}
+// @ts-expect-error Every operation must declare its kind.
+export declare const missingKind: Client<MissingKindContract>;
+interface MissingPresenceContract {
+  operations: { "valid.read": { kind: "read"; input: {}; output: string } };
+  subscriptions: {};
+}
+// @ts-expect-error The contract must declare presence, even when it has no rooms.
+export declare const missingPresence: Client<MissingPresenceContract>;
 export type NoGeneratedRooms = Expect<Equal<PresenceName<AppContract>, never>>;
 export type NoGeneratedRuns = Expect<Equal<OperationNames<AppContract, "run">, never>>;
 export type RequiredRoomParameter = Expect<Equal<{} extends PresenceInput<RoomsContract, "room.members"> ? true : false, false>>;

@@ -142,7 +142,7 @@ Notify, Flow, Agent and Chat are implemented as standalone applications with mod
 
 ### Not yet provided
 
-Hex / npm publishing and the license decision; cross-node global quotas; an admin UI; an OIDC verifier; a key rotation interface; a verified capacity baseline.
+Actual Hex / npm publication and verified registry ownership (Apache-2.0 is selected); cross-node global quotas; an admin UI; an OIDC verifier; a key rotation interface; a verified capacity baseline.
 
 ## Core concepts
 
@@ -366,7 +366,7 @@ Record the hardware, runtime versions, database configuration, data set, query r
 - **Sync layer upgrade**: whether to introduce Phoenix.Sync / Electric depends on correctness tests and the performance baseline.
 - **Offline capability**: first define the client cache, expiry and permission revocation semantics, then discuss offline writes and conflict handling.
 - **Distributed deployment**: a two-node setup on one machine has been verified; multi-host deployment, network partition recovery and global quotas need separate verification and design.
-- **Release and compatibility**: before the official release, decide on Hex / npm publishing, the license, the deprecation period and the server / SDK compatibility matrix.
+- **Release and compatibility**: Apache-2.0 and the initial core + TypeScript + React scope are selected; before actual publication, verify registry ownership and decide publication approval, the deprecation period and the supported server / SDK compatibility matrix.
 - **Plugin API freeze**: based on actual seams and upgrade feedback, with no date set (see [PLUGINS.md](PLUGINS.md#seam-principle)).
 
 Whether the product holds up depends first on whether the author can use it to complete the first application reliably, and in the second application reduce the repeated authentication, call, subscription and recovery code.
