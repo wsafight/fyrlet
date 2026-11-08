@@ -26,6 +26,7 @@ defmodule Fyrlet.Application do
           Fyrlet.Quota
         ] ++
         Fyrlet.Metrics.child_specs() ++
+        Fyrlet.InvalidationNotifications.child_specs() ++
         presence() ++
         [
           {Oban, oban_config()}

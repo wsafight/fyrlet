@@ -1,0 +1,71 @@
+{
+  "measured_at": "2026-11-08",
+  "baseline": {
+    "source_fingerprint": "03a598750bd94ec94afe00e4d26b888ad7afd028804468ae33dab590aac6dec3",
+    "application_image": "sha256:2ecfd9996e0639e7ed90dd8cac9bd29a83773e680fbca4fec8bcf16aef1c0dcc",
+    "application": {"vcpus": 1, "cpuset": "0", "memory_bytes": 1073741824, "swap_disabled": true},
+    "database": {"vcpus": 2, "cpuset": "1-2", "memory_bytes": 2147483648, "swap_disabled": true},
+    "generator": {"shards": 4, "cpuset": "4-9", "users": 1000, "devices_per_user": 2, "connections": 3000},
+    "workload": {"rows_per_user": 50, "payload_bytes": 128, "duration_ms": 20000, "repetitions": 3, "session_model": "shared", "warmup_per_user": 1},
+    "slo": {"p95_ms": 250, "min_delivery_coverage": 0.99, "max_drop_rate": 0.01},
+    "boundaries": [
+      "Single Colima VM, current worktree production release, real PostgreSQL and WebSocket; no Meteor comparison.",
+      "Only updates existing records; no explicit view confirmation, automatic retry, React rendering, OIDC traffic or TLS.",
+      "CPU includes connection setup and warmup; anonymous memory is sampled, not process RSS or an exact peak.",
+      "Local regression and cluster checks overlapped portions of this baseline; the VM shares the physical host.",
+      "Passing these offered-rate points does not establish a saturation limit or production capacity."
+    ],
+    "runs": [
+      {"rate": 100, "repetition": 1, "writes": 2000, "propagation_p95_ms": 5.858583999997791, "application_cpu_seconds": 8.504664, "sampled_anonymous_peak_bytes": 587513856, "delivery_coverage": 1, "generator_dropped": 0, "oom_kills": 0, "slo_pass": true},
+      {"rate": 500, "repetition": 1, "writes": 10000, "propagation_p95_ms": 5.98333300000013, "application_cpu_seconds": 15.423391, "sampled_anonymous_peak_bytes": 679694336, "delivery_coverage": 1, "generator_dropped": 0, "oom_kills": 0, "slo_pass": true},
+      {"rate": 500, "repetition": 2, "writes": 9996, "propagation_p95_ms": 6.776709000001574, "application_cpu_seconds": 16.030571, "sampled_anonymous_peak_bytes": 679727104, "delivery_coverage": 1, "generator_dropped": 4, "oom_kills": 0, "slo_pass": true},
+      {"rate": 100, "repetition": 2, "writes": 2000, "propagation_p95_ms": 6.430333000000246, "application_cpu_seconds": 7.508926, "sampled_anonymous_peak_bytes": 606441472, "delivery_coverage": 1, "generator_dropped": 0, "oom_kills": 0, "slo_pass": true},
+      {"rate": 100, "repetition": 3, "writes": 2000, "propagation_p95_ms": 6.054458999999042, "application_cpu_seconds": 7.202759, "sampled_anonymous_peak_bytes": 596971520, "delivery_coverage": 1, "generator_dropped": 0, "oom_kills": 0, "slo_pass": true},
+      {"rate": 500, "repetition": 3, "writes": 9993, "propagation_p95_ms": 5.434416999996756, "application_cpu_seconds": 15.034328, "sampled_anonymous_peak_bytes": 688762880, "delivery_coverage": 1, "generator_dropped": 7, "oom_kills": 0, "slo_pass": true}
+    ]
+  },
+  "postgres_notification_abba": {
+    "source_fingerprint": "02988f945e065f8c25cd1d8894202f6425a27bf6f948d840c507c9592350ee04",
+    "application_image": "sha256:3c48086da9ad34579cae2219610a40f4f54577ea76e460842ff770bc484b3d1d",
+    "application": {"vcpus": 1, "cpuset": "0", "memory_bytes": 1073741824, "swap_disabled": true},
+    "database": {"vcpus": 2, "cpuset": "1-2", "memory_bytes": 2147483648, "swap_disabled": true},
+    "generator": {"shards": 4, "cpuset": "4-9", "users": 1000, "devices_per_user": 2, "connections": 3000},
+    "workload": {"offered_writes_per_second": 500, "rows_per_user": 50, "payload_bytes": 128, "duration_ms": 20000, "rounds": 2, "order_per_round": ["A", "B", "B", "A"]},
+    "variants": {"A": {"durable_invalidation": false, "postgres_invalidation": false}, "B": {"durable_invalidation": false, "postgres_invalidation": true}},
+    "slo": {"p95_ms": 250, "min_delivery_coverage": 0.99, "max_drop_rate": 0.01},
+    "boundaries": [
+      "Same image and source fingerprint in all eight runs; later tooling refinements are not in the measured image.",
+      "An unrelated high-CPU host process was observed during this suite; the physical host was not isolated.",
+      "All correctness checks passed; completed writes had full expected delivery coverage and no OOM.",
+      "Failed SLO points are retained. Large variance prevents claims of speedup or stable capacity.",
+      "PostgreSQL notifications remain opt-in and do not replace durable invalidation or reconciliation."
+    ],
+    "runs": [
+      {"round": 1, "slot": 1, "variant": "A", "writes": 9915, "propagation_p95_ms": 47.447165999998106, "application_cpu_seconds": 17.996367, "sampled_anonymous_peak_bytes": 683573248, "delivery_coverage": 1, "generator_dropped": 16, "total_dropped_slots": 85, "oom_kills": 0, "source_matches": true, "slo_pass": true},
+      {"round": 1, "slot": 2, "variant": "B", "writes": 9949, "propagation_p95_ms": 20.143541000001278, "application_cpu_seconds": 19.693448, "sampled_anonymous_peak_bytes": 711065600, "delivery_coverage": 1, "generator_dropped": 0, "total_dropped_slots": 51, "oom_kills": 0, "source_matches": true, "slo_pass": true},
+      {"round": 1, "slot": 3, "variant": "B", "writes": 9571, "propagation_p95_ms": 142.14787600000273, "application_cpu_seconds": 20.034618, "sampled_anonymous_peak_bytes": 741494784, "delivery_coverage": 1, "generator_dropped": 47, "total_dropped_slots": 429, "oom_kills": 0, "source_matches": true, "slo_pass": false},
+      {"round": 1, "slot": 4, "variant": "A", "writes": 7130, "propagation_p95_ms": 348.8993330000012, "application_cpu_seconds": 26.235808, "sampled_anonymous_peak_bytes": 758931456, "delivery_coverage": 1, "generator_dropped": 759, "total_dropped_slots": 2870, "oom_kills": 0, "source_matches": true, "slo_pass": false},
+      {"round": 2, "slot": 1, "variant": "A", "writes": 9987, "propagation_p95_ms": 11.625083000002633, "application_cpu_seconds": 17.804936, "sampled_anonymous_peak_bytes": 721264640, "delivery_coverage": 1, "generator_dropped": 13, "total_dropped_slots": 13, "oom_kills": 0, "source_matches": true, "slo_pass": true},
+      {"round": 2, "slot": 2, "variant": "B", "writes": 10000, "propagation_p95_ms": 6.260874999999942, "application_cpu_seconds": 18.843299, "sampled_anonymous_peak_bytes": 759619584, "delivery_coverage": 1, "generator_dropped": 0, "total_dropped_slots": 0, "oom_kills": 0, "source_matches": true, "slo_pass": true},
+      {"round": 2, "slot": 3, "variant": "B", "writes": 8181, "propagation_p95_ms": 267.3932080000013, "application_cpu_seconds": 24.533756, "sampled_anonymous_peak_bytes": 687734784, "delivery_coverage": 1, "generator_dropped": 170, "total_dropped_slots": 1819, "oom_kills": 0, "source_matches": true, "slo_pass": false},
+      {"round": 2, "slot": 4, "variant": "A", "writes": 9968, "propagation_p95_ms": 8.97795899999619, "application_cpu_seconds": 17.038201, "sampled_anonymous_peak_bytes": 708517888, "delivery_coverage": 1, "generator_dropped": 19, "total_dropped_slots": 32, "oom_kills": 0, "source_matches": true, "slo_pass": true}
+    ]
+  },
+  "postgres_notification_cluster": {
+    "topology": "Two named BEAM nodes on one local host with shared PostgreSQL; not a multi-host test",
+    "seconds": 300,
+    "clients": 20,
+    "writes": 5070,
+    "reconnects": 101,
+    "session_refreshes": 102,
+    "propagation_p50_ms": 32.1171669999967,
+    "propagation_p95_ms": 36.43475000000035,
+    "latency_includes_polling_ms": 25,
+    "full_history_checked": true,
+    "duplicate_or_missing_messages": 0,
+    "subscriptions_after_close": [0, 0],
+    "observers_after_close": [0, 0],
+    "reader_cache_entries_after_close": [0, 0],
+    "agent_run_failover_checked": true
+  }
+}

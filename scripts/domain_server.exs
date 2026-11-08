@@ -5,7 +5,7 @@ end
 defmodule DomainIntegrationMetrics do
   use GenServer
 
-  @keys ~w(db_queries view_queries snapshot_encodes snapshot_encode_bytes append_bytes append_items fallback_gap fallback_overflow fallback_refresh)
+  @keys ~w(db_queries db_queue_microseconds db_query_microseconds view_queries snapshot_encodes snapshot_encode_bytes append_bytes append_items fallback_gap fallback_overflow fallback_refresh)
 
   def start, do: GenServer.start(__MODULE__, :ok, name: __MODULE__)
 
@@ -33,8 +33,18 @@ defmodule DomainIntegrationMetrics do
   def reset, do: :ets.insert(__MODULE__, Enum.map(@keys, &{&1, 0}))
   def snapshot, do: Map.new(:ets.tab2list(__MODULE__))
 
-  def record([:fyrlet, :repo, :query], _measurements, _metadata, _config),
-    do: increment("db_queries", 1)
+  def record([:fyrlet, :repo, :query], measurements, _metadata, _config) do
+    increment("db_queries", 1)
+
+    for {measurement, key} <- [
+          queue_time: "db_queue_microseconds",
+          query_time: "db_query_microseconds"
+        ],
+        value = measurements[measurement],
+        is_integer(value) do
+      increment(key, System.convert_time_unit(value, :native, :microsecond))
+    end
+  end
 
   def record([:fyrlet, :subscription, :query], _measurements, %{result: :ok}, _config),
     do: increment("view_queries", 1)
@@ -76,6 +86,7 @@ defmodule DomainIntegrationReceiver do
         "observers" => Registry.count(Fyrlet.ObserverRegistry),
         "processes" => :erlang.system_info(:process_count),
         "memory_bytes" => :erlang.memory(:total),
+        "telemetry" => DomainIntegrationMetrics.snapshot(),
         "reader_entries" =>
           case :ets.info(Fyrlet.Features.Stream.Reader, :size) do
             :undefined -> 0

@@ -372,7 +372,7 @@ Nine new Elixir regressions exercise malformed identifiers, a shared node budget
 
 CPU and memory ranges do not overlap. P95 and completed writes overlap, so only the direction is supported. An earlier run of the same idea (job skipped in a scratch copy) gave the same direction with a larger P95 gap (median 68 → 24 ms), also 4 runs per side. Not measured: rates above 1000 writes/s, more than one node, and the crash window itself.
 
-**Not done.** A transactional `pg_notify` with a listener on every node would keep "committed implies notified" with one statement instead of about five. It needs a listener, de-duplication against the direct broadcast and a decision on cross-node delivery, and was not measured.
+**Follow-up (November 8).** Optional transactional `pg_notify` is now implemented and measured in section 17. It does not provide durable delivery to disconnected listeners and has no demonstrated performance gain.
 
 ## 16. Scheduler busy-wait flags: no gain (2026-11-07)
 
@@ -386,3 +386,15 @@ Hypothesis: in a 1 vCPU cgroup, scheduler threads that spin before sleeping cons
 | Throttled periods, median | 1 | 3 |
 
 All ranges overlap and the medians do not favor the flags, so nothing is changed. One default run (16 636 writes, P95 131 ms) is an outlier of the kind that PERFORMANCE.md warns about. The flags may still matter at lower CPU quotas, or with more than one scheduler; that was not tested.
+
+## 17. Optional transactional PostgreSQL notifications (2026-11-08)
+
+`FYRLET_POSTGRES_INVALIDATION=true` (application config `:postgres_invalidation`) adds one PostgreSQL listener connection per enabled node. Operation writes issue `pg_notify` inside their transaction. PostgreSQL releases the notice only after the outer commit; rollback emits nothing. The listener relays scopes through node-local PubSub. It uses the immediate broadcast's negative identifier so subscriptions deduplicate both paths, without rebroadcasting a received notice across nodes. Plain outer `Repo.transaction` is supported without retaining an unflushable after-commit callback.
+
+The option is **off by default**. `durable_invalidation: true` takes precedence, payloads larger than 7,900 bytes fall back to Oban, and malformed notifications are rejected. Runs retain their existing durable path. Listener reconnection is automatic, but notifications missed while disconnected require normal subscription reconciliation: this closes a publisher's commit-to-broadcast window for connected listeners, not every delivery gap. Deployments must allow an additional database connection per node and enable the listener on every receiving node that needs this path.
+
+Commit, rollback, nested rollback, unmanaged outer transactions, malformed payloads, oversize fallback, mode precedence and idempotent replay have regressions. The real HTTP/WebSocket suite passed 20 tests with this mode enabled. A same-host two-node Chat/Agent run passed with 20 clients and 300 seconds of traffic: 5,070 writes, 101 reconnects and 102 refreshes; full history had no missing or duplicate messages. Both nodes' subscriptions, observers and reader caches returned to zero. This is not multi-host fault or 24-hour stability evidence.
+
+The same-image 500/s ABBA experiment completed eight runs. All correctness checks passed, but only 3/4 default and 2/4 notification runs passed the offered-load/latency SLO. Host CPU interference and overlapping ranges preclude a speedup claim; the default is unchanged. Exact results and conditions are in [PERFORMANCE.md](PERFORMANCE.md#optional-postgresql-notifications-no-demonstrated-speedup-november-8-2026) and its linked sanitized JSON.
+
+The fair-run tooling now preserves unique A/B slots, refuses report overwrites, validates resource limits and source/image identity, records generator failures, and removes private fixtures and named generators on exit. Rate scans require at least three repetitions and reverse rate order on alternate rounds. These are evidence-quality improvements, not application throughput gains.

@@ -7,6 +7,8 @@
     "dev": "node --env-file-if-exists=.env server/index.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "node --env-file-if-exists=.env server/index.mjs --production",
+    "check:deployment": "node --env-file-if-exists=.env server/check.mjs",
+    "migrate:store": "node --env-file-if-exists=.env server/store.mjs --migrate",
     "test": "node --test test/*.test.mjs",
     "test:coverage": "node --experimental-test-coverage --test --test-coverage-include=\"server/*.mjs\" test/*.test.mjs",
     "test:e2e": "node --test test/browser.e2e.mjs"
@@ -15,6 +17,7 @@
     "@fyrlet/client": "file:../../sdks/typescript",
     "@fyrlet/react": "file:../../sdks/react",
     "jose": "6.2.15",
+    "pg": "8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -26,5 +29,7 @@
     "typescript": "7.0.2",
     "vite": "8.3.6"
   },
-  "engines": {"node": ">=22.12"}
+  "engines": {
+    "node": ">=22.12"
+  }
 }

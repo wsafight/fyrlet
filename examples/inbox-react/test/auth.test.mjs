@@ -2,6 +2,7 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createAuth } from "../server/auth.mjs";
 import { mockOIDC } from "./oidc-fixture.mjs";
+import { createMemoryStore } from "../server/store.mjs";
 
 const origin = "http://127.0.0.1:5173";
 let oidc;
@@ -513,3 +514,64 @@ for (const [name, offset] of [["stale", -601], ["future", 3600]]) {
     assert.equal(issued.length, 0);
   });
 }
+
+test("request admission reserves logout capacity while session issuance is saturated", async (context) => {
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const closed = Promise.withResolvers();
+  context.after(() => release.resolve());
+  const store = createMemoryStore();
+  const markClosed = store.markClosed;
+  store.markClosed = async (identifier) => { await markClosed(identifier); closed.resolve(); };
+  const revoked = [];
+  const { request, login } = await fixture(context, { store, sessions: {
+    async issueSession() {
+      started.resolve();
+      await release.promise;
+      return { token: "rts_saturated", project_id: "project", session_id: "saturated", expires_at: new Date(Date.now() + 600_000).toISOString() };
+    }, async revokeSession(identifier) { revoked.push(identifier); },
+  } });
+  const signedIn = await login();
+  const pending = Array.from({ length: 64 }, () => request("/api/fyrlet/session", { method: "POST", cookie: signedIn.cookie }));
+  await started.promise;
+  assert.equal((await request("/auth/me", { cookie: signedIn.cookie })).status, 503);
+  const logout = request("/auth/logout", { method: "POST", cookie: signedIn.cookie });
+  await closed.promise;
+  release.resolve();
+  assert.ok((await Promise.all(pending)).every((response) => response.status === 401));
+  assert.equal((await logout).status, 200);
+  assert.deepEqual(revoked, ["saturated"]);
+});
+
+test("a host persistence failure closes the host and revokes the unreturned credential", async (context) => {
+  const store = createMemoryStore();
+  const withHost = store.withHost;
+  store.withHost = async (identifier, callback) => {
+    const result = await withHost(identifier, callback);
+    if (result?.token) throw new Error("private-storage-failure");
+    return result;
+  };
+  const { request, login, revoked } = await fixture(context, { store });
+  const signedIn = await login();
+  const response = await request("/api/fyrlet/session", { method: "POST", cookie: signedIn.cookie });
+  assert.equal(response.status, 503);
+  const body = await response.text();
+  assert.ok(!body.includes("rts_") && !body.includes("private-storage-failure"));
+  assert.deepEqual(revoked, ["session-1"]);
+  assert.equal((await store.getHost(signedIn.cookie.slice("fyrlet_host=".length))).closed, true);
+});
+
+test("a failed post-issuance activity query closes the host and revokes the known token", async (context) => {
+  const store = createMemoryStore();
+  store.isActive = async () => { throw new Error("private-activity-query-failure"); };
+  const { request, login, revoked } = await fixture(context, { store });
+  const signedIn = await login();
+  const response = await request("/api/fyrlet/session", { method: "POST", cookie: signedIn.cookie });
+  assert.equal(response.status, 503);
+  const body = await response.text();
+  assert.ok(!body.includes("rts_") && !body.includes("private-activity-query-failure"));
+  assert.deepEqual(revoked, ["session-1"]);
+  const host = await store.getHost(signedIn.cookie.slice("fyrlet_host=".length));
+  assert.equal(host.closed, true);
+  assert.equal(host.fyrlet, undefined);
+});

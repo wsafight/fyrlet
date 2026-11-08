@@ -332,6 +332,7 @@ test("merging generator shards pools raw samples and sums counters", () => {
   assert.equal(merged.propagationMs.max, 100);
   assert.equal(merged.propagationMs.p95, 100);          // pooled, not the average of 5 and 100
   assert.equal(merged.pacedLoad.generatorDropped, 3);
+  assert.equal(merged.pacedLoad.offeredRate, 20);
   assert.equal(merged.traffic.sent, 20);
   assert.equal(merged.traffic.queuedPeak, 2);
   assert.equal(merged.connections.total, 6);

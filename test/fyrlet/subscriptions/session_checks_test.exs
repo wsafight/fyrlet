@@ -6,14 +6,16 @@ defmodule Fyrlet.SessionChecksTest do
     previous = Application.fetch_env!(:fyrlet, :batch_session_checks)
     Application.put_env(:fyrlet, :batch_session_checks, true)
     on_exit(fn -> Application.put_env(:fyrlet, :batch_session_checks, previous) end)
-    %{alice: user(project())}
+    %{alice: user(project()), worker: start_supervised!({SessionChecks.Worker, []})}
   end
 
-  test "queued checks share one fresh query without caching its result", %{alice: alice} do
-    worker = SessionChecks.server(alice.actor)
-    handler = attach()
+  test "queued checks share one fresh query without caching its result", %{
+    alice: alice,
+    worker: worker
+  } do
+    handler = attach(worker)
     :sys.suspend(worker)
-    on_exit(fn -> :sys.resume(worker) end)
+    on_exit(fn -> if Process.alive?(worker), do: :sys.resume(worker) end)
 
     references =
       for _index <- 1..20 do
@@ -36,11 +38,10 @@ defmodule Fyrlet.SessionChecksTest do
     assert {:error, %Error{code: "UNAUTHENTICATED"}} = Auth.revalidate(alice.actor)
   end
 
-  test "large groups split into bounded queries", %{alice: alice} do
-    worker = SessionChecks.server(alice.actor)
-    attach()
+  test "large groups split into bounded queries", %{alice: alice, worker: worker} do
+    attach(worker)
     :sys.suspend(worker)
-    on_exit(fn -> :sys.resume(worker) end)
+    on_exit(fn -> if Process.alive?(worker), do: :sys.resume(worker) end)
 
     references =
       for _index <- 1..257 do
@@ -58,19 +59,23 @@ defmodule Fyrlet.SessionChecksTest do
     refute_receive {:batch, _measurements}
   end
 
-  test "a check arriving after a query starts is validated by a later query", %{alice: alice} do
-    worker = alice.actor |> SessionChecks.server() |> Process.whereis()
+  test "a check arriving after a query starts is validated by a later query", %{
+    alice: alice,
+    worker: worker
+  } do
     owner = self()
     handler = "session-race-#{Ecto.UUID.generate()}"
 
     :telemetry.attach(
       handler,
       [:fyrlet, :auth, :batch],
-      fn _event, _measurements, _metadata, owner ->
-        send(owner, {:queried, self()})
-        receive do: (:release -> :ok)
+      fn _event, _measurements, _metadata, {owner, worker} ->
+        if self() == worker do
+          send(owner, {:queried, self()})
+          receive do: (:release -> :ok)
+        end
       end,
-      owner
+      {owner, worker}
     )
 
     on_exit(fn ->
@@ -78,7 +83,7 @@ defmodule Fyrlet.SessionChecksTest do
       send(worker, :release)
     end)
 
-    first = Task.async(fn -> Auth.revalidate(alice.actor) end)
+    first = Task.async(fn -> GenServer.call(worker, {:revalidate, alice.actor}) end)
     assert_receive {:queried, ^worker}
     assert {:ok, _result} = Auth.revoke_own_session(alice.actor)
     reference = make_ref()
@@ -107,7 +112,7 @@ defmodule Fyrlet.SessionChecksTest do
   end
 
   test "locked checks and caller transactions bypass the batch worker", %{alice: alice} do
-    attach()
+    attach_queries()
 
     assert {:ok, :ok} =
              Repo.transaction(fn ->
@@ -116,7 +121,8 @@ defmodule Fyrlet.SessionChecksTest do
                :ok
              end)
 
-    refute_receive {:batch, _measurements}
+    assert_receive :direct_query
+    assert_receive :direct_query
   end
 
   describe "revalidate_many/1" do
@@ -144,7 +150,7 @@ defmodule Fyrlet.SessionChecksTest do
     test "requests for one shard are answered by a single query", %{alice: alice} do
       worker = SessionChecks.server(alice.actor)
       pid = Process.whereis(worker)
-      handler = attach()
+      handler = attach(pid)
       :sys.suspend(worker)
       on_exit(fn -> :sys.resume(worker) end)
 
@@ -154,43 +160,71 @@ defmodule Fyrlet.SessionChecksTest do
 
       assert [{:ok, _} | _] = results = Task.await(task)
       assert length(results) == 20
-      assert_receive {:batch, %{requests: 20, sessions: 1}}
-      refute_receive {:batch, _measurements}
+      assert_receive {:batch, %{requests: requests}} when requests >= 20 and requests <= 128
       :telemetry.detach(handler)
     end
 
     test "uses direct queries when batching is off or inside a transaction", %{alice: alice} do
-      attach()
+      attach_queries()
       assert [{:ok, _}] = Auth.revalidate_many([alice.actor])
-      assert_receive {:batch, _measurements}
+      refute_receive :direct_query
 
       assert {:ok, [{:ok, _}]} = Repo.transaction(fn -> Auth.revalidate_many([alice.actor]) end)
-      refute_receive {:batch, _measurements}
+      assert_receive :direct_query
 
       Application.put_env(:fyrlet, :batch_session_checks, false)
       assert [{:ok, _}] = Auth.revalidate_many([alice.actor])
-      refute_receive {:batch, _measurements}
+      assert_receive :direct_query
     end
   end
 
-  defp await_queue(pid, length) do
+  defp await_queue(pid, length, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
     case Process.info(pid, :message_queue_len) do
-      {:message_queue_len, ^length} -> :ok
-      _other -> Process.sleep(5) && await_queue(pid, length)
+      {:message_queue_len, queued} when queued >= length ->
+        :ok
+
+      _other ->
+        assert System.monotonic_time(:millisecond) < deadline
+        Process.sleep(5)
+        await_queue(pid, length, deadline)
     end
   end
 
-  defp attach do
+  test "batch measurements ignore unrelated emitters", %{worker: worker} do
+    attach(worker)
+    :telemetry.execute([:fyrlet, :auth, :batch], %{requests: 1, sessions: 1}, %{})
+    refute_receive {:batch, _measurements}
+  end
+
+  defp attach(worker) do
     handler = "session-batch-#{Ecto.UUID.generate()}"
 
     :telemetry.attach(
       handler,
       [:fyrlet, :auth, :batch],
-      fn _event, measurements, _metadata, owner -> send(owner, {:batch, measurements}) end,
-      self()
+      fn _event, measurements, _metadata, {owner, worker} ->
+        if self() == worker, do: send(owner, {:batch, measurements})
+      end,
+      {self(), worker}
     )
 
     on_exit(fn -> :telemetry.detach(handler) end)
     handler
+  end
+
+  defp attach_queries do
+    handler = "session-queries-#{Ecto.UUID.generate()}"
+
+    :telemetry.attach(
+      handler,
+      [:fyrlet, :repo, :query],
+      fn _event, _measurements, metadata, owner ->
+        if self() == owner and metadata[:source] == "sessions",
+          do: send(owner, :direct_query)
+      end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 end

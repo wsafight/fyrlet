@@ -13,6 +13,7 @@ const cluster = await clusterFixture();
 const clients = [];
 let sessionRefreshes = 0;
 const report = { domain, measured_at: new Date().toISOString(), topology: "Two named BEAM nodes on one local host, shared PostgreSQL, real HTTP/WebSocket; not a multi-host production capacity claim", checks: [] };
+const reportDirectory = process.env.CLUSTER_REPORT_DIR ?? `${root}/.local/cluster`;
 before(cluster.start);
 afterEach(() => {
   for (const client of clients.splice(0)) client.close();
@@ -20,8 +21,8 @@ afterEach(() => {
 after(async () => {
   for (const client of clients) client.close();
   await cluster.close();
-  await mkdir(`${root}/.local/cluster`, { recursive: true });
-  await writeFile(`${root}/.local/cluster/${domain}.json`, JSON.stringify(report, null, 2) + "\n");
+  await mkdir(reportDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(`${reportDirectory}/${domain}.json`, JSON.stringify(report, null, 2) + "\n", { mode: 0o600, flag: process.env.CLUSTER_REPORT_DIR ? "wx" : "w" });
 });
 
 function clientFor(session, endpoint, issue) {

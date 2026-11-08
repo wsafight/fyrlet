@@ -1,6 +1,7 @@
 name: Core
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -16,6 +17,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      RESTORE_DOCKER: '1'
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -62,38 +65,33 @@ jobs:
           npm --prefix sdks/typescript ci
           npm --prefix sdks/react ci
           npm --prefix examples/inbox-react ci
-      - name: Check Elixir formatting and compilation
-        run: |
-          mix format --check-formatted
-          mix compile --warnings-as-errors
-      - name: Test core, examples and packages
-        run: bash scripts/test_all.sh
-      - name: Test and typecheck SDK
-        run: |
-          npm --prefix sdks/typescript run test:coverage
-          npm --prefix sdks/typescript run typecheck
-      - name: Check exported contract and generated types
-        run: |
-          mkdir -p .local/ci
-          (cd examples/inbox && mix fyrlet.contract ../../.local/ci/contract.json)
-          node scripts/check_contract.mjs .local/ci/contract.json
-      - name: Test React, OIDC bridge and example build
-        run: |
-          npm --prefix sdks/react run test:coverage
-          npm --prefix sdks/react run typecheck
-          npm --prefix examples/inbox-react run test:coverage
-          npm --prefix examples/inbox-react run build
-      - name: Test HTTP and WebSocket integration
-        run: bash scripts/integration.sh
-      - name: Test React browser workflow
-        run: |
-          (cd examples/inbox-react && npx playwright install --with-deps chromium)
-          bash scripts/react.sh
+      - name: Install browser
+        run: cd examples/inbox-react && npx playwright install --with-deps chromium
+      - name: Run frozen-source acceptance
+        run: >-
+          node scripts/acceptance.mjs
+          --groups core,client,host,bench,contract,integration,restore,browser
+          --out .local/readiness/ci
+      - name: Validate Prometheus alert rules
+        run: >-
+          docker run --rm -v "$PWD/deploy/prometheus:/rules:ro"
+          --entrypoint /bin/promtool prom/prometheus:v3.1.0
+          check rules /rules/alerts.yml
+      - name: Upload acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ matrix.elixir }}-${{ matrix.otp }}
+          path: .local/readiness/ci/
+          include-hidden-files: true
+          if-no-files-found: ignore
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ matrix.elixir }}-${{ matrix.otp }}
-          path: .local/integration/*.log
+          path: |
+            .local/integration/*.log
+            .local/readiness/**
           include-hidden-files: true
           if-no-files-found: ignore

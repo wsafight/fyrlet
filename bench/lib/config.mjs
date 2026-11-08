@@ -8,6 +8,7 @@ export const scenarios = {
   slow: { users: 1, devices: 2, mode: "burst" },
   idle: { users: 10, devices: 2, mode: "idle" },
   soak: { users: 100, devices: 2, mode: "paced" },
+  mixed: { users: 10, devices: 2, mode: "mixed" },
 };
 
 export function configuration(arguments_) {
@@ -38,7 +39,8 @@ export function configuration(arguments_) {
     }
     return result;
   };
-  const selectedScenarios = (selected === "all" ? Object.keys(scenarios).filter((name) => name !== "soak") : [selected]).map((name) => ({
+  if (selected === "mixed" && target !== "fyrlet") throw new Error("mixed is a Fyrlet-only workload, not a Meteor comparison");
+  const selectedScenarios = (selected === "all" ? Object.keys(scenarios).filter((name) => !["soak", "mixed"].includes(name)) : [selected]).map((name) => ({
     name,
     ...scenarios[name],
     users: integer("users", smoke ? Math.min(scenarios[name].users, 2) : scenarios[name].users, 1, 5000),
@@ -73,7 +75,7 @@ export function configuration(arguments_) {
     intervalMs: integer("interval-ms", 0, 0, 10000),
     durationMs: integer("duration-ms", smoke ? 500 : 60000, 100, 600000),
     rate: integer("rate", smoke ? 10 : 100, 1, 10000),
-    settleMs: integer("settle-ms", selected === "soak" ? 2000 : 0, 0, 30000),
+    settleMs: integer("settle-ms", ["soak", "mixed"].includes(selected) ? 2000 : 0, 0, 30000),
     appPid: integer("app-pid", 0, 0, 2147483647),
     appWorkerPid: integer("app-worker-pid", 0, 0, 2147483647),
     databasePid: integer("database-pid", 0, 0, 2147483647),
@@ -84,7 +86,7 @@ export function configuration(arguments_) {
     if (scenario.users * scenario.devices > 5000 || scenario.users * scenario.devices * config.writes > 1000000) {
       throw new Error("A run is limited to 5000 observers and 1000000 potential delivery samples");
     }
-    if (scenario.mode === "paced" && config.rate * config.durationMs / 1000 > 1000000) {
+    if (["paced", "mixed"].includes(scenario.mode) && config.rate * config.durationMs / 1000 > 1000000) {
       throw new Error("A sustained run is limited to 1000000 offered writes");
     }
   }
@@ -98,7 +100,7 @@ export const help = `Fyrlet benchmarks (Node >=22)
   node bench/runner.mjs --target fyrlet --endpoint URL --fixtures FILE --out DIRECTORY
 Options:
   --target fyrlet|meteor|all     all is supported by the local launcher
-  --scenario all|fanout|isolated|burst|reconnect|slow|idle|soak (all excludes soak)
+  --scenario all|fanout|isolated|burst|reconnect|slow|idle|soak|mixed (all excludes soak/mixed)
   --profile smoke|standard      standard defaults to 50 rows and 3 repetitions
   --users N --devices N --writes N --warmup N --rows N --payload-bytes N
   --concurrency N --timeout-ms N --interval-ms N --idle-ms N --delay-ms N

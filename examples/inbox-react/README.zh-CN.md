@@ -36,9 +36,21 @@ npm --prefix examples/inbox-react run dev
 
 `POST /api/fyrlet/session` 重新验证宿主登录，合并并发交换，只返回短期 Fyrlet 令牌；`x-fyrlet-refresh: 1` 轮换令牌并撤销旧令牌。`POST /auth/logout` 和 `/auth/revoke` 关闭宿主登录并撤销对应 Fyrlet 会话。退出与签发并发时，迟到的令牌会在返回前撤销。切换账号会关闭旧宿主会话。浏览器退出时关闭 client 和令牌请求；BroadcastChannel 通知其他标签页，窗口重新聚焦时检查身份 revision。
 
-本示例在单进程内最多保存 1000 个待登录请求和 1000 个宿主会话。待登录请求五分钟到期；宿主会话最多一小时，且不超过 ID token 有效期。到期后立即拒绝本地登录，后台撤销最多八个并发，失败至少间隔十秒重试。重启进程后需重新登录；多实例宿主需接入自己的共享会话存储。外部 IdP 撤销通过宿主失效或会话到期生效，示例不宣称持续向 IdP 内省。远程退出失败会明确显示撤销未确认，本地私有状态仍被清空。
+默认使用内存，最多保存 1000 个待登录请求和 1000 个宿主会话，重启后需重新登录。待登录请求五分钟到期；宿主会话最多一小时，且不超过 ID token 有效期。到期或关闭后立即拒绝登录，每进程后台撤销最多八个并发，失败至少间隔十秒重试。外部 IdP 撤销通过宿主失效或会话到期生效，不宣称持续向 IdP 内省。远程退出失败会明确显示撤销未确认，本地私有状态仍被清空。
+
+## PostgreSQL 共享宿主存储
+
+多 Node 实例部署时，各实例的私有环境设置 `HOST_STORE_DATABASE_URL`、相同的 `HOST_STORE_KEY`（32 个随机字节的 base64url 编码）、`HOST_STORE_NAMESPACE` 和 `HOST_INSTANCES=2`。可用 `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"` 生成密钥，不要提交。所有实例的公开源、Fyrlet 端点／项目、OIDC provider 名称／issuer／client ID 必须一致。先用有建表权限的账号运行一次 `npm --prefix examples/inbox-react run migrate:store`，再以普通表访问权限启动宿主。不同宿主端口可置于同一 HTTPS 源后，不需要依赖粘性路由。
+
+使用直接 PostgreSQL 连接或 session-affine 连接池，**不能使用 transaction/statement pooling**：单宿主会话串行化依赖会话级 advisory lock。每进程最多八条池连接、64 个等待或活跃宿主变更，建连、查询、锁等待均有上限；连接预算与 Fyrlet 自身及通知监听器分开预留。state 和令牌载荷以 AES-256-GCM 认证加密，数据库只保存宿主 Cookie 的哈希标识。命名空间、公开源、端点、项目和 provider 身份共同隔离数据；每个 scope 全局最多 1000 个待登录请求、1000 个宿主会话。过期登录 state 在新请求入场时清除；关闭／到期的宿主由请求及定时器触发有界撤销和清理。
+
+最多七条连接持有宿主锁，为退出／控制查询保留一条连接；变更回调内的查询复用已持有的连接。认证／会话请求最多接纳 64 个普通请求，另为退出／撤销保留八个入口。这些是单进程安全边界，不是吞吐保证。已知凭据若持久化宿主失败，会尽力撤销，并将对应宿主标为关闭。
+
+登录 state 跨实例原子消费一次，续期按宿主会话串行化；退出不必等待签发锁即可写关闭标记，迟到的签发在返回前检查它。持锁进程被杀后数据库锁释放，共享存储宿主正常退出不会把其他实例的用户登出。存储错误按失败关闭处理。若远程已签发而响应或持久化丢失，可能存在未返回浏览器的凭据：已知凭据尽力撤销，未知凭据受请求有效期限制（最多十分钟）。这不是跨服务原子签发。密钥备份／轮换需单独处理：密钥丢失或直接替换后不能解密、清理旧行，删除旧状态前先对账／撤销会话。生产环境需验证数据库 TLS，并使用密钥管理设施。
 
 ## 验证
+
+生产部署前，在仓库根目录执行 `node --env-file-if-exists=examples/inbox-react/.env examples/inbox-react/server/check.mjs`，检查 HTTPS 配置、discovery、已配置存储的表访问和数据库就绪，不签发会话。多实例要求 PostgreSQL 存储与合法加密密钥。预检查不能替代真实 IdP 生命周期验收，见[发布检查](../../docs/zh/RELEASE_CHECKLIST.md)。`bash scripts/host_store.sh` 使用独立本地 PostgreSQL，覆盖两套独立宿主池、重启、续期／退出竞态和进程死亡，不联系外部 IdP。
 
 ```sh
 npm --prefix sdks/react test

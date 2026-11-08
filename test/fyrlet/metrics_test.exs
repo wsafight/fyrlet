@@ -323,6 +323,32 @@ defmodule Fyrlet.MetricsTest do
     assert_in_delta sample(body, "fyrlet_db_query_seconds_sum"), 0.0025, 0.000001
   end
 
+  test "Ops gauges replace previous values and report their freshness" do
+    enable()
+
+    :telemetry.execute(
+      [:fyrlet, :ops, :status],
+      %{alerts: 2, stuck_runs: 1, queue_age_seconds: 180, unresolved_effects: 3},
+      %{}
+    )
+
+    body = Metrics.render()
+    assert sample(body, "fyrlet_ops_alerts") == 2
+    assert sample(body, "fyrlet_runs_stuck") == 1
+    assert sample(body, "fyrlet_queue_age_seconds") == 180
+    assert sample(body, "fyrlet_effects_unresolved") == 3
+    assert sample(body, "fyrlet_ops_evaluated_at_seconds") >= System.system_time(:second) - 1
+
+    :telemetry.execute(
+      [:fyrlet, :ops, :status],
+      %{alerts: 0, stuck_runs: 0, queue_age_seconds: 0, unresolved_effects: 0},
+      %{}
+    )
+
+    assert sample(Metrics.render(), "fyrlet_queue_age_seconds") == 0
+    assert sample(Metrics.render(), "fyrlet_effects_unresolved") == 0
+  end
+
   test "Prometheus label values escape quotes, backslashes and newlines" do
     enable()
 

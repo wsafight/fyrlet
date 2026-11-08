@@ -67,6 +67,14 @@ config :fyrlet,
 
 ## Observability
 
+### Deployable alerts and notification transport
+
+[deploy/prometheus/alerts.yml](../deploy/prometheus/alerts.yml) covers database pool wait, pending Run age, unresolved Effects and stale Ops evaluations. Review thresholds against the deployment SLO. Pool wait uses the existing database histogram; other rules require the `fyrlet_ops` plugin and enabled metrics. Ops publishes `fyrlet_ops_alerts`, `fyrlet_runs_stuck`, `fyrlet_queue_age_seconds`, `fyrlet_effects_unresolved` and `fyrlet_ops_evaluated_at_seconds`, replacing previous values. Missing gauges mean no evaluation was observed, not a healthy zero; configure separate missing-series and scrape-availability alerts. Gauges are installation-wide and remain behind metrics authentication.
+
+`postgres_invalidation` defaults to `false`. `FYRLET_POSTGRES_INVALIDATION=true` adds one transactional `pg_notify` for Operation invalidations; enable it on every application node using the database. Each node opens one extra database connection and relays notifications only locally. The immediate PubSub path uses the same deduplication identifier. A normal outer `Repo.transaction` can use this path too. Payloads above 7,900 bytes fall back to a durable Oban job, and `durable_invalidation: true` always takes precedence. Disconnected listeners miss notifications, so periodic reconciliation is still required. This opt-in path is not a durable queue or a measured throughput claim; Run notifications are unchanged. The earlier statement about ordinary outer transactions retaining durable jobs applies when this option is off.
+
+For repeatable local checks, upgrade procedures and external acceptance boundaries, see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+
 ### Telemetry events
 
 Telemetry events include fyrlet.operation.stop, fyrlet.subscription.query, fyrlet.subscription.snapshot, fyrlet.subscription.delta and fyrlet.subscription.count, plus the events of Ecto / Oban themselves. duration is in monotonic native units, bytes for a snapshot is the JSON byte size of the complete data, bytes for a delta is the JSON byte size of the patch (excluding the event envelope), and active is the number of subscriptions currently on this node. Logging of Phoenix connection parameters and channel parameters is off by default, business exceptions are logged by exception type only, and the client receives a uniform error.
@@ -174,3 +182,7 @@ Shared data and execution facts are still persisted in the same PostgreSQL; shar
 
 `bash scripts/cluster.sh` has verified, on two nodes on the same machine: idempotency, shared/append, membership revocation under ordinary invalidation, failover after SIGKILL, node rejoin, durable approval, session renewal and resource cleanup. For detailed results see [ACCEPTANCE.md](ACCEPTANCE.md); multi-host network partitions, production capacity and 24-hour stability have not been verified.
 - New configuration: `FYRLET_IDEMPOTENCY_TTL_SECONDS`, `POOL_SIZE`, `FYRLET_CHANNEL_HIBERNATE_MS` (build time).
+
+## Local recovery and release drills
+
+Use `bash scripts/host_store.sh` for shared-host storage regressions, `node scripts/restore_smoke.mjs` for an isolated local snapshot/restore/repeat-migration check, and `node scripts/stability.mjs --seconds 30 --clients 4 --sample-ms 5000` to exercise the long-run wrapper before scheduling its 24-hour mode. The stability wrapper records database growth/backlog and node memory/pool telemetry; short runs do not verify 24-hour stability or production SLOs. `node scripts/release_check.mjs` checks sources, artifacts, policy and optional exact-revision CI without publishing. Prerequisites, limits and external gates are in the [release checklist](RELEASE_CHECKLIST.md).

@@ -13,8 +13,12 @@
 | 客户端查询与 React（路线图 2） | snapshot / append 引用计数、selector、独立 React 包、确定空 SSR 与真实 Inbox 页面 | 已实现；React 最多 100 个活跃查询，无引用立即清理 | `client.ts`、`selector.ts`、`sdks/react`、`examples/inbox-react` | 共享查询、React 生命周期 / SSR、`scripts/react.sh` |
 | 契约类型（路线图 3） | Presence 名称 / 参数 / meta、操作 kind、显式运行时元数据、兼容旧契约 | 已实现 | `scripts/generate.mjs`、`types.ts` | 生成器测试、SDK / React 类型检查、契约漂移检查 |
 | 有限重试（路线图 4） | 默认关闭、固定输入与键、次数 / 总时限、抖动、retry-after、未知后只读恢复 | read/write/run 已实现；signal/cancel/ingest 不自动重试 | `retry.ts`、`client.ts`、`requests.ts` | `retry.test.mjs`、真实丢响应集成、React 浏览器流程 |
-| 登录桥接（路线图 5） | OIDC / PKCE、续期、退出、撤销、换号与跨标签私有状态清理 | 本地示例已实现；外部 IdP 与多实例部署待验收 | `examples/inbox-react/server`、`src/session.ts` | OIDC 单元 / 竞态测试、`scripts/react.sh` |
-| 核心 CI | 核心 / 示例 / 包测试、SDK 测试与类型检查、契约漂移检查、HTTP / Socket 集成 | 工作流已补齐；本地检查通过，远程运行待验 | `.github/workflows/core.yml`、`scripts/check_contract.mjs` | 命令记录在 `ACCEPTANCE.md` |
+| 登录桥接（路线图 5） | OIDC / PKCE、续期、退出、撤销、换号与跨标签私有状态清理 | 本地示例与可选加密 PostgreSQL 宿主共享存储已实现；真实 IdP／生产部署待验收 | `examples/inbox-react/server`、`src/session.ts` | OIDC 单元／竞态、`scripts/host_store.sh`、`scripts/react.sh` |
+| 核心 CI | 核心／示例／包、SDK／React／OIDC、压测工具、契约和浏览器集成 | 已定位上游 main 失败；本地遥测隔离修复通过，新远程运行待验 | `.github/workflows/core.yml`、`scripts/acceptance.mjs` | 命令记录在 `ACCEPTANCE.md` |
+| 部署检查与告警规则 | 冻结源码的 CI／本地验收、HTTPS／OIDC／存储预检查、Ops 指标与 Prometheus 规则 | 本地已实现；新托管 CI、真实 IdP 与生产 SLO 调整仍未验收 | `scripts/acceptance.mjs`、`examples/inbox-react/server/check.mjs`、`deploy/prometheus/alerts.yml` | 部署检查、共享存储、指标和工具测试 |
+| 恢复与发布检查 | 本地一致性快照恢复、重复迁移、长时采样、产物／源码／发布策略检查 | 工具、非空 Run／Effect 恢复及同机短演练已在本地验证；生产恢复、多主机故障、24 小时运行、维护策略与正式发布仍待验收 | `scripts/restore_smoke.mjs`、`scripts/stability.mjs`、`scripts/release_check.mjs` | 工具测试与 `ACCEPTANCE.md` 中的本地演练报告 |
+| 混合负载与密度扫描 | 新增／更新／归档／恢复／删除、分页历史、显式确认及用户／设备／速率组合 | 短时低速运行已验证，不作为饱和、加速或生产容量结论 | `bench/lib/mixed.mjs`、`bench/fair/scan.mjs` | 混合／工具测试与 `PERFORMANCE.md` 证据 |
+| 事务通知替代路径 | 显式 PostgreSQL 通知、本地转发、超大载荷回退 | 已实现；默认不变，监听缺口需对账，持久模式优先 | `invalidation_notifications.ex`、`runtime.ex` | 通知提交／回滚、失效模式测试 |
 | 有界保留清理 | 共享行数 / 时间预算、有界删除、轮换续排与清理指标 | 已实现；运行中的 SQL 与级联删除遵守文档所述边界 | `pruning.ex`、`prune_worker.ex`、`metrics.ex` | `pruning_test`、`ingest_retention_test`、保留策略测试 |
 | 数据库就绪 | 公开的 `GET /ready` 检查数据库，`/health` 保持存活检查 | 已实现；数据库故障返回脱敏且可重试的 503 | `readiness.ex`、`router.ex` | `readiness_test`、集成启动检查 |
 | 能力协商与契约导出 | 能力协商；依赖能力的条目按需出现在契约中；`UNSUPPORTED_CAPABILITY` | 已实现 | `capabilities.ex`、`registry.ex` | `capabilities_test`、`capability_channel_test` |

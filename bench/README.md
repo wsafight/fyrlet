@@ -6,6 +6,8 @@ See the [performance comparison](../docs/PERFORMANCE.md) for the latest comparis
 
 This directory contains repeatable Fyrlet baselines, a Meteor inbox reference application, shared scenarios and result reports. Verify business correctness before interpreting performance numbers. Local smoke runs do not establish capacity or product rankings.
 
+`--scenario mixed --target fyrlet` additionally exercises add/update/archive/restore/delete, paginated history and explicit observer confirmation. It is intentionally excluded from `all` and from Meteor comparisons. Limited-resource user/fanout/rate scans are described in [fair/README.md](fair/README.md); mixed latency includes confirmations and cannot be compared directly with passive update-only propagation.
+
 Future Meteor / Fyrlet comparisons used to support performance conclusions follow the [equal-conditions specification](FAIRNESS.md): equal application and database resource limits, business guarantees, load and warmup, with separate single-core and multicore budgets. The current local launcher does not enforce resource limits. Cross-implementation reports are marked `observational-only` and cannot establish rankings under equal resources. Reports check the complete workload, source fingerprints and host information. The launcher aborts the comparison if source files change before or after measurement.
 
 ## Quick start
