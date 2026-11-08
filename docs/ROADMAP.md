@@ -76,7 +76,7 @@ The first implementation reuses identical query results and manages Presence han
 
 ## Milestone 3: complete contract types
 
-Progress: **delivered.** Generated contracts include operation/subscription inputs and outputs, Presence names, parameters and meta, operation kinds, and an explicit `operationMetadata` constant. `startRun` restricts names by kind; legacy hand-written contracts without the new fields remain usable.
+Progress: **delivered.** Generated contracts include operation/subscription inputs and outputs, Presence names, parameters and meta, operation kinds, and an explicit `operationMetadata` constant. `startRun` restricts names by kind. Every contract must explicitly declare `kind` for each operation and a `presence` section (empty when unused); pre-release contracts without those fields are rejected at compile time.
 
 Delivered:
 
@@ -86,7 +86,7 @@ Delivered:
 
 Runtime metadata can help classify operations; server transactions and idempotency guarantees still determine whether retrying is safe.
 
-Completion criteria: invalid names, meta and inputs fail type checking; valid examples build; generated artifacts match server exports; undeclared capabilities remain unavailable; older contracts still work.
+Completion criteria: invalid names, meta and inputs fail type checking; missing operation kinds or Presence declarations fail type checking; valid examples build; generated artifacts match server exports; undeclared capabilities remain unavailable.
 
 ## Milestone 4: bounded transient-failure retries
 
@@ -122,7 +122,7 @@ Completion criteria:
 
 Local follow-up now includes a grouped acceptance runner, HTTPS/OIDC deployment preflight, Prometheus pool/backlog alerts, protected benchmark evidence and repeated rate scans. Optional transactional PostgreSQL invalidations are implemented behind `FYRLET_POSTGRES_INVALIDATION`; the default delivery path is unchanged and disconnected-listener recovery still uses reconciliation. Commands, upgrade steps and external gates are in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
-Rate scans now also vary user/fanout density and support mixed add/update/archive/restore/delete, paginated history and explicit view confirmation. Keep source fingerprints, resource limits, correctness assertions and at least three repetitions per point; short runs do not establish capacity. Multiplexing still requires evidence that remaining Channel memory is a bottleneck; no VM/GC/NIF rewrite is justified. CI uses the frozen-source acceptance runner; restore and long-run sampling tools are available. External IdP/production shared-store deployment, a new hosted CI run, multi-host faults, 24-hour operation and release-policy approval remain separate gates.
+Rate scans now also vary user/fanout density and support mixed add/update/archive/restore/delete, paginated history and explicit view confirmation. Keep source fingerprints, resource limits, correctness assertions and at least three repetitions per point; short runs do not establish capacity. Multiplexing still requires evidence that remaining Channel memory is a bottleneck; no VM/GC/NIF rewrite is justified. CI uses the frozen-source acceptance runner; restore and long-run sampling tools are available. External IdP/production shared-store deployment, a new hosted CI run, multi-host faults, 24-hour operation and actual registry publication remain separate gates. Apache-2.0 and the initial core + TypeScript + React release scope are selected.
 
 | Direction | Trigger | Questions to resolve first |
 | --- | --- | --- |
@@ -144,7 +144,7 @@ Choose checks for the actual release scope without requiring completion of the e
 | Installation and upgrades | An application outside the repository can install distribution packages, migrate and run; define upgrade paths from supported versions and recovery after failures |
 | Operational visibility | Distinguish process liveness from database readiness; observe pool waits, job backlogs, subscription recovery and unconfirmed calls |
 | Load and failure recovery | State connections, subscriptions, room members, write rates and data sizes before testing mixed workloads, reconnects and failures; retain resource samples and correctness assertions |
-| Distribution and maintenance | Before public release, maintainers decide licensing, package distribution, versioning and deprecation rules; current local installation remains usable |
+| Distribution and maintenance | Apache-2.0, aligned core/TypeScript/React versions and the initial release scope are selected; before actual publication, maintainers verify registry ownership and approve publication and the compatibility/deprecation policy |
 
 ## Delivery and verification
 

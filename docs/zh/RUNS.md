@@ -31,6 +31,8 @@ Run 在外部副作用上依赖 [Effect 与 Outbox](EFFECTS.md)，鉴权边界�
 | `run/3` | 根据操作名、已验证发起者与输入生成顺序计划；不执行外部调用 |
 | `step/3` | 根据步骤名、已持久化输入和执行上下文返回业务结果或 Effect 意图 |
 | `advance/3` | 根据已持久化状态、事件和上下文决定下一步；不执行 IO（动态推进） |
+| `definition_version/1` | 返回 Run 受理时记录的显式版本，不隐式默认为 `"1"` |
+| `implementation/2` | 根据操作与固定版本解析出准确实现模块；不可用时返回 `nil` |
 
 静态计划包含工作节点与显式等待节点：
 
@@ -45,6 +47,8 @@ Run 在外部副作用上依赖 [Effect 与 Outbox](EFFECTS.md)，鉴权边界�
 `step/3` 的返回值为 `{:ok, output}`、`{:error, %Fyrlet.Error{}}` 或 `{:effect, effect_spec}`；也可返回 `{:ok, output, commit: fun}`——`fun` 在提交结果的**同一事务**内执行，用于把业务写入与步骤结果原子提交（受管提交）。`fun` 返回 `{:error, error}` 或抛出异常时，整个提交回滚，随后作为一次尝试失败记录。Effect 意图交给核心提交和派发，见 [EFFECTS.md](EFFECTS.md)；Step 不返回“下一步”指令。执行上下文提供先前已提交的输出，当前 Step 的解析后输入在首次执行前固定，重试复用。
 
 计划创建时分配稳定的 Step 实例与 `wait_id`，同名步骤以实例 ID/序号区分。每个节点的输入、输出和信号负载必须有契约与大小上限。
+
+每个 Run 定义都必须实现 `definition_version/1` 与 `implementation/2`，启动校验会拒绝任一缺失。首个实现通常返回 `"1"`，并把对应 Run 操作与 `"1"` 映射到 `__MODULE__`，其他组合返回 `nil`。固定映射缺失时，恢复过程绝不会替换为当前注册模块。
 
 `run/3` 与 `advance/3` 两种规划模式按操作显式二选一。`advance/3` 可返回 `{:step, name, input}`、`{:wait, wait_spec}`、`{:done, output}` 或 `{:error, error}`；推进决定与新节点在同一事务内持久化，不能在恢复时重新执行已提交的决定。操作声明 `planning: :dynamic`（`Fyrlet.Runs.operation/2`），定义实现 `advance(operation, state, event)`；`state` 含 `input`、已完成节点的 `outputs`、`run_id`、`project_id`、`initiator_subject_id`；`event` 为 `:start`、`{:step_succeeded, name, output}`、`{:wait_satisfied, name, payload}` 或 `{:wait_timed_out, name}`。业务键与有效期由可选的 `plan_options/3` 提供。动态节点与静态节点经过同一套校验，总节点数受同一上限约束；`advance/3` 抛出异常以 `ADVANCE_CRASHED` 终止运行，且不泄露异常内容。
 

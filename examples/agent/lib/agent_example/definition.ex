@@ -80,6 +80,13 @@ defmodule AgentExample.Definition do
   end
 
   @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
+  def implementation("agent.start", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+
+  @impl true
   def step("prepare", input, context) do
     result =
       case input["tool"] do

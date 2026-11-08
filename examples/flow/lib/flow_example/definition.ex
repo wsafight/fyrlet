@@ -123,6 +123,13 @@ defmodule FlowExample.Definition do
       else: {:ok, steps: steps, business_key: "flow:#{actor.subject_id}:" <> flow_id}
   end
 
+  @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
+  def implementation("flow.start", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+
   defp to_step(%{"type" => "http", "name" => name} = node) do
     body = node["body"] || "{}"
 

@@ -93,6 +93,13 @@ defmodule NotifyExample.Definition do
   end
 
   @impl true
+  def definition_version(_name), do: "1"
+
+  @impl true
+  def implementation("notify.send", "1"), do: __MODULE__
+  def implementation(_name, _version), do: nil
+
+  @impl true
   def step("record", input, context) do
     # Atomic with the step's own result: either the copy exists and the step succeeded, or neither.
     {:ok, %{"recorded" => true},

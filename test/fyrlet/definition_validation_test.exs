@@ -62,17 +62,15 @@ defmodule Fyrlet.DefinitionValidationTest do
     end
   end
 
-  test "definitions without a version callback retain version one through the Run compatibility API" do
-    assert Fyrlet.Definition.current_version(ValidationFixtures.Core, "demo.read") == "1"
-    assert Fyrlet.Runs.Resolver.current_version(ValidationFixtures.Core, "demo.read") == "1"
+  test "definition versions have no implicit default" do
+    assert_raise UndefinedFunctionError, fn ->
+      Fyrlet.Definition.current_version(ValidationFixtures.Core, "demo.read")
+    end
   end
 
   test "definition versions preserve operation-specific strings and normalize integers" do
     for {operation, version} <- [{"demo.numeric", "2"}, {"demo.named", "release-3"}] do
       assert Fyrlet.Definition.current_version(ValidationFixtures.Versioned, operation) == version
-
-      assert Fyrlet.Runs.Resolver.current_version(ValidationFixtures.Versioned, operation) ==
-               version
     end
   end
 
@@ -108,6 +106,28 @@ defmodule Fyrlet.DefinitionValidationTest do
   test "a run needs its step executor even when its planner exists" do
     configure(ValidationFixtures.RunWithoutStep, %{"demo.run" => run()})
     assert_invalid(~r/needs step\/3/)
+  end
+
+  test "a run needs an explicit definition version" do
+    configure(ValidationFixtures.RunWithoutVersion, %{"demo.run" => run()})
+    assert_invalid(~r/needs definition_version\/1/)
+  end
+
+  test "a run needs an explicit pinned implementation resolver" do
+    configure(ValidationFixtures.RunWithoutImplementation, %{"demo.run" => run()})
+    assert_invalid(~r/needs implementation\/2/)
+  end
+
+  test "a historical run whose resolver was removed is unavailable instead of crashing recovery" do
+    Application.put_env(:fyrlet, :definitions, [ValidationFixtures.RunWithoutImplementation])
+
+    run = %{
+      definition_module: inspect(ValidationFixtures.RunWithoutImplementation),
+      operation: "demo.run",
+      definition_version: "1"
+    }
+
+    assert Fyrlet.Runs.Resolver.implementation(run) == nil
   end
 
   test "a static planner cannot substitute for a dynamic planner" do
@@ -243,6 +263,11 @@ defmodule Fyrlet.DefinitionValidationTest do
   test "identical sharing requires membership even when query exists" do
     configure(ValidationFixtures.SharedWithoutMembership, %{}, %{"demo.watch" => shared()})
     assert_invalid(~r/needs membership\/3/)
+  end
+
+  test "identical sharing requires an explicit projection version" do
+    configure(ValidationFixtures.SharedWithoutVersion, %{}, %{"demo.watch" => shared()})
+    assert_invalid(~r/needs definition_version\/1/)
   end
 
   test "identical and per-member sharing cannot be combined" do

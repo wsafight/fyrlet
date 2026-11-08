@@ -20,10 +20,11 @@
 # 定义需实现：
 def shared_query(name, %{project_id: _, scope: _}, params)  # 不接收 Actor
 def membership(name, actor, params)                          # :member | :not_member
+def definition_version(name)                                 # 必需：显式投影版本
 def policy_version(name)                                     # 可选：授权策略变化时递增
 ```
 
-缓存键为 项目、定义模块、订阅名、规范化参数、Scope、投影版本（`definition_version/1`）、授权策略版本（`policy_version/1`）。共享的 Observer 不持有 Actor。每个成员在**加入时**、**每次发送数据前**、**定时对账时**以及收到 `:membership_changed` 消息时，都重新执行会话复核、`authorize/3` 与 `membership/3`；未通过者立即以 `FORBIDDEN` 终止订阅，缓存命中不赋予任何读取权限。成员关系变化后，向对应 Observer 发送 `:membership_changed` 可立即复核，否则最迟在下一次对账或下一次发送时被发现。遥测 `fyrlet.scope.shared` 报告成员数。`sharing: "masked"` 未提供。
+identical 共享必须实现 `definition_version/1`，不存在隐式默认版本；启动校验会拒绝缺少该回调的共享定义。缓存键为 项目、定义模块、订阅名、规范化参数、Scope、投影版本（`definition_version/1`）、授权策略版本（`policy_version/1`）。共享的 Observer 不持有 Actor。每个成员在**加入时**、**每次发送数据前**、**定时对账时**以及收到 `:membership_changed` 消息时，都重新执行会话复核、`authorize/3` 与 `membership/3`；未通过者立即以 `FORBIDDEN` 终止订阅，缓存命中不赋予任何读取权限。成员关系变化后，向对应 Observer 发送 `:membership_changed` 可立即复核，否则最迟在下一次对账或下一次发送时被发现。遥测 `fyrlet.scope.shared` 报告成员数。`sharing: "masked"` 未提供。
 
 默认 `sharing: :private`。启用 `:identical` 时必须使用独立的 `shared_query/3` 公共投影路径，而不是缓存某个成员的私有查询结果：
 

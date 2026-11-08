@@ -217,6 +217,9 @@ defmodule Fyrlet.RunsDynamicTest do
       def scope(_, _, _), do: "t"
       def run(_, _, _), do: {:ok, steps: []}
       def step(_, _, _), do: {:ok, %{}}
+      def definition_version(_), do: "1"
+      def implementation("x.run", "1"), do: __MODULE__
+      def implementation(_, _), do: nil
     end
 
     previous = Application.fetch_env!(:fyrlet, :definitions)

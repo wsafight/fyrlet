@@ -176,7 +176,7 @@ defmodule Fyrlet.Runs do
         operation: name,
         business_key: plan["business_key"],
         definition_module: inspect(module),
-        definition_version: Resolver.current_version(module, name),
+        definition_version: Fyrlet.Definition.current_version(module, name),
         plan: plan,
         execution_grant_id: grant.id,
         status: "pending",

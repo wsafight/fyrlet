@@ -6,26 +6,25 @@ defmodule Fyrlet.Definition do
   Optional callbacks belong to the features declared in its contract:
 
   * Incremental snapshots: `change/4`, `load_subscription/3`, `update_subscription/5`.
-  * Identical sharing: `shared_query/3`, `membership/3`, `policy_version/1`.
+  * Identical sharing: `shared_query/3`, `membership/3`, `definition_version/1`;
+    `policy_version/1` is optional.
   * Append subscriptions: `stream/3`.
   * Managed data access: `data_scope/3`.
-  * Runs: `run/3` or `advance/3`, `step/3`, `plan_options/3`, `run_authorize/4`,
-    `implementation/2`.
+  * Runs: `run/3` or `advance/3`, `step/3`, `definition_version/1`, `implementation/2`;
+    `plan_options/3` and `run_authorize/4` are optional.
   * Ingest: `ingest/3`.
 
   `definition_version/1` identifies a shared projection or pins a run implementation.
-  It defaults to `"1"`; a sharing authorization policy has its own `policy_version/1`.
+  Features that persist or cache a version require it explicitly; a sharing authorization
+  policy has its own optional `policy_version/1`.
   `Fyrlet.Registry.validate!/0` checks declared features and their required callbacks
   at startup through `Fyrlet.Definition.Validation`.
   """
 
-  @doc "The current definition version used by shared subscriptions and durable runs."
+  @doc "The explicitly declared definition version used by shared subscriptions and durable runs."
   def current_version(module, name) do
     Code.ensure_loaded!(module)
-
-    if function_exported?(module, :definition_version, 1),
-      do: to_string(module.definition_version(name)),
-      else: "1"
+    to_string(module.definition_version(name))
   end
 
   @callback contract() :: map()
@@ -78,7 +77,7 @@ defmodule Fyrlet.Definition do
   @doc "Authorizes `:start`, `:view`, `:signal` or `:cancel`. Without it only the starter may act."
   @callback run_authorize(String.t(), atom(), Fyrlet.Actor.t(), map()) ::
               :ok | {:error, Fyrlet.Error.t()}
-  @doc "The shared projection version, or the version a run is pinned to. Defaults to \"1\"."
+  @doc "The shared projection version, or the version a run is pinned to. Required by those features."
   @callback definition_version(String.t()) :: String.t() | integer()
   @doc "The module implementing `version` of an operation, or nil when it is gone."
   @callback implementation(String.t(), String.t()) :: module() | nil

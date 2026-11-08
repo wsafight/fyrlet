@@ -20,10 +20,11 @@ Shared subscriptions are **explicitly declared**, and only for scenarios where "
 # The definition must implement:
 def shared_query(name, %{project_id: _, scope: _}, params)  # does not receive the Actor
 def membership(name, actor, params)                          # :member | :not_member
+def definition_version(name)                                 # required: explicit projection version
 def policy_version(name)                                     # optional: increment when the authorization policy changes
 ```
 
-The cache key is project, definition module, subscription name, normalized parameters, Scope, projection version (`definition_version/1`) and authorization policy version (`policy_version/1`). The shared Observer holds no Actor. Each member re-runs the session re-check, `authorize/3` and `membership/3` **on joining**, **before every data send**, **on periodic reconciliation**, and when a `:membership_changed` message is received; a member that fails is terminated immediately with `FORBIDDEN`, and a cache hit grants no read permission. After a membership change, sending `:membership_changed` to the corresponding Observer triggers an immediate re-check; otherwise it is found at the latest on the next reconciliation or the next send. The telemetry event `fyrlet.scope.shared` reports the member count. `sharing: "masked"` is not provided.
+`definition_version/1` is mandatory for identical sharing and has no implicit default; startup validation rejects a shared definition without it. The cache key is project, definition module, subscription name, normalized parameters, Scope, projection version (`definition_version/1`) and authorization policy version (`policy_version/1`). The shared Observer holds no Actor. Each member re-runs the session re-check, `authorize/3` and `membership/3` **on joining**, **before every data send**, **on periodic reconciliation**, and when a `:membership_changed` message is received; a member that fails is terminated immediately with `FORBIDDEN`, and a cache hit grants no read permission. After a membership change, sending `:membership_changed` to the corresponding Observer triggers an immediate re-check; otherwise it is found at the latest on the next reconciliation or the next send. The telemetry event `fyrlet.scope.shared` reports the member count. `sharing: "masked"` is not provided.
 
 The default is `sharing: :private`. When `:identical` is enabled, the separate `shared_query/3` public projection path must be used, rather than caching one member's private query result:
 
