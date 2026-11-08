@@ -3,9 +3,7 @@ defmodule Fyrlet.Repo.Migrations.HotPathIndexes do
 
   def change do
     # Effects.over_rate?/2 counts rows per project within the last second on every dispatch.
-    create index(:fyrlet_effects, [:project_id, :claimed_at],
-             where: "claimed_at IS NOT NULL"
-           )
+    create index(:fyrlet_effects, [:project_id, :claimed_at], where: "claimed_at IS NOT NULL")
 
     # Store.leased_attempts/1 and abandon_leases/1 run on every step claim and run close.
     create index(:fyrlet_run_attempts, [:run_id],

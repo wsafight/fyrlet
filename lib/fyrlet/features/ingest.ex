@@ -288,8 +288,12 @@ defmodule Fyrlet.Features.Ingest do
           total: length(checked)
         })
 
-      results = Enum.map(checked, &accept(&1, batch, actor, name))
+      {results, rows} = accept_all(checked, batch, actor, name)
       accepted = Enum.count(results, &(&1["status"] == "accepted"))
+
+      if rows != [] do
+        Repo.insert_all(Item, rows)
+      end
 
       if accepted > 0 do
         Oban.insert!(Worker.new(%{"batch_id" => batch.id}))
@@ -299,39 +303,66 @@ defmodule Fyrlet.Features.Ingest do
     end)
   end
 
-  defp accept({:invalid, index, {key, message}}, _batch, _actor, _name),
-    do: %{"index" => index, "key" => key, "status" => "invalid", "error" => message}
+  # One query fetches every existing key up front and one insert_all writes the new items,
+  # instead of a SELECT plus an INSERT per item. `seen` also tracks rows accepted earlier in
+  # the same batch, so a repeated key inside one request still reports duplicate/conflict.
+  defp accept_all(checked, batch, actor, name) do
+    keys = for {:ok, _, key, _} <- checked, do: key
 
-  defp accept({:ok, index, key, payload}, batch, actor, name) do
+    seen =
+      Repo.all(
+        from(i in Item,
+          where:
+            i.project_id == ^actor.project_id and i.subject_id == ^actor.subject_id and
+              i.operation == ^name and i.item_key in ^keys,
+          select: {i.item_key, i.payload_hash, i.status}
+        )
+      )
+      |> Map.new(fn {key, hash, status} -> {key, {hash, status}} end)
+
+    now = Auth.now()
+
+    {pairs, _seen} =
+      Enum.map_reduce(checked, seen, fn entry, seen ->
+        accept(entry, batch, actor, name, now, seen)
+      end)
+
+    results = Enum.map(pairs, &elem(&1, 0))
+    rows = for {_result, row} <- pairs, row != nil, do: row
+    {results, rows}
+  end
+
+  defp accept({:invalid, index, {key, message}}, _batch, _actor, _name, _now, seen),
+    do:
+      {{%{"index" => index, "key" => key, "status" => "invalid", "error" => message}, nil}, seen}
+
+  defp accept({:ok, index, key, payload}, batch, actor, name, now, seen) do
     hash = Auth.hash(Jason.encode!(payload))
 
-    case Repo.get_by(Item,
-           project_id: actor.project_id,
-           subject_id: actor.subject_id,
-           operation: name,
-           item_key: key
-         ) do
-      %Item{payload_hash: ^hash} = existing ->
-        %{
+    case seen do
+      %{^key => {^hash, status}} ->
+        result = %{
           "index" => index,
           "key" => key,
-          "status" => "duplicate",
-          "error" => nil,
-          "state" => existing.status
+          "status" => "duplicate:" <> status,
+          "error" => nil
         }
-        |> Map.delete("state")
-        |> Map.put("status", "duplicate:" <> existing.status)
 
-      %Item{} ->
-        %{
+        {{result, nil}, seen}
+
+      %{^key => _different} ->
+        result = %{
           "index" => index,
           "key" => key,
           "status" => "conflict",
           "error" => "key already used with different data"
         }
 
-      nil ->
-        Repo.insert!(%Item{
+        {{result, nil}, seen}
+
+      _absent ->
+        row = %{
+          id: Ecto.UUID.generate(),
           batch_id: batch.id,
           project_id: actor.project_id,
           subject_id: actor.subject_id,
@@ -340,10 +371,14 @@ defmodule Fyrlet.Features.Ingest do
           item_key: key,
           payload_hash: hash,
           payload: payload,
-          status: "pending"
-        })
+          status: "pending",
+          attempts: 0,
+          inserted_at: now,
+          updated_at: now
+        }
 
-        %{"index" => index, "key" => key, "status" => "accepted", "error" => nil}
+        result = %{"index" => index, "key" => key, "status" => "accepted", "error" => nil}
+        {{result, row}, Map.put(seen, key, {hash, "pending"})}
     end
   end
 
@@ -383,7 +418,19 @@ defmodule Fyrlet.Features.Ingest do
         )
       )
 
-    results = Enum.map(ids, &process_item/1)
+    # Each item is an independent SKIP LOCKED transaction, so a bounded stream processes
+    # several at once without one slow item holding the worker for the whole batch.
+    results =
+      ids
+      |> Task.async_stream(&process_item/1,
+        max_concurrency: 4,
+        timeout: 60_000,
+        on_timeout: :kill_task
+      )
+      |> Enum.map(fn
+        {:ok, result} -> result
+        {:exit, _reason} -> :retry
+      end)
 
     if Enum.any?(results, &(&1 == :retry)) do
       Repo.transaction(fn ->
@@ -442,21 +489,32 @@ defmodule Fyrlet.Features.Ingest do
       record_failure(id, Error.new("INGEST_CRASHED", "The handler raised", %{}, true))
   end
 
+  # One statement increments attempts and settles the item: no pre-read, and a concurrent
+  # worker cannot overwrite a higher attempt count. SET expressions see the old attempts,
+  # so "new attempts >= max" is "attempts >= max - 1" here.
+  @failure_sql """
+  UPDATE fyrlet_ingest_items
+  SET attempts = attempts + 1,
+      error = $2::jsonb,
+      status = CASE WHEN $3::boolean OR attempts >= $4 - 1 THEN 'dead' ELSE 'pending' END,
+      processed_at = CASE WHEN $3::boolean OR attempts >= $4 - 1 THEN $5::timestamp ELSE processed_at END
+  WHERE id = $1::uuid
+  RETURNING status
+  """
+
   defp record_failure(id, error) do
-    item = Repo.get!(Item, id)
-    attempts = item.attempts + 1
-    final = not error.retryable or attempts >= @max_attempts
+    params = [
+      Ecto.UUID.dump!(id),
+      Error.to_map(error),
+      not error.retryable,
+      @max_attempts,
+      DateTime.to_naive(Auth.now())
+    ]
 
-    Repo.update_all(from(i in Item, where: i.id == ^id),
-      set: [
-        status: if(final, do: "dead", else: "pending"),
-        attempts: attempts,
-        error: Error.to_map(error),
-        processed_at: if(final, do: Auth.now())
-      ]
-    )
-
-    if final, do: :dead, else: :retry
+    case Repo.query!(@failure_sql, params) do
+      %{rows: [["dead"]]} -> :dead
+      _pending_or_gone -> :retry
+    end
   end
 
   # ---- reading ------------------------------------------------------------------------

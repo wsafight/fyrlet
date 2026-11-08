@@ -1,7 +1,7 @@
 defmodule Fyrlet.Runs.Notify do
   @moduledoc """
-  Tells subscribers a run changed: a durable invalidation job is inserted in the same
-  transaction as the change, and broadcast immediately after it commits.
+  Tells subscribers a run changed: one notice per run per transaction, delivered like an
+  ordinary write (durable job, pg_notify, or immediate broadcast) and flushed after commit.
   """
   alias Fyrlet.AfterCommit
 

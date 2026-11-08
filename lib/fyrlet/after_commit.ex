@@ -1,8 +1,9 @@
 defmodule Fyrlet.AfterCommit do
   @moduledoc """
   Collects invalidation broadcasts and telemetry for the managed outer transaction.
-  Invalidation jobs are persisted in that transaction; immediate broadcasts and telemetry
-  are released only after it commits. A rollback discards the pending work.
+  Notices are durable jobs, transactional pg_notify, or immediate broadcasts, chosen like
+  ordinary writes; broadcasts and telemetry are released only after the transaction commits.
+  A rollback discards the pending work.
   """
   alias Fyrlet.InvalidationWorker
   require Logger
@@ -22,15 +23,41 @@ defmodule Fyrlet.AfterCommit do
     pending = Process.get(@jobs, %{})
 
     unless Map.has_key?(pending, key) do
-      job =
-        %{"scopes" => scopes, "project_id" => project_id}
-        |> InvalidationWorker.new()
-        |> Oban.insert!()
-
-      Process.put(@jobs, Map.put(pending, key, job))
+      Process.put(@jobs, Map.put(pending, key, job(project_id, scopes)))
     end
 
     :ok
+  end
+
+  # The same delivery modes as ordinary writes in `Fyrlet.Runtime`: a durable Oban job when
+  # configured, or when the surrounding transaction is not managed (nothing would flush an
+  # immediate broadcast); otherwise a transient broadcast, with transactional pg_notify when
+  # enabled. De-duplication above still means at most one notice per key per transaction.
+  defp job(project_id, scopes) do
+    durable = fn ->
+      %{"scopes" => scopes, "project_id" => project_id}
+      |> InvalidationWorker.new()
+      |> Oban.insert!()
+    end
+
+    cond do
+      Application.get_env(:fyrlet, :durable_invalidation, false) ->
+        durable.()
+
+      Fyrlet.InvalidationNotifications.enabled?() ->
+        job = InvalidationWorker.transient(scopes, project_id)
+
+        case Fyrlet.InvalidationNotifications.enqueue(job) do
+          :ok -> job
+          :too_large -> durable.()
+        end
+
+      not Fyrlet.Transaction.managed?() ->
+        durable.()
+
+      true ->
+        InvalidationWorker.transient(scopes, project_id)
+    end
   end
 
   @doc """
