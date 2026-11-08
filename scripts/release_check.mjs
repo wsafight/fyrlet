@@ -112,7 +112,7 @@ export function hostedCiRunPasses({ run, jobPage, revision, expectedRunId, repos
     const jobs = jobPage.jobs;
     const runId = String(expectedRunId);
     const matchingPullRequest = run.pull_requests.some((pullRequest) => pullRequest.head?.sha === revision &&
-      pullRequest.head?.ref === run.head_branch && pullRequest.base?.repo?.full_name === repository);
+      pullRequest.head?.ref === run.head_branch && pullRequest.base?.repo?.url === `https://api.github.com/repos/${repository}`);
     return /^\d+$/.test(runId) && String(run.id) === runId && run.path === coreWorkflowPath && run.event === "pull_request" &&
       run.head_sha === revision && run.status === "completed" && run.conclusion === "success" && matchingPullRequest &&
       Array.isArray(jobs) && jobPage.total_count === jobs.length && coreMatrixJobs.every((name) => {
