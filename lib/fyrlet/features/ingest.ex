@@ -120,7 +120,9 @@ defmodule Fyrlet.Features.Ingest do
     {batch_count, _rows} =
       Fyrlet.Pruning.delete_all(from(b in Batch, where: b.id in subquery(batches)))
 
-    if (item_count == @prune_batch or batch_count == @prune_batch) and Fyrlet.Pruning.available?(),
+    full_batch = item_count == @prune_batch or batch_count == @prune_batch
+
+    if full_batch and Fyrlet.Pruning.available?(),
       do: add({item_count, batch_count}, prune_where(condition, cutoff)),
       else: {item_count, batch_count}
   end
