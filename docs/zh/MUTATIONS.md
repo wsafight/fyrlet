@@ -66,7 +66,17 @@ const result = await client.recover("inbox.add", originalInput, {
 
 ## 预测与视图确认
 
-确定失败时立即撤销本次调用的乐观预测。成功和结果未知时，预测保留到后续服务端数据到达，或 `optimisticTtlMs` 到期（默认 5000 毫秒）。预测到期不会解决未知结果。预测仍是显示层的启发式处理：无关更新或较早计算的结果仍可能结束预测。按订阅确认权威视图属于后续 1B。
+确定失败时立即撤销本次调用的乐观预测。成功后，SDK 为预测涉及的快照或 append 订阅发起带关联标识的重新加载，只有匹配快照才移除对应预测；无关快照和 delta 不会提前结束预测。`optimisticTtlMs`（默认 5000 毫秒）仍是显示层兜底，不表示视图已确认。结果未知时保留预测直到 TTL，不发起确认请求。Presence 继续按 roster 更新处理预测。
+
+`CallOptions.confirm` 可指定没有预测、但仍需确认的订阅。`mutation.result` 返回业务结果，不等待视图；`mutation.views` 为每个目标句柄返回 `{subscription, status: "confirmed" | "unconfirmed", error?}`，并自动包含预测涉及的快照与 append 订阅。超时、取消、权限撤销、能力不支持、退订或重连均产生明确的未确认结果，不改变已提交操作的状态，也不重放业务。没有目标时返回空数组。
+
+```ts
+const mutation = client.mutate("inbox.add", { text: "Hello" }, { confirm: [recent] });
+await mutation.result;
+const views = await mutation.views;
+```
+
+`subscription.confirm({signal?})` 可单独等待一次新请求的权威快照；`subscription.refresh()` 仍只等待 accepted 回执。确认使用 `timeoutMs`，绑定当前 generation，每个 Entry 最多保留 32 个待确认请求。未知回执恢复后，可显式调用各订阅的 `confirm()`。空结果、记录被过滤或删除、查询结果不变，都可以确认；确认针对查询结果，不保证特定记录存在，也不表示后台工作完成。
 
 ## 可运行示例
 

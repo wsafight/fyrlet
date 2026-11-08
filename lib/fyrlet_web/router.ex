@@ -10,6 +10,10 @@ defmodule FyrletWeb.Router do
     Response.success(conn, %{"status" => "ok"})
   end
 
+  get "/ready" do
+    Response.result(conn, Fyrlet.Readiness.check())
+  end
+
   get "/metrics" do
     if Fyrlet.Metrics.enabled?() and scrape_authorized?(conn) do
       conn

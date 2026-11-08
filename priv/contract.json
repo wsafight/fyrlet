@@ -1,5 +1,7 @@
 {
-  "capabilities": {},
+  "capabilities": {
+    "view_confirmation": 1
+  },
   "contract_version": "0.1.0",
   "operations": {
     "inbox.add": {

@@ -18,6 +18,13 @@ defmodule FyrletWeb.ChannelSupport do
     end
   end
 
+  def confirmation(value, capabilities) when is_binary(value) and byte_size(value) in 1..128 do
+    with :ok <- Capabilities.require(capabilities, "view_confirmation"), do: {:ok, value}
+  end
+
+  def confirmation(_value, _capabilities),
+    do: {:error, Error.new("VALIDATION_FAILED", "Invalid confirmation identifier")}
+
   def anonymous_entry(actor, capabilities) do
     if Anonymous.anonymous?(actor),
       do: Capabilities.require(capabilities, Anonymous.capability()),

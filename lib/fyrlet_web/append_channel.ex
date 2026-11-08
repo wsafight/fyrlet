@@ -123,6 +123,17 @@ defmodule FyrletWeb.AppendChannel do
     end
   end
 
+  def handle_in("refresh", %{"confirmation_id" => identifier}, socket) do
+    with {:ok, identifier} <- confirmation(identifier, socket.assigns.capabilities) do
+      case reset(socket, "confirmation", identifier) do
+        {:stop, _reason, _socket} = stopped -> stopped
+        socket -> {:reply, {:ok, %{"accepted" => true}}, socket}
+      end
+    else
+      {:error, error} -> {:reply, reject(error), socket}
+    end
+  end
+
   def handle_in("refresh", _parameters, socket) do
     # A snapshot is already on its way; one more would only repeat it.
     case if(socket.assigns.snapshot_seq, do: socket, else: reset(socket, "refresh")) do
@@ -264,11 +275,12 @@ defmodule FyrletWeb.AppendChannel do
   end
 
   # Replaces the client's view with a fresh snapshot: same generation, higher seq.
-  defp reset(socket, reason) do
+  defp reset(socket, reason, confirmation_id \\ nil) do
     a = socket.assigns
 
     with :ok <- permitted(socket),
-         {:ok, window} <- read_window(a.actor, a.stream, a.subscription) do
+         {:ok, window} <- read_window(a.actor, a.stream, a.subscription),
+         {:ok, _actor} <- Auth.revalidate(a.actor) do
       sequence = a.seq + 1
 
       socket =
@@ -287,7 +299,12 @@ defmodule FyrletWeb.AppendChannel do
         reason: reason
       })
 
-      push(socket, "snapshot", snapshot_envelope(socket, window))
+      payload = snapshot_envelope(socket, window)
+
+      payload =
+        if confirmation_id, do: Map.put(payload, "confirmed", [confirmation_id]), else: payload
+
+      push(socket, "snapshot", payload)
       socket
     else
       {:error, error} -> stop(socket, error)

@@ -25,7 +25,7 @@ server=$!
 trap 'kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true' EXIT
 
 for _ in $(seq 1 200); do
-  curl --silent --fail "$INTEGRATION_ENDPOINT/health" >/dev/null 2>&1 && break
+  curl --silent --fail "$INTEGRATION_ENDPOINT/ready" >/dev/null 2>&1 && break
   kill -0 "$server" 2>/dev/null || { echo "server exited; see .local/integration/sdks-server.log" >&2; exit 1; }
   sleep 0.1
 done

@@ -352,7 +352,7 @@ test("the generator reads the committed contract and refuses another protocol ve
   const exported = JSON.parse(await readFile(new URL("../../../priv/contract.json", import.meta.url), "utf8"));
   assert.equal(exported.protocol_version, 1);
   assert.equal(exported.schema_dialect, "fyrlet-subset");
-  assert.deepEqual(exported.capabilities, {});
+  assert.deepEqual(exported.capabilities, { view_confirmation: 1 });
   const generated = generate(exported);
   assert.ok(generated.includes('"inbox.add"'));
   assert.throws(() => generate({ ...exported, protocol_version: 2 }), /Unsupported contract protocol/);
@@ -426,7 +426,7 @@ test("clients that declare no capabilities stay on v1 and refuse the Run API", a
   await until(() => subscription.getState().status === "ready");
   const join = TestWebSocket.instances.at(-1).messages.find((message) => message.event === "phx_join");
   assert.equal(join.payload.protocol_version, 1);
-  assert.equal("capabilities" in join.payload, false);
+  assert.deepEqual(join.payload.capabilities, { view_confirmation: 1 });
   for (const attempt of [() => instance.getRun("r"), () => instance.cancelRun("r"),
     () => instance.signalRun("r", { wait_id: "w", name: "n" }), () => instance.startRun("x", {})]) {
     await assert.rejects(attempt(), { code: "UNSUPPORTED_CAPABILITY" });
@@ -450,7 +450,7 @@ test("capability declarations are validated and sent as a header and in joins", 
   const socket = TestWebSocket.instances.at(-1);
   const join = socket.messages.find((message) => message.event === "phx_join");
   assert.deepEqual([join.payload.protocol_version, join.payload.capabilities, join.payload.name, join.payload.params],
-    [1, { runs: 1 }, "fyrlet.run", { run_id: "r1" }]);
+    [1, { runs: 1, view_confirmation: 1 }, "fyrlet.run", { run_id: "r1" }]);
 });
 
 test("startRun sends an idempotency key and signal/cancel use the run endpoints", async (context) => {
@@ -524,7 +524,7 @@ test("append subscriptions need the capability and join the append channel", asy
   const join = socket.messages.find((message) => message.event === "phx_join");
   assert.ok(join.topic.startsWith("append:"));
   assert.deepEqual([join.payload.protocol_version, join.payload.capabilities, join.payload.name, "delivery" in join.payload],
-    [1, { append: 1 }, "feed.recent", false]);
+    [1, { append: 1, view_confirmation: 1 }, "feed.recent", false]);
   assert.deepEqual([state.data, state.seq, state.cursor], [[], 1, "e:0"]);
   assert.deepEqual(acks(socket), [{ g: state.generation, s: 1, c: "e:0" }]);
 });

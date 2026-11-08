@@ -1,5 +1,5 @@
 import { ApiError, OutcomeUnknownError } from "./errors.js";
-import type { Mutation, MutationState, OperationOutcome, RecoveryResult, RequestOptions } from "./types.js";
+import type { Mutation, MutationState, OperationOutcome, RecoveryResult, RequestOptions, ViewConfirmation } from "./types.js";
 
 export interface OperationReceipt<Data> { outcome: OperationOutcome; data: Data }
 
@@ -25,6 +25,7 @@ export function recoveryResult<Data>(payload: unknown): RecoveryResult<Data> {
 
 export class MutationTask<Data> implements Mutation<Data> {
   readonly result: Promise<Data>;
+  readonly views: Promise<readonly ViewConfirmation[]>;
   private state: MutationState<Data> = Object.freeze({ status: "pending" });
   private readonly listeners = new Set<(state: MutationState<Data>) => void>();
   private recovery: Promise<MutationState<Data>> | undefined;
@@ -34,6 +35,7 @@ export class MutationTask<Data> implements Mutation<Data> {
     perform: () => Promise<OperationReceipt<Data>>,
     private readonly lookup: (options: RequestOptions) => Promise<RecoveryResult<Data>>,
     private readonly onListenerError: ((error: unknown) => void) | undefined,
+    confirmViews: (error?: unknown) => Promise<readonly ViewConfirmation[]>,
   ) {
     this.result = perform().then((receipt) => {
       this.setState({ status: receipt.outcome, data: receipt.data });
@@ -43,6 +45,8 @@ export class MutationTask<Data> implements Mutation<Data> {
       throw error;
     });
     void this.result.catch(() => {});
+    this.views = this.result.then(() => confirmViews(), (error: unknown) => confirmViews(error));
+    void this.views.catch(() => {});
   }
 
   getState(): MutationState<Data> { return this.state; }

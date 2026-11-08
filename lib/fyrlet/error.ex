@@ -24,6 +24,7 @@ defmodule Fyrlet.Error do
       "LIMIT_EXCEEDED" -> 429
       "UNSUPPORTED_VERSION" -> 400
       "UNSUPPORTED_CAPABILITY" -> 400
+      "UNAVAILABLE" -> 503
       _other -> 500
     end
   end

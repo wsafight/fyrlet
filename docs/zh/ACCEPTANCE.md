@@ -1,8 +1,27 @@
-# 本地验收记录（2026-11-07）
+# 本地验收记录
+
+## 2026-11-08：可靠性修复与订阅能力补齐
+
+分支 `fix/reliability-and-subscription-improvements` 完成业务 403 隔离、监听器异常隔离、关联式权威视图确认、可选客户端查询复用、带续排和指标的清理预算、数据库就绪探针与核心 CI。React 接入、生产容量和远程 CI 执行不计入本轮本地验收。下方按日期保留旧轮次的数量与状态。
+
+| 验证 | 结果 | 命令 / 证据 |
+| --- | --- | --- |
+| Elixir 核心、示例与独立包 | **764 项通过**：核心 694、示例 35、包 35 | `bash scripts/test_all.sh`；`.local/all-tests.log` |
+| TypeScript SDK | **232 项通过**，类型检查通过 | `npm --prefix sdks/typescript test`、`npm --prefix sdks/typescript run typecheck`；`.local/sdk-review-tests.log` |
+| 真实 HTTP / WebSocket 集成 | **19 项通过**，含客户端查询复用、提交后确认及结果不变时确认 | `INTEGRATION_PORT=4197 bash scripts/integration.sh`；`.local/integration-review.log` |
+| Elixir 质量检查 | 格式检查、无警告编译通过 | `mix format --check-formatted`、`mix compile --warnings-as-errors` |
+| 契约一致性 | Inbox 最新导出与已检入契约、生成 SDK 类型一致 | 导出后执行 `node scripts/check_contract.mjs .local/ci/contract.json` |
+| 文档站点 | 构建 62 页，检查 3080 个内部链接与 27 个仓库目标，无失效链接 | `npm --prefix site run build`、`npm --prefix site run check` |
+
+确认回归覆盖无关与旧快照、delta、连续写入、多订阅、结果不变 / 空 append 快照、超时、取消、重连、权限撤销、旧服务端与畸形确认列表。写入响应前退订会返回视图未确认，保留操作的已提交结果；重复确认 ID 不影响其他等待者。服务端覆盖私有 / 共享查询、热缓存旁路和旧快照尚未 ACK 时的 append 重置。清理测试验证共享行数 / 时间预算、续排、流 floor 与保留保护；就绪测试验证正常查询及脱敏 HTTP 503。
+
+CI 配置在 Elixir 1.18 / OTP 27 与 Elixir 1.20 / OTP 29 上运行上述测试、类型检查、契约比较和集成，使用 PostgreSQL 17 与 Node 24。本轮仅执行下文记录的本地环境，不宣称 GitHub 托管运行已通过。已有数据库需执行 `mix fyrlet.migrate` 补充会话到期索引。清理时间在 SQL 之间检查，不中断运行中的语句；行数统计不含外键级联。本轮未新增吞吐、多主机或长期稳定性的性能结论。
+
+## 2026-11-07：历史验证
 
 本轮继续完成本机可执行的开发与验证；Hex/npm 正式发布及许可证决策按要求暂缓。真实邮件凭证与收件人尚未提供，实体移动设备、多主机生产环境与 24 小时稳定性仍待验收，不计入已通过结果。
 
-## 已通过的验证
+### 已通过的验证
 
 同日路线图 1A 开发通过：**687 项 Elixir 测试**（核心 617、示例 35、独立包 35）、**132 项 SDK 单元测试**、SDK 类型检查与 **18 项真实服务端集成**。相较上一轮新增 16 项 Elixir、29 项 SDK 单元与 3 项集成测试。覆盖读完成 / 写提交 / 持久受理、确定失败与未知结果、发送前后取消、响应体停滞、监听清理、回执过期、规范化输入、权限与身份隔离。真实 HTTP 和 Socket 用例在数据库提交后故意丢弃回复，恢复原回执，并断言只存在一条业务记录、没有重放。复现命令：`bash scripts/test_all.sh`、`npm --prefix sdks/typescript test`、`npm --prefix sdks/typescript run typecheck`、`INTEGRATION_PORT=4197 bash scripts/integration.sh`。恢复边界见[操作结果文档](MUTATIONS.md)；订阅权威视图确认（1B）尚未交付。
 
@@ -30,13 +49,15 @@ mix compile --warnings-as-errors
 bash scripts/test_all.sh
 npm --prefix sdks/typescript test
 npm --prefix sdks/typescript run typecheck
+(cd examples/inbox && mix fyrlet.contract ../../.local/ci/contract.json)
+node scripts/check_contract.mjs .local/ci/contract.json
 bash scripts/integration.sh
 DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-SDK 集成脚本使用独立的 `fyrlet_integration` 数据库，默认端口为 4100，可用 `INTEGRATION_PORT` 覆盖；验证 18 个真实 HTTP / WebSocket 场景，覆盖多设备、幂等并发、隔离、撤销、重启、Run、append 与混合通道。领域脚本默认用 4180/4181 端口，可按上例改端口，依次运行四个应用的 8 个业务与网页资源场景。所有脚本启动和关闭自己的服务，凭证和日志在 `.local/integration/`。分发包和 SHA256 清单在 `.local/releases/`，未发布到外部注册表。浏览器、双节点和真实邮件的验证见下文各节。
+SDK 集成脚本使用独立的 `fyrlet_integration` 数据库，默认端口为 4100，可用 `INTEGRATION_PORT` 覆盖；验证 19 个真实 HTTP / WebSocket 场景，覆盖多设备、幂等并发、隔离、撤销、重启、Run、append、客户端查询复用、视图确认与混合通道。领域脚本默认用 4180/4181 端口，可按上例改端口，依次运行四个应用的 8 个业务与网页资源场景。所有脚本启动和关闭自己的服务，凭证和日志在 `.local/integration/`。分发包和 SHA256 清单在 `.local/releases/`，未发布到外部注册表。浏览器、双节点和真实邮件的验证见下文各节。
 
 ## 浏览器覆盖
 

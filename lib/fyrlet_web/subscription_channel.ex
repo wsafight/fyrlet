@@ -41,6 +41,7 @@ defmodule FyrletWeb.SubscriptionChannel do
           revision: revision,
           seq: 1,
           awaiting: 1,
+          confirmations: MapSet.new(),
           ack_timer: nil,
           expiry_timer: expiry_timer(socket.assigns.actor)
         )
@@ -100,6 +101,24 @@ defmodule FyrletWeb.SubscriptionChannel do
     end
   end
 
+  def handle_in("refresh", %{"confirmation_id" => identifier}, socket) do
+    with {:ok, identifier} <- confirmation(identifier, socket.assigns.capabilities),
+         true <- MapSet.size(socket.assigns.confirmations) < 32 do
+      socket =
+        socket
+        |> assign(confirmations: MapSet.put(socket.assigns.confirmations, identifier))
+        |> observation_cast({:confirm, self(), identifier})
+
+      {:reply, {:ok, %{"accepted" => true}}, socket}
+    else
+      {:error, error} ->
+        {:reply, reject(error), socket}
+
+      false ->
+        {:reply, reject(Error.new("LIMIT_EXCEEDED", "Too many pending confirmations")), socket}
+    end
+  end
+
   def handle_in("refresh", _parameters, socket) do
     {:reply, {:ok, %{"accepted" => true}}, observation_cast(socket, {:refresh, self()})}
   end
@@ -135,10 +154,22 @@ defmodule FyrletWeb.SubscriptionChannel do
 
             :snapshot ->
               {"snapshot", envelope(assign(socket, seq: sequence), encoded)}
+
+            {:snapshot, identifiers} ->
+              {"snapshot",
+               envelope(assign(socket, seq: sequence), encoded)
+               |> Map.put("confirmed", identifiers)}
           end
 
         push(socket, event, payload)
-        {:noreply, socket |> assign(seq: sequence, revision: revision) |> awaiting(sequence)}
+
+        confirmations =
+          MapSet.difference(socket.assigns.confirmations, MapSet.new(payload["confirmed"] || []))
+
+        {:noreply,
+         socket
+         |> assign(seq: sequence, revision: revision, confirmations: confirmations)
+         |> awaiting(sequence)}
 
       {:error, error} ->
         stop(socket, error)

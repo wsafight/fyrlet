@@ -70,6 +70,7 @@ defmodule Fyrlet.Subscriptions.Observation do
         revision: state.revision,
         ready: false,
         force: false,
+        confirmations: [],
         delivery: delivery,
         actor: if(state.mode == :identical, do: actor)
       }
@@ -184,6 +185,22 @@ defmodule Fyrlet.Subscriptions.Observation do
     end
   end
 
+  def handle_cast({:confirm, channel, identifier}, state) do
+    case Map.get(state.clients, channel) do
+      nil ->
+        {:noreply, state}
+
+      client ->
+        client = %{
+          client
+          | force: true,
+            confirmations: Enum.uniq(client.confirmations ++ [identifier])
+        }
+
+        {:noreply, schedule(%{state | clients: Map.put(state.clients, channel, client)}, nil)}
+    end
+  end
+
   def handle_info({:invalidated, identifier, change}, state) when is_integer(identifier),
     do: invalidated(identifier, change, state)
 
@@ -203,11 +220,12 @@ defmodule Fyrlet.Subscriptions.Observation do
 
   def handle_info(:refresh, state) do
     {:message_queue_len, queued} = Process.info(self(), :message_queue_len)
+    confirming = Enum.any?(state.clients, fn {_channel, client} -> client.confirmations != [] end)
 
     result =
       if queued > Application.fetch_env!(:fyrlet, :max_channel_queue),
         do: {:error, Error.new("LIMIT_EXCEEDED", "The observer is overloaded; subscribe again")},
-        else: load_view(state, state.view, state.change)
+        else: load_view(state, if(confirming, do: nil, else: state.view), state.change)
 
     case result do
       {:ok, view} ->
@@ -305,8 +323,17 @@ defmodule Fyrlet.Subscriptions.Observation do
 
         current = if delta, do: current, else: encode_snapshot(current)
         {event, body} = if delta, do: {:delta, patch}, else: {:snapshot, current.encoded}
+        event = if client.confirmations == [], do: event, else: {:snapshot, client.confirmations}
         send(channel, {:observer_update, self(), current.revision, event, body})
-        client = %{client | ready: false, force: false, revision: current.revision}
+
+        client = %{
+          client
+          | ready: false,
+            force: false,
+            confirmations: [],
+            revision: current.revision
+        }
+
         %{current | clients: Map.put(current.clients, channel, client)}
     end
   end

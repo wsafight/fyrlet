@@ -21,7 +21,9 @@ defmodule Fyrlet.Capabilities do
 
   @doc "Capabilities the server has enabled, as `%{name => version}`."
   def supported do
-    Map.merge(Fyrlet.Plugins.capabilities(), Application.get_env(:fyrlet, :capabilities, %{}))
+    %{"view_confirmation" => 1}
+    |> Map.merge(Fyrlet.Plugins.capabilities())
+    |> Map.merge(Application.get_env(:fyrlet, :capabilities, %{}))
   end
 
   def enabled?(name), do: Map.has_key?(supported(), name)

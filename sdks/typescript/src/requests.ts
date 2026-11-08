@@ -30,20 +30,24 @@ export class RequestExecutor {
   ): Promise<Data> {
     this.session.assertOpen();
     const controller = this.controller(signal);
+    let authorizing = true;
     try {
       const token = await awaitAbortable(this.session.authorize(false), controller.signal);
+      authorizing = false;
       this.session.assertOpen();
       try {
         return await perform(token, controller.signal);
       } catch (error) {
         if (!(error instanceof ApiError) || (error.status !== 401 && error.code !== "UNAUTHENTICATED")) throw error;
+        authorizing = true;
         const fresh = await awaitAbortable(this.session.authorize(true), controller.signal);
+        authorizing = false;
         this.session.assertOpen();
         onRefresh?.();
         return await perform(fresh, controller.signal);
       }
     } catch (error) {
-      if (error instanceof ApiError && ["UNAUTHENTICATED", "FORBIDDEN"].includes(error.code)) this.session.fail(error);
+      if (error instanceof ApiError && (error.code === "UNAUTHENTICATED" || (authorizing && error.code === "FORBIDDEN"))) this.session.fail(error);
       throw error;
     } finally {
       this.release(controller);

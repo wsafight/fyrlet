@@ -312,12 +312,16 @@ defmodule Fyrlet.Features.Stream do
         from(h in Head,
           where: h.head - h.trimmed_before + 1 > ^keep,
           order_by: [asc: h.updated_at],
-          limit: ^batch,
+          limit: ^min(batch, Fyrlet.Pruning.batch_size(batch)),
           select: {h.project_id, h.name}
         )
       )
 
-    Enum.count(candidates, fn {project_id, name} -> trim(project_id, name, keep) end)
+    Enum.reduce_while(candidates, 0, fn {project_id, name}, trimmed ->
+      if Fyrlet.Pruning.available?(),
+        do: {:cont, trimmed + if(trim(project_id, name, keep), do: 1, else: 0)},
+        else: {:halt, trimmed}
+    end)
   end
 
   defp trim(project_id, name, keep) do
@@ -331,23 +335,33 @@ defmodule Fyrlet.Features.Stream do
             )
           )
 
-        new_floor = head && max(head.head - keep + 1, head.trimmed_before)
+        new_floor =
+          head &&
+            max(
+              min(head.head - keep + 1, head.trimmed_before + Fyrlet.Pruning.batch_size(5_000)),
+              head.trimmed_before
+            )
 
         if head && new_floor > head.trimmed_before do
-          Repo.delete_all(
-            from(e in Entry,
-              where: e.project_id == ^project_id and e.stream == ^name and e.pos < ^new_floor
+          {deleted, _rows} =
+            Fyrlet.Pruning.delete_all(
+              from(e in Entry,
+                where: e.project_id == ^project_id and e.stream == ^name and e.pos < ^new_floor
+              )
             )
-          )
 
-          Repo.update_all(
-            from(h in Head, where: h.project_id == ^project_id and h.name == ^name),
-            set: [trimmed_before: new_floor]
-          )
+          if deleted > 0 do
+            Repo.update_all(
+              from(h in Head, where: h.project_id == ^project_id and h.name == ^name),
+              set: [trimmed_before: new_floor]
+            )
 
-          Fyrlet.Features.Stream.Reader.drop(project_id, name)
+            Fyrlet.Features.Stream.Reader.drop(project_id, name)
 
-          true
+            true
+          else
+            false
+          end
         else
           false
         end

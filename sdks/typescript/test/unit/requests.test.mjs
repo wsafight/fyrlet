@@ -21,6 +21,48 @@ function deferred() {
   return Promise.withResolvers();
 }
 
+for (const transport of ["http", "socket"]) {
+  test(`a forbidden ${transport} operation leaves authorized subscriptions usable`, async (context) => {
+    const forbidden = { code: "FORBIDDEN", message: "This operation is forbidden" };
+    class ForbiddenSocket extends TestWebSocket {
+      send(raw) {
+        const [joinRef, ref, topic, event] = JSON.parse(raw);
+        if (event !== "call") return super.send(raw);
+        queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", {
+          status: "error", response: { status: 403, error: forbidden },
+        }]));
+      }
+    }
+    const instance = client(context, {
+      operationTransport: transport, WebSocket: ForbiddenSocket,
+      fetch: async (url) => url.endsWith("/identity") ? response(identity) : response(forbidden, 403),
+    });
+    const first = instance.subscribe("records.recent", {});
+    const second = instance.subscribe("records.other", {});
+    await until(() => first.getState().status === "ready" && second.getState().status === "ready");
+    await assert.rejects(instance.call("admin.only", {}), { code: "FORBIDDEN" });
+    assert.equal(first.getState().status, "ready");
+    assert.equal(second.getState().status, "ready");
+    TestWebSocket.instances.at(-1).snapshot(["still authorized"]);
+    assert.deepEqual(first.getState().data, ["still authorized"]);
+  });
+}
+
+test("a refreshed identity mismatch still clears every subscription", async (context) => {
+  let changed = false;
+  const instance = client(context, {
+    fetch: async (url) => url.endsWith("/identity")
+      ? response(changed ? { ...identity, subject_id: "bob" } : identity)
+      : response(unauthorized, 401),
+  });
+  const subscription = instance.subscribe("records.recent", {});
+  await until(() => subscription.getState().status === "ready");
+  changed = true;
+  await assert.rejects(instance.call("records.add", {}), { code: "FORBIDDEN" });
+  assert.equal(subscription.getState().status, "error");
+  assert.equal(subscription.getState().data, undefined);
+});
+
 test("an already aborted wait consumes a later rejection without an unhandled promise", async () => {
   const pending = deferred();
   const reason = new Error("cancelled");

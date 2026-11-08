@@ -5,6 +5,25 @@ import { response, TestWebSocket, until } from "../helpers.mjs";
 
 const identity = { project_id: "project", subject_id: "alice" };
 
+test("listener and error reporter exceptions preserve sibling delivery and acknowledgements", async (context) => {
+  const instance = client(context, { onListenerError: () => { throw new Error("reporter failed"); } });
+  const first = instance.subscribe("records.recent", {});
+  const second = instance.subscribe("records.other", {});
+  const socket = await ready(first);
+  await until(() => second.getState().status === "ready");
+  const received = [];
+  first.onChange(() => { throw new Error("listener failed"); });
+  first.onChange((state) => received.push(state.data));
+  socket.snapshot(["updated"]);
+  assert.deepEqual(received.at(-1), ["updated"]);
+  assert.equal(first.getState().status, "ready");
+  assert.equal(second.getState().status, "ready");
+  assert.ok(socket.messages.some((message) => message.event === "ack" && message.payload.s === 2));
+  await instance.call("records.update", {}, { optimistic: [{ subscription: first, update: () => { throw new Error("prediction failed"); } }] });
+  assert.equal(first.getState().status, "ready");
+  assert.deepEqual(first.getState().data, ["updated"]);
+});
+
 test("presence handles retain ownership for optimistic writes and stop accepting them after unsubscribe", async (context) => {
   const instance = client(context);
   const presence = instance.subscribePresence("rooms.members", {}, { typing: false });
@@ -81,7 +100,8 @@ function channel(socket, prefix, index = 0) {
 }
 
 function sendSnapshot(target, data, seq = 2) {
-  target.send("snapshot", { ...target.snapshot, data, seq });
+  const confirmed = target.messages("refresh").map((message) => message.payload.confirmation_id).filter(Boolean);
+  target.send("snapshot", { ...target.snapshot, data, seq, confirmed });
 }
 
 for (const [label, delta] of [

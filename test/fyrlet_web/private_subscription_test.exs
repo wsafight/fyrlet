@@ -262,6 +262,51 @@ defmodule FyrletWeb.PrivateSubscriptionTest do
     assert_push "status", %{"error" => %{"code" => "LIMIT_EXCEEDED"}}
   end
 
+  test "correlated refresh rereads data after the request and waits for the previous ACK", %{
+    alice: alice
+  } do
+    {:ok, initial, socket} =
+      join_private(alice, %{
+        "capabilities" => %{"view_confirmation" => 1},
+        "delivery" => "delta-v1"
+      })
+
+    identifier = Ecto.UUID.generate()
+    reference = push(socket, "refresh", %{"confirmation_id" => identifier})
+    assert_reply reference, :ok, %{"accepted" => true}
+    refute_push "snapshot", _snapshot, 20
+    acknowledge(socket, initial)
+    assert_push "snapshot", confirmed
+    assert confirmed["confirmed"] == [identifier]
+    assert confirmed["data"] == initial["data"]
+    acknowledge(socket, confirmed)
+    {:ok, record} = add(alice.actor)
+    reference = push(socket, "refresh", %{"confirmation_id" => "after-write"})
+    assert_reply reference, :ok, _reply
+    assert_push "snapshot", refreshed
+
+    if refreshed["confirmed"] == nil do
+      acknowledge(socket, refreshed)
+      assert_push "snapshot", next
+      assert next["confirmed"] == ["after-write"]
+      assert next["data"] == [record]
+    else
+      assert refreshed["confirmed"] == ["after-write"]
+      assert refreshed["data"] == [record]
+    end
+
+    leave(socket)
+  end
+
+  test "confirmation requires negotiation and rejects malformed identifiers", %{alice: alice} do
+    {:ok, _initial, socket} = join_private(alice)
+    reference = push(socket, "refresh", %{"confirmation_id" => "request"})
+    assert_reply reference, :error, %{"error" => %{"code" => "UNSUPPORTED_CAPABILITY"}}
+    reference = push(socket, "refresh", %{"confirmation_id" => nil})
+    assert_reply reference, :error, %{"error" => %{"code" => "VALIDATION_FAILED"}}
+    leave(socket)
+  end
+
   defp join_private(user, options \\ %{}) do
     socket(FyrletWeb.UserSocket, "sessions:" <> user.actor.session_id, %{actor: user.actor})
     |> subscribe_and_join(

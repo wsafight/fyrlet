@@ -28,6 +28,7 @@ export interface Subscription<Data> {
   getState(): SubscriptionState<Data>;
   onChange(listener: (state: SubscriptionState<Data>) => void): () => void;
   refresh(): Promise<void>;
+  confirm(options?: RequestOptions): Promise<void>;
   unsubscribe(): void;
 }
 
@@ -64,13 +65,15 @@ export interface ClientOptions {
   retryDelayMs?: (attempt: number) => number;
   onListenerError?: (error: unknown) => void;
   delta?: boolean;
-  /** How long a successful or unknown write's prediction may stay without server data to replace it. Default 5000. */
+  /** Display TTL for successful or unknown predictions; expiry never confirms a view or operation. Default 5000. */
   optimisticTtlMs?: number;
   operationTransport?: "http" | "socket";
+  shareSubscriptions?: boolean;
+  maxSharedSubscriptions?: number;
   /**
    * Optional server capabilities this client understands, e.g. `["runs"]` or `{ runs: 1 }`.
-   * A capability is only available if it is declared here and the server has it enabled; without
-   * declaring it, the matching API (Run, append, presence) throws UNSUPPORTED_CAPABILITY.
+   * Run, append and Presence require declaration and server support; otherwise their APIs throw
+   * UNSUPPORTED_CAPABILITY. Snapshot and append channels automatically request view_confirmation.
    */
   capabilities?: string[] | Record<string, number>;
 }
@@ -91,10 +94,11 @@ export interface OptimisticUpdate<Data = any> {
 export interface CallOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
+  confirm?: readonly Subscription<any>[];
   /**
-   * Predictions applied now and undone on definite failure. After success or an unknown outcome they stay until the
-   * subscription next receives data from the server (or `optimisticTtlMs` passes). Only
-   * subscriptions that already have data are predicted, and only ones created by this client.
+   * Predictions apply immediately and roll back on definite failure. Successful snapshot/append predictions wait
+   * for correlated confirmation or TTL; unknown predictions wait for TTL. Presence retains roster-update/TTL
+   * behavior. Only subscriptions with data that were created by this client can be predicted.
    */
   optimistic?: OptimisticUpdate[];
 }
@@ -118,9 +122,16 @@ export interface RecoveryOptions extends RequestOptions {
 export interface Mutation<Data> {
   readonly idempotencyKey: string;
   readonly result: Promise<Data>;
+  readonly views: Promise<readonly ViewConfirmation[]>;
   getState(): MutationState<Data>;
   onChange(listener: (state: MutationState<Data>) => void): () => void;
   recover(options?: RequestOptions): Promise<MutationState<Data>>;
+}
+
+export interface ViewConfirmation {
+  readonly subscription: Subscription<any>;
+  readonly status: "confirmed" | "unconfirmed";
+  readonly error?: unknown;
 }
 
 export interface Client<Contract extends FyrletContract> {

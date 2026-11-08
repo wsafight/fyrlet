@@ -37,6 +37,7 @@
 | EFFECT_CONFLICT | 409 | 同一副作用键对应了不同请求 |
 | LEASE_LOST | 409 | 执行器的租约已失效，应停止这次尝试 |
 | INTERNAL_ERROR | 500 | 未预期的服务端失败；不暴露堆栈或数据库细节 |
+| UNAVAILABLE | 503 | 数据库就绪检查未能取得可用连接 |
 
 HTTP 状态码与错误码的对应关系在本文固定，业务不自行选择。
 
@@ -79,6 +80,14 @@ join 成功直接返回初始 Snapshot；后续以 `snapshot` 事件推送同结
 `refresh` 事件参数 `{}`，回复 `{accepted:true}`，随后推送新快照。`phx_leave` 取消订阅。`status` 事件携带 `{"state":"closed","error":{…}}` 表示终止，随后 channel 关闭。认证失效也可能直接断开 Socket，SDK 在恢复时通过认证 HTTP 请求区分网络中断与失效凭证。
 
 新 join 必须使用新的 generation；客户端仅接受当前 join 确认的 generation，拒绝旧实例事件。同一 generation 只应用大于当前 seq 的消息，重复消息仍可确认。seq 不是数据库版本或恢复游标。
+
+### 视图确认
+
+核心支持 `view_confirmation=1`。TypeScript SDK 的快照与 append 订阅自动请求此能力；其他客户端通过能力声明启用。Presence 不提供数据库视图确认。
+
+操作成功后，发送 `refresh`，参数为 `{"confirmation_id":"唯一请求标识"}`。标识为非空字符串，最多 128 个 UTF-8 字节。立即返回的 `{accepted:true}` 只表示收到请求。服务端本次加载跳过 Observer 旧视图，重新执行授权与会话检查，通过主库 Repo 加载数据，并在完整 `snapshot` 中携带 `"confirmed":["唯一请求标识"]`。结果不变或为空时也发送确认快照。append 确认会替换当前窗口，包括尚未 ACK 的旧快照。
+
+只有应用当前订阅、身份、generation 下更新的匹配快照才能完成确认。无关推送、delta、旧快照及其他订阅的响应均不能确认请求。先于同一次重新加载到达的多个标识可以合并返回。快照订阅每个 Channel 最多保留 32 个待确认请求，并保持原有 ACK 背压。确认不代表数据库提交顺序、多个订阅的原子同步、记录一定符合查询条件，或已受理 Run／Effect 已完成。业务查询须使用主库 Repo；自定义副本或缓存读取需要另行提供一致性约定。
 
 ### 增量协商
 

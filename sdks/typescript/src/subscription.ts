@@ -12,6 +12,8 @@ interface Snapshot extends Identity {
   seq: number;
   data: unknown;
   delivery?: string;
+  capabilities?: Record<string, number>;
+  confirmed?: unknown;
 }
 
 interface AppendSnapshot extends Snapshot {
@@ -26,6 +28,11 @@ export interface Overlay {
   update: (data: unknown) => unknown;
   settled: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+interface Confirmation {
+  overlays: readonly Overlay[];
+  finish(error?: unknown): void;
 }
 
 type Delivery = { generation: unknown; sequence: unknown; cursor?: string } | "refresh" | "reconnect" | undefined;
@@ -53,6 +60,8 @@ export class SubscriptionEntry {
   channel: Channel | undefined;
   joinFailures = 0;
   private delta = false;
+  private confirmationSupported = false;
+  private readonly confirmations = new Map<string, Confirmation>();
   private readonly append: { cursor: string | undefined; maxItems: number; desynced: boolean } | undefined;
   private overlays: Overlay[] = [];
   private overlayVersion = 0;
@@ -87,9 +96,12 @@ export class SubscriptionEntry {
       throw new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid subscription snapshot" });
     }
     if (!initial && snapshot.generation !== this.state.generation) return;
-    if (initial) this.delta = snapshot.delivery === "delta-v1";
+    if (initial) {
+      this.delta = snapshot.delivery === "delta-v1";
+      this.confirmationSupported = snapshot.capabilities?.view_confirmation === 1;
+    }
     if (initial || snapshot.seq > this.state.seq) {
-      this.setState({ status: "ready", data: immutable(snapshot.data), generation: snapshot.generation, seq: snapshot.seq, error: undefined });
+      this.applyConfirmed(snapshot, { status: "ready", data: immutable(snapshot.data), generation: snapshot.generation, seq: snapshot.seq, error: undefined });
     }
     return { generation: snapshot.generation, sequence: snapshot.seq };
   }
@@ -126,10 +138,11 @@ export class SubscriptionEntry {
       throw new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid append snapshot" });
     }
     if (!initial && (snapshot.generation !== this.state.generation || snapshot.seq <= this.state.seq)) return;
+    if (initial) this.confirmationSupported = snapshot.capabilities?.view_confirmation === 1;
     append.cursor = snapshot.cursor;
     append.maxItems = snapshot.max_items;
     append.desynced = false;
-    this.setState({
+    this.applyConfirmed(snapshot, {
       status: "ready", data: immutable(snapshot.data), generation: snapshot.generation, seq: snapshot.seq,
       cursor: snapshot.cursor, error: undefined,
     });
@@ -192,10 +205,55 @@ export class SubscriptionEntry {
   setState(state: SubscriptionState<unknown>): void {
     const previous = this.state;
     this.state = Object.freeze(state);
-    if (this.overlays.length > 0 && (state.seq !== previous.seq || state.data !== previous.data)) {
+    if (state.data === undefined) this.clearOverlays();
+    if (this.presence && this.overlays.length > 0 && (state.seq !== previous.seq || state.data !== previous.data)) {
       for (const overlay of [...this.overlays]) if (overlay.settled) this.removeOverlay(overlay, false);
     }
+    if (["recovering", "error", "closed"].includes(state.status)) {
+      const error = state.error ?? new ApiError({ code: state.status === "closed" ? "SUBSCRIPTION_CLOSED" : "NETWORK_ERROR", message: "The view was not confirmed" });
+      for (const confirmation of [...this.confirmations.values()]) confirmation.finish(error);
+    }
     this.emit();
+  }
+
+  confirm(identifier: string, overlays: readonly Overlay[], signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    if (this.state.status !== "ready") return Promise.reject(new ApiError({ code: "NOT_READY", message: "The subscription is not ready" }));
+    if (!this.confirmationSupported || this.presence) return Promise.reject(new ApiError({ code: "UNSUPPORTED_CAPABILITY", message: "The subscription cannot confirm views" }));
+    if (this.confirmations.size >= 32 || this.confirmations.has(identifier)) {
+      return Promise.reject(new ApiError({ code: "LIMIT_EXCEEDED", message: "Too many pending confirmations or a duplicate confirmation ID" }));
+    }
+    return new Promise((resolve, reject) => {
+      const abort = () => this.rejectConfirmation(identifier, signal?.reason);
+      const timer = setTimeout(() => this.rejectConfirmation(identifier, new ApiError({ code: "TIMEOUT", message: "The view was not confirmed in time", retryable: true })), this.options.timeoutMs ?? 10_000);
+      this.confirmations.set(identifier, {
+        overlays,
+        finish: (error) => {
+          if (!this.confirmations.delete(identifier)) return;
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+          if (error === undefined) resolve(); else reject(error);
+        },
+      });
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  hasConfirmation(identifier: string): boolean { return this.confirmations.has(identifier); }
+
+  rejectConfirmation(identifier: string, error: unknown): void { this.confirmations.get(identifier)?.finish(error); }
+
+  private applyConfirmed(snapshot: Snapshot, state: SubscriptionState<unknown>): void {
+    const identifiers = snapshot.confirmed ?? [];
+    if (!Array.isArray(identifiers) || identifiers.length > 32 ||
+        identifiers.some((identifier) => typeof identifier !== "string" || identifier.length < 1 || identifier.length > 128) ||
+        new Set(identifiers).size !== identifiers.length) {
+      throw new ApiError({ code: "PROTOCOL_ERROR", message: "Invalid view confirmations" });
+    }
+    const pending = identifiers.map((identifier: string) => this.confirmations.get(identifier)).filter((value): value is Confirmation => value !== undefined);
+    for (const confirmation of pending) for (const overlay of confirmation.overlays) this.removeOverlay(overlay, false);
+    this.setState(state);
+    for (const confirmation of pending) confirmation.finish();
   }
 
   view(): SubscriptionState<unknown> {
@@ -206,7 +264,7 @@ export class SubscriptionEntry {
       try { data = immutable(overlay.update(data)); }
       catch (error) {
         this.removeOverlay(overlay, false);
-        this.options.onListenerError?.(error);
+        this.report(error);
       }
     }
     const value = this.overlays.length === 0 ? this.state
@@ -244,11 +302,16 @@ export class SubscriptionEntry {
     for (const overlay of this.overlays) if (overlay.timer) clearTimeout(overlay.timer);
     this.overlays = [];
     this.overlayVersion++;
+    this.shown = undefined;
   }
 
   notify(listener: (state: SubscriptionState<unknown>) => void): void {
     try { listener(this.view()); }
-    catch (error) { this.options.onListenerError?.(error); }
+    catch (error) { this.report(error); }
+  }
+
+  private report(error: unknown): void {
+    try { this.options.onListenerError?.(error); } catch {}
   }
 
   private emit(): void {

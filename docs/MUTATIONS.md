@@ -66,7 +66,17 @@ Persist the operation, input, identity and key before starting if recovery must 
 
 ## Predictions and confirmation
 
-Definite failure removes the call's optimistic predictions immediately. Success and unknown results keep them until later server data or `optimisticTtlMs` (default 5000 ms). Expiring a prediction does not resolve an unknown operation. Predictions remain a display heuristic: an unrelated or older update can still retire them. Milestone 1B will address authoritative per-subscription confirmation.
+Definite failure removes the call's optimistic predictions immediately. After success, the SDK requests a correlated fresh snapshot for each predicted snapshot or append subscription. Only its matching snapshot retires those predictions; unrelated snapshots and deltas keep them. `optimisticTtlMs` (default 5000 ms) remains a display fallback, not proof of confirmation. Unknown outcomes retain predictions until TTL and do not issue confirmation requests. Presence keeps its roster-based prediction behavior.
+
+`CallOptions.confirm` selects additional subscriptions even without predictions. `mutation.result` preserves the business result and does not wait for views. `mutation.views` resolves to one `{subscription, status: "confirmed" | "unconfirmed", error?}` result per selected handle; predicted snapshot and append handles are included automatically. Timeout, cancellation, permission loss, unsupported capability, unsubscribe and reconnect produce an explicit unconfirmed result without changing the committed operation or replaying it. No targets produce an empty list.
+
+```ts
+const mutation = client.mutate("inbox.add", { text: "Hello" }, { confirm: [recent] });
+await mutation.result;
+const views = await mutation.views;
+```
+
+`subscription.confirm({signal?})` independently waits for a newly requested authoritative snapshot. `subscription.refresh()` still resolves on the accepted reply. Confirmation uses `timeoutMs`, binds to the current generation and is capped at 32 pending requests per entry. After recovering an unknown receipt, explicitly call `confirm()` on the views that need refreshing. Empty, filtered, deleted or unchanged results can be confirmed; confirmation concerns the query result, not the presence of a particular record or completion of accepted background work.
 
 ## Runnable example
 

@@ -101,10 +101,11 @@ defmodule Fyrlet.Features.Ingest do
         where: ^condition,
         where: i.status != "pending" and i.processed_at < ^cutoff,
         select: i.id,
-        limit: ^@prune_batch
+        limit: ^Fyrlet.Pruning.batch_size(@prune_batch)
       )
 
-    {item_count, _rows} = Repo.delete_all(from(i in Item, where: i.id in subquery(items)))
+    {item_count, _rows} =
+      Fyrlet.Pruning.delete_all(from(i in Item, where: i.id in subquery(items)))
 
     batches =
       from(b in Batch,
@@ -113,12 +114,15 @@ defmodule Fyrlet.Features.Ingest do
         where: b.inserted_at < ^cutoff,
         where: not exists(from(i in Item, where: i.batch_id == parent_as(:batch).id)),
         select: b.id,
-        limit: ^@prune_batch
+        limit: ^Fyrlet.Pruning.batch_size(@prune_batch)
       )
 
-    {batch_count, _rows} = Repo.delete_all(from(b in Batch, where: b.id in subquery(batches)))
+    {batch_count, _rows} =
+      Fyrlet.Pruning.delete_all(from(b in Batch, where: b.id in subquery(batches)))
 
-    if item_count == @prune_batch or batch_count == @prune_batch,
+    full_batch = item_count == @prune_batch or batch_count == @prune_batch
+
+    if full_batch and Fyrlet.Pruning.available?(),
       do: add({item_count, batch_count}, prune_where(condition, cutoff)),
       else: {item_count, batch_count}
   end
