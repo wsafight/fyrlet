@@ -1,5 +1,49 @@
 # Local acceptance record
 
+## November 8, 2026: expanded roadmap regression tests
+
+This pass adds **108 executable tests** plus compile-time contract assertions on `feat/react-contract-auth-retry`. No production implementation changed in this pass. Counts below include all SDK, React and host unit tests and the browser parent test; the earlier implementation record retains its original counts.
+
+| Suite | Previous → current | Unit line / branch coverage | Command / evidence |
+| --- | --- | --- | --- |
+| TypeScript SDK | 253 → **304 passed** (+51) | **99.27% / 95.66%** | `npm --prefix sdks/typescript run test:coverage`; `.local/roadmap-sdk-coverage.log` |
+| React adapter | 7 → **20 passed** (+13) | **100% / 100%** | `npm --prefix sdks/react run test:coverage`; `.local/roadmap-react-coverage.log` |
+| OIDC host bridge | 16 → **56 passed** (+40) | **100% / 98.26%** | `npm --prefix examples/inbox-react run test:coverage`; `.local/roadmap-auth-coverage.log` |
+| Real browser workflow | 10 → **14 passed** (+4) | Not measured by the unit coverage reports | `bash scripts/react.sh`; `.local/roadmap-browser-tests.log` |
+
+SDK regressions cover retry defaults and invalid budgets, accepted Run recovery, transient versus permanent errors, independent concurrent keys and cancellation, authentication failure during another call's backoff, abort/close during receipt lookup, HTTP-date and numeric retry delays, selector lifecycle and metadata, deterministic generation, all operation kinds and nested schema/default semantics. Compile-time assertions cover operation-kind filtering, typed Run inputs/results, required Presence parameters/meta, legacy compatibility and projected React data with an unprojected subscription handle.
+
+React regressions cover direct use without a Provider, missing-provider errors, client/name/mode changes, stale private deliveries, selector changes, equal parameters, independent listener release, 120 successive parameter switches, SSR with a populated client, malformed and oversized JSON, idempotent release and shared consumers at capacity. OIDC regressions exercise callback ambiguity, state expiry, signature/claim failures, discovery and configuration rejection, confidential-client authentication, wrong-project credentials, failed issuance and rotation, concurrent refreshes, bounded pending/host capacity, expiry, revocation concurrency/backoff and shutdown racing token issuance. Fake-clock identity tests mint their signed `iat` against that same clock.
+
+The new browser scenarios verify production asset/source boundaries, permanent-error rollback, manual recovery after automatic recovery is exhausted, and logout during retry backoff. They use real PostgreSQL and Fyrlet with a signed local test IdP. Unknown predictions keep their documented display TTL; manual recovery must still produce one business write and one final displayed row. No screenshots are captured.
+
+Node coverage is measured over the loaded SDK/React `dist/**/*.js` modules and host `server/*.mjs` modules in unit tests; it does not measure browser bundles, Elixir or production identity deployments. CI runs the three coverage commands and the browser suite; remote CI execution is still pending.
+
+SDK and React typechecks and **20 real HTTP/WebSocket integration tests** also passed (`INTEGRATION_PORT=4203 bash scripts/integration.sh`; `.local/roadmap-integration-tests.log`). The documentation site and local artifacts are rebuilt with this expanded test record.
+
+## November 8, 2026: React, contract types, login bridge and bounded retries
+
+The `feat/react-contract-auth-retry` branch completes roadmap milestones 2–5 locally: an independent React adapter and Inbox page, generated Presence and operation-kind types, a host OIDC login bridge, and optional bounded retries. The reliability record below is an earlier pass with its original counts.
+
+| Verification | Result | Command / evidence |
+| --- | --- | --- |
+| Elixir core, examples and packages | **764 passed**: core 694, examples 35, packages 35 | `bash scripts/test_all.sh`; `.local/roadmap-server-tests.log` |
+| TypeScript SDK | **253 passed**, typecheck passed | `npm --prefix sdks/typescript test`, `npm --prefix sdks/typescript run typecheck`; `.local/roadmap-sdk-tests.log` |
+| React adapter | **7 passed**, typecheck passed | `npm --prefix sdks/react test`, `npm --prefix sdks/react run typecheck`; `.local/roadmap-react-tests.log` |
+| OIDC host bridge | **16 passed** | `npm --prefix examples/inbox-react test`; `.local/roadmap-auth-tests.log` |
+| Real HTTP / WebSocket integration | **20 passed**, including lost-response retry recovery without replay | `INTEGRATION_PORT=4203 bash scripts/integration.sh`; `.local/roadmap-integration-tests.log` |
+| Browser workflow | **10 passed**: one parent and nine scenarios against PostgreSQL, Fyrlet and a signed test OIDC provider | `bash scripts/react.sh`; `.local/roadmap-browser-tests.log` |
+| CORS | **10 passed**, including exposure of `Retry-After` | `mix test test/fyrlet_web/cors_test.exs`; `.local/roadmap-cors-tests.log` |
+| Elixir quality and contract agreement | Formatting, compilation without warnings, and fresh Inbox contract comparison passed | `mix format --check-formatted`, `mix compile --warnings-as-errors`, `node scripts/check_contract.mjs .local/roadmap-contract.json` |
+| Production example and documentation | Production app build, site build and link checks passed | `npm --prefix examples/inbox-react run build`, `npm --prefix site run build`, `npm --prefix site run check`; `.local/roadmap-web-build.log`, `.local/roadmap-site-build.log`, `.local/roadmap-site-check.log` |
+| Distribution | Three local artifacts built; packed core and React imports passed in an external consumer | `bash scripts/package.sh`, `bash scripts/install_smoke.sh`; `.local/roadmap-package.log`, `.local/roadmap-install.log`, `.local/releases/manifest.json` |
+
+React checks cover shared consumers and final-reference cleanup, canonical parameters, client and mode isolation, Strict Mode, abandoned renders, selectors, bounded query storage and deterministic SSR/hydration. Browser scenarios cover login, shared subscriptions, optimistic writes and authoritative confirmation, a discarded response after commit, header-only retry delays, two tabs, parameter changes, reconnects, token refresh, logout, user/issuer isolation and host revocation. The browser workflow checks the narrow layout without capturing screenshots.
+
+Retries remain disabled by default and require explicit operation metadata. All attempts keep the same serialized input and idempotency key. An uncertain write or Run only recovers its receipt; a missing or expired receipt remains unknown and cannot replay the business operation. Tests cover bounded attempts and total time, cancellation, authentication failure and `Retry-After`; write outcomes remain separate from view confirmation.
+
+The [Inbox setup guide](../examples/inbox-react/README.md) explains how to configure a real provider. Local OIDC checks use a signed test provider and exercise PKCE, state, nonce, issuer/audience checks and server-owned sessions; they do not establish compatibility with a production identity deployment. The host stores bounded sessions in one process and clears login state on logout, expiry or host invalidation. External IdP revocation still depends on host invalidation or expiry. Remote CI, physical devices, multi-host deployment, 24-hour stability and registry publication remain outside this acceptance record.
+
 ## November 8, 2026: reliability and subscription completion
 
 The `fix/reliability-and-subscription-improvements` branch completes operation-level 403 isolation, listener error isolation, correlated authoritative view confirmation, optional client query reuse, bounded retention work with continuation and metrics, database readiness and the core CI workflow. React integration, production capacity and remote CI execution are outside this local pass. The dated record below preserves earlier counts and statuses.

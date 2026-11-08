@@ -111,11 +111,12 @@ Internal (do not depend on them directly): `Fyrlet.Subscriptions.Observer`, `Fyr
 ## Packaging and installation acceptance
 
 ```sh
+npm --prefix sdks/react ci
 bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-Packaging first runs the SDK type check and unit tests, then produces `.local/releases/fyrlet-source-0.1.0.tar.gz`, `fyrlet-client-0.1.0.tgz` and a `manifest.json` with sizes and SHA256. The source package contains the core, domain applications, capability packages, documentation and verification scripts, and excludes dependencies, build caches and local credentials. Installation acceptance unpacks into a separate temporary directory, reuses the already downloaded Elixir dependencies and TypeScript toolchain, and then runs the host tests; the npm consumer actually installs its dependencies from the `.tgz`. This verifies the distributed contents and path dependencies; it is not the same as an offline installation or a registry release.
+Packaging first runs the client and React type checks and unit tests, then produces `.local/releases/fyrlet-source-0.1.0.tar.gz`, `fyrlet-client-0.1.0.tgz`, `fyrlet-react-0.1.0.tgz` and a `manifest.json` with sizes and SHA256. The source package contains the core, domain applications, capability packages, documentation and verification scripts, and excludes dependencies, build caches and local credentials. Installation acceptance unpacks into a separate temporary directory, reuses the downloaded Elixir dependencies and TypeScript toolchain, and runs the host tests; a separate npm consumer installs both `.tgz` files with React and verifies imports. This verifies distributed contents and path dependencies, without claiming offline installation or registry publication.
 
 After unpacking the source package into a fixed directory, the host uses `{:fyrlet, path: "/path/to/fyrlet"}`; the SDK uses `npm install /path/to/fyrlet/fyrlet-client-0.1.0.tgz`. `private: true` is kept; the Hex/npm release and the licence decision still have to be made by the maintainers.
 

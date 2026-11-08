@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 The SDK provides business calls and realtime subscriptions without depending on React, browser storage or cookie authentication. The package is currently private, builds into `dist`, and can be installed locally after `npm pack`. It has not been published to npm.
 
-The implementation lives in `sdks/typescript/` and serves JavaScript and TypeScript applications. See the [SDK overview](../README.md) for the language layout and requirements for new SDKs. Future React adapters build on this SDK; React Native runtime integration also belongs to the TypeScript ecosystem. For a complete server-to-browser walkthrough, start with the [integration tutorial](../../docs/TUTORIAL.md).
+The implementation lives in `sdks/typescript/` and serves JavaScript and TypeScript applications. See the [SDK overview](../README.md) for the language layout and requirements for new SDKs, the independent [React adapter](../react/README.md), and the [Suiji with OIDC](../../examples/inbox-react/README.md). React Native runtime integration also belongs to the TypeScript ecosystem. For a complete server-to-browser walkthrough, start with the [integration tutorial](../../docs/TUTORIAL.md).
 
 ## Entry points
 
@@ -47,7 +47,7 @@ await client.call("inbox.update", {
 });
 ```
 
-The SDK generates an idempotency key for each call. It refreshes expired authentication at most once and reuses that key. Your application decides whether to retry a business call after a network interruption and must explicitly reuse the same key. `CONFLICT` is not retried automatically. If the host login has expired, `getToken` should throw an `ApiError` with code `UNAUTHENTICATED` to stop recovery and clear subscription data.
+The SDK generates an idempotency key for each call. It refreshes expired authentication at most once and reuses that key. Network retry is off by default; manually repeated calls must explicitly reuse the original key. `CONFLICT` is not retried automatically. If the host login has expired, `getToken` should throw an `ApiError` with code `UNAUTHENTICATED` to stop recovery and clear subscription data.
 
 Calls use HTTP by default. To reuse the realtime connection, choose Socket RPC:
 
@@ -65,6 +65,24 @@ Socket calls share one operations channel and the same connection as subscriptio
 `ApiError` exposes `code`, `message`, `details`, `retryable`, `status` and `requestId`. HTTP requests and call waits default to a 10-second timeout, configurable with `timeoutMs`. `AbortSignal` and `close()` cancel client waits. An ambiguous failure after dispatch throws `OutcomeUnknownError` with the operation, idempotency key and original cause. Use receipt recovery before deciding whether to submit another business call.
 
 `client.mutate(name, input, options?)` returns a handle with `idempotencyKey`, `result`, `getState()`, `onChange()` and `recover()`. It distinguishes `pending`, read `completed`, write `committed`, Run/ingest `accepted`, definite `failed` and `unknown`. `call` still returns the business result. `mutation.recover()` or `client.recover(name, originalInput, { idempotencyKey })` queries an existing write/run receipt without executing the operation. Missing or expired receipts remain unknown. See [operation outcomes and recovery](../../docs/MUTATIONS.md) for examples, persistence and confirmation boundaries.
+
+## Opt-in bounded retries
+
+Pass generated `operationMetadata` to `createClient`, then enable `retry` per call or mutation:
+
+```ts
+import { operationMetadata } from "@fyrlet/client/example-contract";
+
+const client = createClient<AppContract>({ endpoint, projectId, getToken, operationMetadata });
+const mutation = client.mutate("inbox.add", { text: "Hello" }, {
+  retry: { maxAttempts: 3, maxElapsedMs: 15_000, baseDelayMs: 250, maxDelayMs: 5_000 },
+});
+await mutation.result;
+```
+
+Only explicit read/write/run metadata is eligible; signal, cancel and ingest are excluded. Defaults are shown above. Attempts must be 1–10 and the total budget 1–60,000 ms. Backoff uses exponential full jitter, with numeric or HTTP-date `Retry-After` and `details.retry_after_ms` as minimum delays. Server CORS exposes `Retry-After`. Authentication refresh uses the same frozen input and key; attempt counts refer to outer attempts, with at most one authentication refresh inside each.
+
+Transient reads and definitely rejected calls can be retried. After an uncertain write/run dispatch, further attempts only query the original receipt; an absent, expired or cleaned receipt remains unknown and never triggers business replay. This may leave a never-received write unknown; applications decide how to reconcile it. Permission, validation, conflict and protocol failures do not trigger further attempts. Cancellation, total timeout, authentication failure and client closure stop waiting and future attempts. An earlier unknown result stays unknown if recovery fails. `mutation.getState()` exposes `pending.retry` with attempt, phase (`call`/`recover`) and optional next retry time. View confirmation runs separately after success. There is no persistent retry queue.
 
 ## Subscription states
 
@@ -174,7 +192,7 @@ The SDK negotiates `view_confirmation=1` automatically on snapshot and append ch
 
 Set `shareSubscriptions: true` when creating a client to reuse identical snapshot and append queries. `maxSharedSubscriptions` bounds active shared entries (default 100). Query keys include the project, name, mode and canonical JSON parameters within that client's identity context. Object key order is ignored; array order is preserved. Parameters are copied and frozen, with a 64 KiB encoded limit; undefined values, non-finite numbers, cycles and custom objects are rejected.
 
-Each subscribe call returns an independent handle and listener registrations. Unsubscribing one handle leaves the others active; the last release leaves the channel and removes the entry immediately. No unreferenced cache is retained. Presence handles remain separate. Authentication failures and identity changes clear private state. This option reuses queries within one client; server-side Observer sharing continues to follow the application contract. A React adapter and SSR integration remain planned.
+Each subscribe call returns an independent handle and listener registrations. Unsubscribing one handle leaves the others active; the last release leaves the channel and removes the entry immediately. No unreferenced cache is retained. Presence handles remain separate. Authentication failures and identity changes clear private state. This option reuses queries within one client; server-side Observer sharing continues to follow the application contract. The independent [React adapter](../react/README.md) adds hooks and deterministic empty SSR state. `selectSubscription(source, selector, isEqual?)` provides pure projections while retaining equal selected values; `queryKey(params)` exposes the same canonical JSON parameter key.
 
 ## Presence
 
@@ -192,7 +210,7 @@ room.unsubscribe();
 
 `state.data` maps each subject ID to `{ ref, data, joined_at }` entries; two devices for the same user produce two entries. `update()` replaces this connection's metadata. `self()` returns your subject ID after joining, and `unsubscribe()` leaves the room.
 
-- Room names, parameters and metadata schemas come from the contract's `presence` section in the [protocol](../../docs/PROTOCOL.md). Generated types do not cover this section yet, so calls use string names.
+- Room names, parameters and meta are generated from the contract's `presence` section in the [protocol](../../docs/PROTOCOL.md). `subscribePresence` and `update` infer these types, including roster meta; invalid names and inputs are rejected during typechecking. Legacy contracts without a presence section keep the string-based API. Optional `kind` fields preserve legacy operation contracts; generated kinds also restrict `startRun` names. Runtime retry policy requires the separately exported `operationMetadata` value.
 - Membership updates by `ref`; repeated diffs are harmless. Reconnecting rejoins with the most recently updated metadata and replaces the roster.
 - Updates are rate-limited. Excessive updates return retryable `LIMIT_EXCEEDED`, invalid metadata returns `VALIDATION_FAILED`, and an unready room returns `NOT_READY`.
 - Anonymous sessions cannot join. Members can see one another's subject IDs and metadata.

@@ -8,6 +8,7 @@ A realtime application framework built on Phoenix. Define named business operati
 - **Project and user isolation**: service keys exchange for short-lived user tokens; sessions and permissions are checked again before every push.
 - **Reliable writes**: transactions, idempotency keys and durable invalidation notifications through Oban.
 - **Live subscriptions**: full snapshots with ACK, optional field-level deltas and recovery to the current snapshot after disconnects.
+- **React application workflow**: [typed shared-query hooks](sdks/react/README.md) and a [working Inbox with OIDC login](examples/inbox-react/README.md), optimistic updates, view confirmation and opt-in retries.
 - **Optional capabilities**: durable Runs and Effects, append subscriptions, shared subscriptions, presence, plugins, project quotas and Prometheus metrics.
 
 Status: single-node operation, the Node SDK, four domain applications and two nodes on one machine have been verified. **Not yet published to Hex or npm**; production capacity has not been verified (see the [acceptance record](docs/ACCEPTANCE.md)).

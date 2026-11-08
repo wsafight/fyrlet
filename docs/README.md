@@ -22,12 +22,14 @@ Fyrlet is a realtime application framework built on Phoenix: you define business
 | [PROTOCOL.md](PROTOCOL.md) | HTTP and Socket protocol, subscriptions and ACK, deltas, capability negotiation, and the wire format of each capability |
 | [SDK overview](../sdks/README.md), [TypeScript SDK](../sdks/typescript/README.md) | Multi-language SDK conventions; calls, subscriptions, optimistic writes and presence in the TypeScript SDK |
 | [Example applications](../examples/README.md) | Shared preparation, login, verification and boundaries |
+| [React adapter](../sdks/react/README.md) | Typed shared queries, selectors, lifecycle, SSR and client ownership |
 
 ## Example applications
 
 | Document | Contents |
 | --- | --- |
 | [Inbox](../examples/inbox/README.md) | Minimal Mix host, private inbox, Node CLI and live updates |
+| [Suiji](../examples/inbox-react/README.md) | Shared React queries, optimistic updates, bounded retries and OIDC login |
 | [Notify](../examples/notify/README.md) | Notifications, email Effects and delivery reconciliation |
 | [Flow](../examples/flow/README.md) | Sequential HTTP / wait nodes, signals and recovery |
 | [Agent](../examples/agent/README.md) | Bounded tools, owner approval, rejection and cancellation |

@@ -12,6 +12,9 @@
 *.log
 .DS_Store
 /examples/*/_build/
+/examples/inbox-react/node_modules/
+/examples/inbox-react/dist/
+/examples/inbox-react/.env
 # mix test --cover output
 /cover/
 /examples/*/cover/

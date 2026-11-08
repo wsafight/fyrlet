@@ -2,6 +2,8 @@
 
 Authentication has four parts: identity and sessions, authorization enforcement points, business authorization rules, and the credential scheme for new entry points. The layer boundaries are described in [ARCHITECTURE.md](ARCHITECTURE.md#authentication-boundaries).
 
+The runnable [Suiji login bridge](../examples/inbox-react/README.md) connects a configured OIDC provider using authorization code, PKCE and verified ID tokens. It demonstrates session renewal, logout, revocation, account changes and client cleanup, with explicit single-process storage and IdP revocation boundaries.
+
 ## Identity layers
 
 | Identity | Credential | Where used | Capability |

@@ -111,11 +111,12 @@ Fyrlet 与宿主共用一个 `Fyrlet.Repo`。这是有意的：业务写入、�
 ## 打包与安装验收
 
 ```sh
+npm --prefix sdks/react ci
 bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-打包先运行 SDK 类型检查与单元测试，生成 `.local/releases/fyrlet-source-0.1.0.tar.gz`、`fyrlet-client-0.1.0.tgz` 和带大小、SHA256 的 `manifest.json`。源码包包含核心、领域应用、能力包、文档与验证脚本，排除依赖、构建缓存及本地凭证。安装验收解包到独立临时目录，复用已下载的 Elixir 依赖与 TypeScript 工具链，再运行宿主测试；npm consumer 实际从 `.tgz` 安装依赖。这验证了分发内容与路径依赖，不等于离线安装或注册表发布。
+打包先运行 client 与 React 的类型检查和单元测试，生成 `.local/releases/fyrlet-source-0.1.0.tar.gz`、`fyrlet-client-0.1.0.tgz`、`fyrlet-react-0.1.0.tgz` 及带大小、SHA256 的 `manifest.json`。源码包包含核心、领域应用、能力包、文档与验证脚本，排除依赖、构建缓存及本地凭证。安装验收解包到独立临时目录，复用已下载的 Elixir 依赖与 TypeScript 工具链，再运行宿主测试；独立 npm consumer 从两份 `.tgz` 安装，并验证 React 适配包导入。这验证了分发内容与路径依赖，不等于离线安装或注册表发布。
 
 将源码包解到固定目录后，宿主使用 `{:fyrlet, path: "/固定目录"}`；SDK 使用 `npm install /固定目录/fyrlet-client-0.1.0.tgz`。`private: true` 保留，Hex/npm 发布及许可证决策仍需维护者完成。
 

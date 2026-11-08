@@ -1,5 +1,5 @@
 import { ApiError, OutcomeUnknownError } from "./errors.js";
-import type { Mutation, MutationState, OperationOutcome, RecoveryResult, RequestOptions, ViewConfirmation } from "./types.js";
+import type { Mutation, MutationState, OperationOutcome, RecoveryResult, RequestOptions, ViewConfirmation, RetryProgress } from "./types.js";
 
 export interface OperationReceipt<Data> { outcome: OperationOutcome; data: Data }
 
@@ -32,12 +32,12 @@ export class MutationTask<Data> implements Mutation<Data> {
 
   constructor(
     readonly idempotencyKey: string,
-    perform: () => Promise<OperationReceipt<Data>>,
+    perform: (report: (progress: RetryProgress) => void) => Promise<OperationReceipt<Data>>,
     private readonly lookup: (options: RequestOptions) => Promise<RecoveryResult<Data>>,
     private readonly onListenerError: ((error: unknown) => void) | undefined,
     confirmViews: (error?: unknown) => Promise<readonly ViewConfirmation[]>,
   ) {
-    this.result = perform().then((receipt) => {
+    this.result = perform((retry) => this.setState({ status: "pending", retry: Object.freeze(retry) })).then((receipt) => {
       this.setState({ status: receipt.outcome, data: receipt.data });
       return receipt.data;
     }, (error: unknown) => {

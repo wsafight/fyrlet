@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createClient, ApiError, OutcomeUnknownError } from "../dist/index.js";
 import { createSessionService } from "../dist/server.js";
+import { operationMetadata } from "../dist/generated/app.js";
 import { until } from "./helpers.mjs";
 
 if (!process.env.INTEGRATION_FIXTURES) throw new Error("Run bash scripts/integration.sh from the repository root");
@@ -38,6 +39,26 @@ async function stopServer() {
 
 before(startServer);
 after(async () => { await stopServer(); await log.close(); });
+
+test("opt-in retry recovers a committed write with a lost response without replay", async (context) => {
+  let writes = 0;
+  let lookups = 0;
+  const { client } = await user(context, 0, crypto.randomUUID(), { operationMetadata,
+    fetch: async (url, init) => {
+      if (new URL(url).pathname.endsWith("/inbox.add/recover")) lookups++;
+      const result = await fetch(url, init);
+      if (new URL(url).pathname.endsWith("/inbox.add")) { writes++; await result.arrayBuffer(); throw new TypeError("Injected post-commit response loss"); }
+      return result;
+    },
+  });
+  const mutation = client.mutate("inbox.add", { text: "automatic receipt recovery" }, { retry: { baseDelayMs: 0, maxDelayMs: 0 } });
+  const item = await mutation.result;
+  assert.equal(mutation.getState().status, "committed");
+  assert.equal(writes, 1);
+  assert.equal(lookups, 1);
+  const history = await client.call("inbox.history", {});
+  assert.deepEqual(history.items.map((record) => record.id), [item.id]);
+});
 
 test("committed writes confirm each fresh view, including unchanged and shared client queries", async (context) => {
   const { client } = await user(context, 0, crypto.randomUUID(), { shareSubscriptions: true });

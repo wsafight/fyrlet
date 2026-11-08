@@ -5,7 +5,10 @@ task_output="$task_root/.local/releases"
 mkdir -p "$task_output"
 npm --prefix "$task_root/sdks/typescript" run typecheck
 npm --prefix "$task_root/sdks/typescript" test
+npm --prefix "$task_root/sdks/react" run typecheck
+npm --prefix "$task_root/sdks/react" test
 npm pack "$task_root/sdks/typescript" --pack-destination "$task_output" --json > "$task_output/npm-pack.json"
+npm pack "$task_root/sdks/react" --pack-destination "$task_output" --json > "$task_output/react-pack.json"
 cd "$task_root"
 tar --exclude='node_modules' --exclude='deps' --exclude='_build' --exclude='.git' \
   --exclude='.local' --exclude='.env' --exclude='*/.meteor/local' --exclude='cover' \
@@ -17,7 +20,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 const output = process.argv[2];
 const packed = JSON.parse(await readFile(`${output}/npm-pack.json`, "utf8"))[0];
-const files = ["fyrlet-source-0.1.0.tar.gz", packed.filename];
+const react = JSON.parse(await readFile(`${output}/react-pack.json`, "utf8"))[0];
+const files = ["fyrlet-source-0.1.0.tar.gz", packed.filename, react.filename];
 const artifacts = await Promise.all(files.map(async (filename) => {
   const body = await readFile(`${output}/${filename}`);
   return { filename, bytes: body.length, sha256: createHash("sha256").update(body).digest("hex") };

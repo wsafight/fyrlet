@@ -16,7 +16,7 @@ export function schemaType(schema, mode = "input") {
         const required = schema.required?.includes(name) && !(mode === "input" && "default" in property);
         return `${JSON.stringify(name)}${required ? "" : "?"}: ${schemaType(property, mode)}`;
       });
-      return `{ ${fields.join("; ")} }`;
+      return fields.length ? `{ ${fields.join("; ")} }` : "Record<string, never>";
     }
     default: throw new Error(`Unsupported schema type: ${schema.type}`);
   }
@@ -26,11 +26,19 @@ export function generate(contract) {
   if (contract.protocol_version !== 1 || contract.schema_dialect !== "fyrlet-subset") throw new Error("Unsupported contract protocol or dialect");
   const sections = ["operations", "subscriptions"].map((kind) => {
     const entries = Object.entries(contract[kind]).sort(([left], [right]) => left.localeCompare(right)).map(([name, specification]) =>
-      `    ${JSON.stringify(name)}: { input: ${schemaType(specification.input)}; output: ${schemaType(specification.output, "output")} };`,
+      `    ${JSON.stringify(name)}: { ${kind === "operations" ? `kind: ${JSON.stringify(specification.kind)}; ` : ""}input: ${schemaType(specification.input)}; output: ${schemaType(specification.output, "output")} };`,
     );
     return `  ${kind}: {\n${entries.join("\n")}\n  };`;
   });
-  return `export interface AppContract {\n${sections.join("\n")}\n}\n`;
+  const rooms = Object.entries(contract.presence ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([name, specification]) =>
+    `    ${JSON.stringify(name)}: { input: ${schemaType(specification.input)}; meta: ${schemaType(specification.meta ?? { type: "object", additionalProperties: false })} };`,
+  );
+  sections.push(`  presence: {\n${rooms.join("\n")}\n  };`);
+  const metadata = Object.fromEntries(Object.entries(contract.operations).sort(([left], [right]) => left.localeCompare(right)).map(([name, specification]) => {
+    if (!["read", "write", "run", "ingest"].includes(specification.kind)) throw new Error(`Unsupported operation kind: ${specification.kind}`);
+    return [name, { kind: specification.kind }];
+  }));
+  return `export interface AppContract {\n${sections.join("\n")}\n}\n\nexport const operationMetadata = ${JSON.stringify(metadata, null, 2)} as const;\n`;
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {

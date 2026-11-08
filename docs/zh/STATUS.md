@@ -10,7 +10,10 @@
 | --- | --- | --- | --- | --- |
 | 操作结果与恢复（路线图 1A） | mutation 生命周期；读完成、写提交与受理；未知结果；HTTP / Socket 只读查询 write/run 回执 | 已实现 | `runtime.ex`、`mutation.ts`、`client.ts` | `operation_outcomes_test`、HTTP / Channel 测试、SDK 单元与真实丢响应集成 |
 | 权威视图确认（路线图 1B） | 成功后关联刷新、重新查询完整快照、独立的 `mutation.views` 结果、显式 `subscription.confirm()` | snapshot / append 已实现；TTL 不确认视图 | `subscriptions/observation.ex`、`subscription_channel.ex`、`append_channel.ex`、`subscription.ts` | 私有 / 共享 / append Channel 测试、`confirmation.test.mjs`、真实 SDK 集成 |
-| 客户端查询复用（路线图 2，部分） | 可选的 snapshot / append 引用计数、规范化 JSON 键、独立句柄与最终释放清理 | 查询复用已实现；React、selector 与 SSR 接入待开发 | `client.ts`、`query.ts` | `shared-queries.test.mjs`、真实 SDK 集成 |
+| 客户端查询与 React（路线图 2） | snapshot / append 引用计数、selector、独立 React 包、确定空 SSR 与真实 Inbox 页面 | 已实现；React 最多 100 个活跃查询，无引用立即清理 | `client.ts`、`selector.ts`、`sdks/react`、`examples/inbox-react` | 共享查询、React 生命周期 / SSR、`scripts/react.sh` |
+| 契约类型（路线图 3） | Presence 名称 / 参数 / meta、操作 kind、显式运行时元数据、兼容旧契约 | 已实现 | `scripts/generate.mjs`、`types.ts` | 生成器测试、SDK / React 类型检查、契约漂移检查 |
+| 有限重试（路线图 4） | 默认关闭、固定输入与键、次数 / 总时限、抖动、retry-after、未知后只读恢复 | read/write/run 已实现；signal/cancel/ingest 不自动重试 | `retry.ts`、`client.ts`、`requests.ts` | `retry.test.mjs`、真实丢响应集成、React 浏览器流程 |
+| 登录桥接（路线图 5） | OIDC / PKCE、续期、退出、撤销、换号与跨标签私有状态清理 | 本地示例已实现；外部 IdP 与多实例部署待验收 | `examples/inbox-react/server`、`src/session.ts` | OIDC 单元 / 竞态测试、`scripts/react.sh` |
 | 核心 CI | 核心 / 示例 / 包测试、SDK 测试与类型检查、契约漂移检查、HTTP / Socket 集成 | 工作流已补齐；本地检查通过，远程运行待验 | `.github/workflows/core.yml`、`scripts/check_contract.mjs` | 命令记录在 `ACCEPTANCE.md` |
 | 有界保留清理 | 共享行数 / 时间预算、有界删除、轮换续排与清理指标 | 已实现；运行中的 SQL 与级联删除遵守文档所述边界 | `pruning.ex`、`prune_worker.ex`、`metrics.ex` | `pruning_test`、`ingest_retention_test`、保留策略测试 |
 | 数据库就绪 | 公开的 `GET /ready` 检查数据库，`/health` 保持存活检查 | 已实现；数据库故障返回脱敏且可重试的 503 | `readiness.ex`、`router.ex` | `readiness_test`、集成启动检查 |

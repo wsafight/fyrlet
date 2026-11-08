@@ -1,7 +1,20 @@
 export interface FyrletContract {
-  operations: Record<string, { input: unknown; output: unknown }>;
+  operations: Record<string, { input: unknown; output: unknown; kind?: OperationKind }>;
   subscriptions: Record<string, { input: unknown; output: unknown }>;
+  presence?: Record<string, { input: unknown; meta: Record<string, unknown> }>;
 }
+
+export type OperationKind = "read" | "write" | "run" | "ingest";
+export type OperationMetadata = Readonly<Record<string, { readonly kind: OperationKind }>>;
+export type OperationNames<Contract extends FyrletContract, Kind extends OperationKind> = {
+  [Name in keyof Contract["operations"] & string]: Contract["operations"][Name] extends { kind: infer Category }
+    ? Category extends Kind ? Name : never : Name;
+}[keyof Contract["operations"] & string];
+export type PresenceName<Contract extends FyrletContract> = Contract extends { presence: infer Rooms } ? keyof Rooms & string : string;
+export type PresenceInput<Contract extends FyrletContract, Name extends string> =
+  Contract extends { presence: Record<Name, { input: infer Input }> } ? Input : unknown;
+export type PresenceData<Contract extends FyrletContract, Name extends string> =
+  Contract extends { presence: Record<Name, { meta: infer Meta extends Record<string, unknown> }> } ? Meta : Record<string, unknown>;
 
 export interface ErrorDetails {
   code: string;
@@ -33,23 +46,23 @@ export interface Subscription<Data> {
 }
 
 /** One device's entry for a member of a presence room. `ref` is unique to the entry. */
-export interface PresenceMeta {
+export interface PresenceMeta<Data extends Record<string, unknown> = Record<string, unknown>> {
   readonly ref: string;
   /** What the member published (validated against the room's `meta` schema). */
-  readonly data: Readonly<Record<string, unknown>>;
+  readonly data: Readonly<Data>;
   readonly joined_at: string | null;
 }
 
 /** Members of a presence room by `subject_id`; a person on two devices has two entries. */
-export type PresenceRoster = Readonly<Record<string, readonly PresenceMeta[]>>;
+export type PresenceRoster<Data extends Record<string, unknown> = Record<string, unknown>> = Readonly<Record<string, readonly PresenceMeta<Data>[]>>;
 
-export interface PresenceSubscription extends Subscription<PresenceRoster> {
+export interface PresenceSubscription<Data extends Record<string, unknown> = Record<string, unknown>> extends Subscription<PresenceRoster<Data>> {
   /**
    * Replaces this client's own `meta` in the room (for example `{ typing: true }`). It is kept
    * and sent again if the connection has to be re-established. Rejects with `LIMIT_EXCEEDED`
    * (retryable) when called too often and `VALIDATION_FAILED` when the room's schema refuses it.
    */
-  update(meta: Record<string, unknown>): Promise<void>;
+  update(meta: Data): Promise<void>;
   /** The caller's own `subject_id`, known once the room has been joined. */
   self(): string | undefined;
 }
@@ -70,6 +83,7 @@ export interface ClientOptions {
   operationTransport?: "http" | "socket";
   shareSubscriptions?: boolean;
   maxSharedSubscriptions?: number;
+  operationMetadata?: OperationMetadata;
   /**
    * Optional server capabilities this client understands, e.g. `["runs"]` or `{ runs: 1 }`.
    * Run, append and Presence require declaration and server support; otherwise their APIs throw
@@ -94,6 +108,7 @@ export interface OptimisticUpdate<Data = any> {
 export interface CallOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
+  retry?: false | RetryOptions;
   confirm?: readonly Subscription<any>[];
   /**
    * Predictions apply immediately and roll back on definite failure. Successful snapshot/append predictions wait
@@ -103,6 +118,19 @@ export interface CallOptions {
   optimistic?: OptimisticUpdate[];
 }
 
+export interface RetryOptions {
+  maxAttempts?: number;
+  maxElapsedMs?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+}
+
+export interface RetryProgress {
+  readonly attempt: number;
+  readonly phase: "call" | "recover";
+  readonly nextRetryAt?: number;
+}
+
 export type OperationOutcome = "completed" | "committed" | "accepted";
 
 export type RecoveryResult<Data> =
@@ -110,7 +138,7 @@ export type RecoveryResult<Data> =
   | { readonly status: "unknown" };
 
 export type MutationState<Data> =
-  | { readonly status: "pending" }
+  | { readonly status: "pending"; readonly retry?: RetryProgress }
   | { readonly status: OperationOutcome; readonly data: Data }
   | { readonly status: "failed"; readonly error: unknown }
   | { readonly status: "unknown"; readonly error: import("./errors.js").OutcomeUnknownError };
@@ -165,11 +193,13 @@ export interface Client<Contract extends FyrletContract> {
   ): Subscription<Contract["subscriptions"][Name]["output"]>;
   /**
    * Joins a presence room (needs the "presence" capability). `data` is the roster. Presence
-   * names come from the contract's `presence` section, which the generated types do not cover.
+   * Names, parameters and meta come from the contract. Legacy contracts retain untyped rooms.
    */
-  subscribePresence(name: string, params: unknown, meta?: Record<string, unknown>): PresenceSubscription;
+  subscribePresence<Name extends PresenceName<Contract>>(
+    name: Name, params: PresenceInput<Contract, Name>, meta?: PresenceData<Contract, Name>,
+  ): PresenceSubscription<PresenceData<Contract, Name>>;
   /** Starts a durable run through a `run` operation. Accepted is not completed: observe it with `subscribeRun`. */
-  startRun<Name extends keyof Contract["operations"] & string>(
+  startRun<Name extends OperationNames<Contract, "run">>(
     name: Name,
     input: Contract["operations"][Name]["input"],
     options?: CallOptions,

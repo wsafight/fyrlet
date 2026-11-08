@@ -342,7 +342,7 @@ test("server credentials use a separate API and preserve the service error", asy
 test("contract generation rejects unsupported dialects and models defaults and nulls", () => {
   assert.throws(() => generate({ protocol_version: 2 }));
   const generated = generate({ protocol_version: 1, schema_dialect: "fyrlet-subset", subscriptions: {}, operations: {
-    "example.call": { input: { type: "object", additionalProperties: false, required: ["limit"], properties: { limit: { type: "integer", default: 50 } } }, output: { anyOf: [{ type: "string" }, { type: "null" }] } },
+    "example.call": { kind: "read", input: { type: "object", additionalProperties: false, required: ["limit"], properties: { limit: { type: "integer", default: 50 } } }, output: { anyOf: [{ type: "string" }, { type: "null" }] } },
   } });
   assert.ok(generated.includes('"limit"?: number'));
   assert.ok(generated.includes("output: string | null"));

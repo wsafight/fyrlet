@@ -48,7 +48,10 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: sdks/typescript/package-lock.json
+          cache-dependency-path: |
+            sdks/typescript/package-lock.json
+            sdks/react/package-lock.json
+            examples/inbox-react/package-lock.json
       - name: Install dependencies
         run: |
           mix deps.get
@@ -57,6 +60,8 @@ jobs:
             (cd "$project" && mix deps.get)
           done
           npm --prefix sdks/typescript ci
+          npm --prefix sdks/react ci
+          npm --prefix examples/inbox-react ci
       - name: Check Elixir formatting and compilation
         run: |
           mix format --check-formatted
@@ -65,15 +70,25 @@ jobs:
         run: bash scripts/test_all.sh
       - name: Test and typecheck SDK
         run: |
-          npm --prefix sdks/typescript test
+          npm --prefix sdks/typescript run test:coverage
           npm --prefix sdks/typescript run typecheck
       - name: Check exported contract and generated types
         run: |
           mkdir -p .local/ci
           (cd examples/inbox && mix fyrlet.contract ../../.local/ci/contract.json)
           node scripts/check_contract.mjs .local/ci/contract.json
+      - name: Test React, OIDC bridge and example build
+        run: |
+          npm --prefix sdks/react run test:coverage
+          npm --prefix sdks/react run typecheck
+          npm --prefix examples/inbox-react run test:coverage
+          npm --prefix examples/inbox-react run build
       - name: Test HTTP and WebSocket integration
         run: bash scripts/integration.sh
+      - name: Test React browser workflow
+        run: |
+          (cd examples/inbox-react && npx playwright install --with-deps chromium)
+          bash scripts/react.sh
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4

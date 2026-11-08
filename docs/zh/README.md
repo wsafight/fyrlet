@@ -22,12 +22,14 @@ Fyrlet 是基于 Phoenix 的实时应用框架：在服务端定义业务操作�
 | [PROTOCOL.md](PROTOCOL.md) | HTTP 与 Socket 协议、订阅与 ACK、增量、能力协商，以及各能力的线上格式 |
 | [SDK 总览](../../sdks/README.zh-CN.md)、[TypeScript SDK](../../sdks/typescript/README.zh-CN.md) | 多语言 SDK 约定，TypeScript SDK 的调用、订阅、乐观写入、在线状态 |
 | [示例应用](../../examples/README.zh-CN.md) | 公共准备、登录、验证与应用边界 |
+| [React 适配包](../../sdks/react/README.zh-CN.md) | 类型化共享查询、selector、生命周期、SSR 与 client 归属 |
 
 ## 示例应用
 
 | 文档 | 内容 |
 | --- | --- |
 | [Inbox](../../examples/inbox/README.zh-CN.md) | 最小 Mix 宿主、私有收件箱、Node CLI 与实时更新 |
+| [随记](../../examples/inbox-react/README.zh-CN.md) | React 查询复用、乐观更新、有限重试与 OIDC 登录 |
 | [Notify](../../examples/notify/README.zh-CN.md) | 通知、邮件 Effect 与投递对账 |
 | [Flow](../../examples/flow/README.zh-CN.md) | 顺序 HTTP / 等待节点、信号与恢复 |
 | [Agent](../../examples/agent/README.zh-CN.md) | 有限工具、owner 审批、拒绝与取消 |
