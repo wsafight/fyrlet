@@ -8,7 +8,12 @@
 
 | 能力 | 内容 | 状态 | 主要代码 | 主要测试 |
 | --- | --- | --- | --- | --- |
-| 操作结果与恢复（路线图 1A） | mutation 生命周期；读完成、写提交与受理；未知结果；HTTP / Socket 只读查询 write/run 回执 | 已实现；视图确认 1B 待开发 | `runtime.ex`、`mutation.ts`、`client.ts` | `operation_outcomes_test`、HTTP / Channel 测试、SDK 单元与真实丢响应集成 |
+| 操作结果与恢复（路线图 1A） | mutation 生命周期；读完成、写提交与受理；未知结果；HTTP / Socket 只读查询 write/run 回执 | 已实现 | `runtime.ex`、`mutation.ts`、`client.ts` | `operation_outcomes_test`、HTTP / Channel 测试、SDK 单元与真实丢响应集成 |
+| 权威视图确认（路线图 1B） | 成功后关联刷新、重新查询完整快照、独立的 `mutation.views` 结果、显式 `subscription.confirm()` | snapshot / append 已实现；TTL 不确认视图 | `subscriptions/observation.ex`、`subscription_channel.ex`、`append_channel.ex`、`subscription.ts` | 私有 / 共享 / append Channel 测试、`confirmation.test.mjs`、真实 SDK 集成 |
+| 客户端查询复用（路线图 2，部分） | 可选的 snapshot / append 引用计数、规范化 JSON 键、独立句柄与最终释放清理 | 查询复用已实现；React、selector 与 SSR 接入待开发 | `client.ts`、`query.ts` | `shared-queries.test.mjs`、真实 SDK 集成 |
+| 核心 CI | 核心 / 示例 / 包测试、SDK 测试与类型检查、契约漂移检查、HTTP / Socket 集成 | 工作流已补齐；本地检查通过，远程运行待验 | `.github/workflows/core.yml`、`scripts/check_contract.mjs` | 命令记录在 `ACCEPTANCE.md` |
+| 有界保留清理 | 共享行数 / 时间预算、有界删除、轮换续排与清理指标 | 已实现；运行中的 SQL 与级联删除遵守文档所述边界 | `pruning.ex`、`prune_worker.ex`、`metrics.ex` | `pruning_test`、`ingest_retention_test`、保留策略测试 |
+| 数据库就绪 | 公开的 `GET /ready` 检查数据库，`/health` 保持存活检查 | 已实现；数据库故障返回脱敏且可重试的 503 | `readiness.ex`、`router.ex` | `readiness_test`、集成启动检查 |
 | 能力协商与契约导出 | 能力协商；依赖能力的条目按需出现在契约中；`UNSUPPORTED_CAPABILITY` | 已实现 | `capabilities.ex`、`registry.ex` | `capabilities_test`、`capability_channel_test` |
 | 分发与安装 | 仓库外应用安装、迁移入口、公共接口清单 | 已实现：固定源码 / 本地源码包与 npm tgz，含 SHA256 清单；尚未发布到 Hex/npm | `migrator.ex`、`runtime_config.ex`、`scripts/package.sh` | `scripts/install_smoke.sh` |
 | 持久 Run | 顺序 Run、等待与信号、取消、租约与执行代次、恢复、运行视图 | 已实现 | `runs/*.ex`、`runs.ex` | `runs_*_test`、`runs/concurrency_test` |
@@ -32,13 +37,13 @@
 | 插件接口与一致性套件 | 插件接口、启动校验、失败隔离、一致性套件、`mix fyrlet.plugins` | 已实现 | `plugin.ex`、`plugins.ex`、`conformance/plugin.ex` | `plugins_test` |
 | 数据保护 | 字段脱敏、清除、可选静态加密、保留期 | 已实现 | `runs/privacy.ex`、`vault.ex` | `runs/privacy_test` |
 | 限额 | 限额：节点、负载、事件、信号收件箱、每项目排队与并发、派发速率（并发上限在项目级 advisory 锁下统计并创建租约，同一项目的并发认领不会超过上限） | 已实现 | `runs/limits.ex` | `runs_test`、`effects/effects_test` |
-| TypeScript SDK | TypeScript SDK 的 Run、能力协商、append 订阅 API | 已实现：`capabilities`、`startRun/getRun/signalRun/cancelRun/subscribeRun/subscribeRecentRuns/subscribeAppend`；未声明能力仍只使用基础协议 | `sdks/typescript/src` | 单元、真实服务端集成、较早服务端兼容、领域端到端 |
+| TypeScript SDK | TypeScript SDK 的 Run、能力协商、append 订阅 API | 已实现：`capabilities`、`startRun/getRun/signalRun/cancelRun/subscribeRun/subscribeRecentRuns/subscribeAppend`；snapshot / append 自动协商视图确认，其他可选能力仍须声明 | `sdks/typescript/src` | 单元、真实服务端集成、较早服务端兼容、领域端到端 |
 | 浏览器交互与布局 | 网页交互与布局 | 已实现：四应用 × 桌面 Chromium、Android Chromium 模拟、iPhone WebKit 模拟；含截图、无横向溢出、长标题、纯文本防注入、历史与撤销。未覆盖实体设备和像素差分回归 | `scripts/browser.sh` | `browser.test.mjs`（12） |
 | 双节点发现与故障恢复 | 集群发现、跨节点通知与故障恢复 | 已实现可选静态节点列表；真实同机双节点验证共享/append、跨节点撤销、幂等、SIGKILL 后切换/重入、持久审批、会话续期与资源清理。多主机生产与 24h 待验 | `cluster.ex`、`scripts/cluster.sh` | `runtime_config_test`、`cluster.test.mjs`（3） |
 | 项目配额 | 按项目的读、写调用速率与订阅数上限，默认不限制；超限返回 429 加 `Retry-After`（单节点计数） | 已实现 | `quota.ex`、`subscriptions/tracker.ex` | `quota_test` |
 | Prometheus 指标 | `GET /metrics`，默认关闭，需令牌；标签基数有界 | 已实现 | `metrics.ex` | `metrics_test` |
 | 在线状态（Presence） | 房间成员与“正在输入”，能力 `presence`；SDK `subscribePresence` | 已实现（含真实服务端加 SDK 的端到端运行） | `presence.ex`、`presence_channel.ex`、`sdks/typescript/src/client.ts` | `presence_channel_test`、SDK 单元 |
-| 乐观写入（SDK） | `CallOptions.optimistic`：本地预测叠加在服务端数据上，失败回滚；结束时机为启发式 | 已实现 | `sdks/typescript/src/client.ts` | SDK 单元 |
+| 乐观写入（SDK） | `CallOptions.optimistic`：确定失败时回滚；snapshot / append 预测通过关联确认或显示 TTL 移除 | 已实现；Presence 保持 roster 更新 / TTL 规则 | `sdks/typescript/src/client.ts`、`subscription.ts` | SDK 单元 |
 | 共享订阅的批量会话复核 | `identical` 共享房间对成员的会话检查批量发出，每次变更的会话语句数不再随成员数线性增长 | 已实现 | `subscriptions/observer.ex`、`session_checks.ex` | `session_checks_test`、`shared_scope_test`、`test/bench/shared_fanout.exs` |
 | 租约与并发上限 | 外部执行器的租约过期立即生效；同一项目的并发认领在项目级 advisory 锁下不超过上限 | 已实现 | `runs/engine.ex`、`runs/executor.ex` | `runs/executor_test`、`runs/concurrency_test` |
 

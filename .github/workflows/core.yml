@@ -1,0 +1,84 @@
+name: Core
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: '1.18'
+            otp: '27'
+          - elixir: '1.20'
+            otp: '29'
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          for project in examples/*/ packages/fyrlet_*/; do
+            [[ -f "$project/mix.exs" ]] || continue
+            (cd "$project" && mix deps.get)
+          done
+          npm --prefix sdks/typescript ci
+      - name: Check Elixir formatting and compilation
+        run: |
+          mix format --check-formatted
+          mix compile --warnings-as-errors
+      - name: Test core, examples and packages
+        run: bash scripts/test_all.sh
+      - name: Test and typecheck SDK
+        run: |
+          npm --prefix sdks/typescript test
+          npm --prefix sdks/typescript run typecheck
+      - name: Check exported contract and generated types
+        run: |
+          mkdir -p .local/ci
+          (cd examples/inbox && mix fyrlet.contract ../../.local/ci/contract.json)
+          node scripts/check_contract.mjs .local/ci/contract.json
+      - name: Test HTTP and WebSocket integration
+        run: bash scripts/integration.sh
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.elixir }}-${{ matrix.otp }}
+          path: .local/integration/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore

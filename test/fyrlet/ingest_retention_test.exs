@@ -130,6 +130,25 @@ defmodule Fyrlet.IngestRetentionTest do
     assert items(b) == 0
   end
 
+  test "the shared budget bounds item and batch cleanup together", %{a: a} do
+    previous = Application.fetch_env(:fyrlet, :pruning)
+    Application.put_env(:fyrlet, :pruning, max_rows: 2, max_duration_ms: 5_000)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:fyrlet, :pruning, value)
+        :error -> Application.delete_env(:fyrlet, :pruning)
+      end
+    end)
+
+    batch(a, 20, List.duplicate({"done", 19}, 5))
+    assert {{2, 0}, %{deleted: 2}} = Fyrlet.Pruning.run(fn -> Ingest.prune() end)
+    assert items(a) == 3 and batches(a) == 1
+    assert {{2, 0}, _stats} = Fyrlet.Pruning.run(fn -> Ingest.prune() end)
+    assert {{1, 1}, _stats} = Fyrlet.Pruning.run(fn -> Ingest.prune() end)
+    assert items(a) == 0 and batches(a) == 0
+  end
+
   test "the periodic prune job runs it" do
     user = user(project(), "dave")
     batch(user, 20, [{"done", 19}])

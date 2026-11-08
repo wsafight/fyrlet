@@ -48,6 +48,7 @@ defmodule Fyrlet.Metrics do
     [:fyrlet, :auth, :batch],
     [:fyrlet, :transport, :batch],
     [:fyrlet, :quota, :rejected],
+    [:fyrlet, :prune],
     [:fyrlet, :repo, :query]
   ]
 
@@ -79,6 +80,11 @@ defmodule Fyrlet.Metrics do
     "fyrlet_db_queue_seconds" =>
       {"histogram", "Time a query waited for a pooled database connection."},
     "fyrlet_db_query_seconds" => {"histogram", "Time the database took to run a query."},
+    "fyrlet_prune_deleted_total" =>
+      {"counter", "Records deleted by retention jobs, excluding cascades."},
+    "fyrlet_prune_limited_total" =>
+      {"counter", "Retention jobs that exhausted their work budget."},
+    "fyrlet_prune_duration_seconds" => {"histogram", "Retention job duration."},
     "fyrlet_observers" => {"gauge", "Running observers on this node."},
     "fyrlet_vm_processes" => {"gauge", "Erlang processes."},
     "fyrlet_vm_memory_bytes" => {"gauge", "Erlang VM memory in use."},
@@ -196,6 +202,12 @@ defmodule Fyrlet.Metrics do
 
   def handle_event([:fyrlet, :quota, :rejected], _measurements, meta, _config),
     do: count("fyrlet_quota_rejected_total", class: meta.class)
+
+  def handle_event([:fyrlet, :prune], measurements, meta, _config) do
+    count("fyrlet_prune_deleted_total", [], measurements.deleted)
+    if meta.limited, do: count("fyrlet_prune_limited_total", [])
+    observe("fyrlet_prune_duration_seconds", [], measurements.duration_ms * 1_000, @buckets_us)
+  end
 
   def handle_event([:fyrlet, :repo, :query], measurements, _meta, _config) do
     if is_integer(measurements[:queue_time]),

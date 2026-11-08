@@ -8,12 +8,13 @@ import { decodeFrames } from "./transport.js";
 import { PROTOCOL_VERSION } from "./protocol.js";
 import type { Identity } from "./protocol.js";
 import { awaitAbortable, RequestExecutor } from "./requests.js";
+import { queryParameters } from "./query.js";
 import { SubscriptionEntry as Entry } from "./subscription.js";
 import type { Overlay, SubscriptionEvent } from "./subscription.js";
 import type {
   CallOptions, CancelReceipt, Client, ClientOptions, FyrletContract, PresenceRoster,
   PresenceSubscription, RequestOptions, RunSignal, RunSummary, RunView, SignalReceipt, StartedRun, Subscription,
-  Mutation, RecoveryOptions, RecoveryResult,
+  Mutation, RecoveryOptions, RecoveryResult, ViewConfirmation, SubscriptionState,
 } from "./types.js";
 
 /** Consecutive retryable join failures of one subscription before it is reported as failed. */
@@ -46,6 +47,10 @@ class FyrletClient implements Client<FyrletContract> {
   private readonly createId: () => string;
   private readonly entries = new Map<string, Entry>();
   private readonly handles = new WeakMap<object, Entry>();
+  private readonly handleConfirmations = new WeakMap<object, Set<AbortController>>();
+  private readonly sharedQueries = new Map<string, Entry>();
+  private readonly queryKeys = new Map<Entry, string>();
+  private readonly references = new Map<Entry, number>();
   private readonly requests: RequestExecutor;
   private socket: Socket | undefined;
   private operationChannel: Channel | undefined;
@@ -70,6 +75,9 @@ class FyrletClient implements Client<FyrletContract> {
       return globalThis.crypto.randomUUID();
     });
     if (!options.projectId) throw new TypeError("projectId is required");
+    if (options.maxSharedSubscriptions !== undefined && (!Number.isSafeInteger(options.maxSharedSubscriptions) || options.maxSharedSubscriptions < 1)) {
+      throw new TypeError("maxSharedSubscriptions must be a positive integer");
+    }
     this.declared = normalizeCapabilities(options.capabilities);
     this.requests = new RequestExecutor(options.timeoutMs ?? 10_000, {
       authorize: (forceRefresh) => this.authorize(forceRefresh),
@@ -138,6 +146,11 @@ class FyrletClient implements Client<FyrletContract> {
     this.assertOpen();
     const body = JSON.stringify({ input });
     const key = options.idempotencyKey ?? this.createId();
+    const targets = [...new Set([...(options.confirm ?? []), ...(options.optimistic ?? []).map((item) => item.subscription)])].map((subscription) => {
+      const entry = this.handles.get(subscription);
+      if (!entry || !this.entries.has(entry.id)) throw new TypeError("confirm requires an open subscription created by this client");
+      return { subscription, entry };
+    });
     const predicted = this.predict(options.optimistic);
     return new MutationTask(key, async () => {
       try {
@@ -151,7 +164,14 @@ class FyrletClient implements Client<FyrletContract> {
         }
         throw error;
       }
-    }, (recoveryOptions) => this.lookup(name, body, key, recoveryOptions.signal), this.options.onListenerError);
+    }, (recoveryOptions) => this.lookup(name, body, key, recoveryOptions.signal), this.options.onListenerError,
+    async (error) => Promise.all(targets.filter(({ entry }) => !entry.presence).map(async ({ subscription, entry }): Promise<ViewConfirmation> => {
+      if (error !== undefined) return { subscription, status: "unconfirmed", error };
+      try {
+        await this.confirmHandle(subscription, entry, predicted.filter((item) => item.entry === entry).map((item) => item.overlay), options.signal);
+        return { subscription, status: "confirmed" };
+      } catch (error) { return { subscription, status: "unconfirmed", error }; }
+    })));
   }
 
   async recover(name: string, input: unknown, options: RecoveryOptions): Promise<RecoveryResult<unknown>> {
@@ -218,23 +238,66 @@ class FyrletClient implements Client<FyrletContract> {
 
   private subscribeEntry(name: string, params: unknown, append: boolean, presence?: Entry["presence"]): Subscription<unknown> {
     this.assertOpen();
-    const id = this.createId();
-    if (this.entries.has(id)) throw new TypeError("createId returned a duplicate subscription ID");
-    const entry = new Entry(id, name, params, this.options, append, presence);
-    this.entries.set(id, entry);
-    if (this.socket) this.attach(entry, this.socket, this.epoch);
-    else this.start(false);
+    let key: string | undefined;
+    if (this.options.shareSubscriptions && !presence) {
+      const normalized = queryParameters(params);
+      key = JSON.stringify([this.options.projectId, name, append, normalized.key]);
+      params = normalized.value;
+    }
+    let entry = key === undefined ? undefined : this.sharedQueries.get(key);
+    if (!entry) {
+      if (key !== undefined && this.sharedQueries.size >= (this.options.maxSharedSubscriptions ?? 100)) {
+        throw new ApiError({ code: "LIMIT_EXCEEDED", message: "Too many shared queries" });
+      }
+      const id = this.createId();
+      if (this.entries.has(id)) throw new TypeError("createId returned a duplicate subscription ID");
+      entry = new Entry(id, name, params, this.options, append, presence);
+      this.entries.set(id, entry);
+      if (key !== undefined) {
+        this.sharedQueries.set(key, entry);
+        this.queryKeys.set(entry, key);
+      }
+      if (this.socket) this.attach(entry, this.socket, this.epoch);
+      else this.start(false);
+    }
+    return this.subscriptionHandle(entry);
+  }
 
+  private subscriptionHandle(entry: Entry): Subscription<unknown> {
+    this.references.set(entry, (this.references.get(entry) ?? 0) + 1);
+    let closed: SubscriptionState<unknown> | undefined;
+    const listeners = new Set<(state: SubscriptionState<unknown>) => void>();
     const subscription: Subscription<unknown> = {
-      getState: () => entry.view(),
+      getState: () => closed ?? entry.view(),
       onChange: (listener) => {
-        entry.listeners.add(listener);
-        entry.notify(listener);
-        return () => { entry.listeners.delete(listener); };
+        const wrapped = (state: SubscriptionState<unknown>) => listener(closed ?? state);
+        if (!closed && entry.state.status !== "closed") {
+          listeners.add(wrapped);
+          entry.listeners.add(wrapped);
+        }
+        entry.notify(wrapped);
+        return () => { entry.listeners.delete(wrapped); listeners.delete(wrapped); };
       },
-      refresh: () => this.push(entry, "refresh", {}),
+      refresh: () => closed ? Promise.reject(new ApiError({ code: "SUBSCRIPTION_CLOSED", message: "The subscription is closed" })) : this.push(entry, "refresh", {}),
+      confirm: (options = {}) => this.confirmHandle(subscription, entry, [], options.signal),
       unsubscribe: () => {
-        if (!this.entries.delete(id)) return;
+        if (closed) return;
+        closed = Object.freeze({ ...entry.state, status: "closed", data: undefined, error: undefined });
+        this.handles.delete(subscription);
+        for (const controller of this.handleConfirmations.get(subscription) ?? []) {
+          controller.abort(new ApiError({ code: "SUBSCRIPTION_CLOSED", message: "The subscription is closed" }));
+        }
+        this.handleConfirmations.delete(subscription);
+        for (const listener of listeners) {
+          entry.listeners.delete(listener);
+          entry.notify(listener);
+        }
+        listeners.clear();
+        const remaining = (this.references.get(entry) ?? 1) - 1;
+        if (remaining > 0) { this.references.set(entry, remaining); return; }
+        this.references.delete(entry);
+        this.removeShared(entry);
+        if (!this.entries.delete(entry.id)) return;
         const channel = entry.channel;
         entry.channel = undefined;
         channel?.leave(0);
@@ -248,6 +311,12 @@ class FyrletClient implements Client<FyrletContract> {
     return subscription;
   }
 
+  private removeShared(entry: Entry): void {
+    const key = this.queryKeys.get(entry);
+    if (key !== undefined) this.sharedQueries.delete(key);
+    this.queryKeys.delete(entry);
+  }
+
   private push(entry: Entry, event: "refresh" | "update", payload: object, onSuccess?: () => void): Promise<void> {
     return new Promise((resolve, reject) => {
       if (entry.state.status !== "ready" || !entry.channel) {
@@ -259,6 +328,31 @@ class FyrletClient implements Client<FyrletContract> {
         .receive("error", (reply: unknown) => reject(channelError(reply)))
         .receive("timeout", () => reject(new ApiError({ code: "TIMEOUT", message: `${event} was not acknowledged`, retryable: true })));
     });
+  }
+
+  private async confirmHandle(subscription: Subscription<unknown>, entry: Entry, overlays: readonly Overlay[], signal?: AbortSignal): Promise<void> {
+    this.assertOpen();
+    if (this.handles.get(subscription) !== entry || !this.entries.has(entry.id)) {
+      throw new ApiError({ code: "SUBSCRIPTION_CLOSED", message: "The subscription is closed" });
+    }
+    const controller = new AbortController();
+    const controllers = this.handleConfirmations.get(subscription) ?? new Set<AbortController>();
+    controllers.add(controller);
+    this.handleConfirmations.set(subscription, controllers);
+    try {
+      const identifier = this.createId();
+      if (entry.hasConfirmation(identifier)) {
+        throw new ApiError({ code: "LIMIT_EXCEEDED", message: "Duplicate confirmation ID" });
+      }
+      const pending = entry.confirm(identifier, overlays, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
+      if (entry.hasConfirmation(identifier)) {
+        void this.push(entry, "refresh", { confirmation_id: identifier }).catch((error: unknown) => entry.rejectConfirmation(identifier, error));
+      }
+      await pending;
+    } finally {
+      controllers.delete(controller);
+      if (controllers.size === 0) this.handleConfirmations.delete(subscription);
+    }
   }
 
   async reconnect(): Promise<void> {
@@ -282,6 +376,9 @@ class FyrletClient implements Client<FyrletContract> {
       entry.listeners.clear();
     }
     this.entries.clear();
+    this.sharedQueries.clear();
+    this.queryKeys.clear();
+    this.references.clear();
     this.token = undefined;
   }
 
@@ -427,7 +524,7 @@ class FyrletClient implements Client<FyrletContract> {
     // A function, so that a rejoin by Phoenix (after a retryable join error) sends the current meta.
     const channel = socket.channel(
       presence ? `presence:${entry.id}` : append ? `append:${entry.id}` : `subscription:${entry.id}`,
-      () => ({ ...this.joinOptions(), name: entry.name, params: entry.params,
+      () => ({ ...this.joinOptions(!presence), name: entry.name, params: entry.params,
         ...(presence ? { meta: presence.meta } : {}),
         ...(append || presence || this.options.delta === false ? {} : { delivery: "delta-v1" }) }));
     entry.channel = channel;
@@ -534,6 +631,7 @@ class FyrletClient implements Client<FyrletContract> {
   }
 
   private fail(entry: Entry, error: ApiError): void {
+    this.removeShared(entry);
     const channel = entry.channel;
     entry.channel = undefined;
     channel?.leave(0);
@@ -596,9 +694,10 @@ class FyrletClient implements Client<FyrletContract> {
     }, decode);
   }
 
-  private joinOptions(): { protocol_version: typeof PROTOCOL_VERSION; capabilities?: Record<string, number> } {
-    return Object.keys(this.declared).length > 0
-      ? { protocol_version: PROTOCOL_VERSION, capabilities: this.declared }
+  private joinOptions(confirm = false): { protocol_version: typeof PROTOCOL_VERSION; capabilities?: Record<string, number> } {
+    const capabilities = confirm ? { ...this.declared, view_confirmation: 1 } : this.declared;
+    return Object.keys(capabilities).length > 0
+      ? { protocol_version: PROTOCOL_VERSION, capabilities }
       : { protocol_version: PROTOCOL_VERSION };
   }
 

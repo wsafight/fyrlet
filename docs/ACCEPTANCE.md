@@ -1,8 +1,27 @@
-# Local acceptance record (2026-11-07)
+# Local acceptance record
+
+## November 8, 2026: reliability and subscription completion
+
+The `fix/reliability-and-subscription-improvements` branch completes operation-level 403 isolation, listener error isolation, correlated authoritative view confirmation, optional client query reuse, bounded retention work with continuation and metrics, database readiness and the core CI workflow. React integration, production capacity and remote CI execution are outside this local pass. The dated record below preserves earlier counts and statuses.
+
+| Verification | Result | Command / evidence |
+| --- | --- | --- |
+| Elixir core, examples and packages | **764 passed**: core 694, examples 35, packages 35 | `bash scripts/test_all.sh`; `.local/all-tests.log` |
+| TypeScript SDK | **232 passed**, typecheck passed | `npm --prefix sdks/typescript test`, `npm --prefix sdks/typescript run typecheck`; `.local/sdk-review-tests.log` |
+| Real HTTP / WebSocket integration | **19 passed**, including shared client queries and committed/unchanged view confirmation | `INTEGRATION_PORT=4197 bash scripts/integration.sh`; `.local/integration-review.log` |
+| Elixir quality checks | Formatting and compilation without warnings passed | `mix format --check-formatted`, `mix compile --warnings-as-errors` |
+| Contract agreement | Fresh Inbox export matches the checked-in contract and generated SDK types | `node scripts/check_contract.mjs .local/ci/contract.json` after export |
+| Documentation site | 62 pages built; 3080 internal links and 27 repository targets checked, no broken links | `npm --prefix site run build`, `npm --prefix site run check` |
+
+Confirmation regression tests cover unrelated and stale snapshots, deltas, concurrent writes, independent subscriptions, unchanged/empty append snapshots, timeout, cancellation, reconnection, permission revocation, unsupported servers and malformed confirmation lists. Unsubscribing before the operation response produces an unconfirmed view while preserving the committed result. Duplicate confirmation IDs cannot disturb another waiter. Server tests exercise private and shared queries, warm-cache bypass and append reset before an old ACK. Cleanup tests verify shared row/time budgets, continuation, stream floors and retention protections; readiness tests verify both successful queries and sanitized HTTP 503 failures.
+
+The CI workflow runs the suites, typecheck, contract comparison and integration on Elixir 1.18 / OTP 27 and Elixir 1.20 / OTP 29 with PostgreSQL 17 and Node 24. Only the local environment recorded below has been executed in this pass; no GitHub-hosted result is claimed. Existing databases need `mix fyrlet.migrate` for the session-expiry index. Cleanup duration is checked between statements and does not interrupt running SQL; row accounting excludes foreign-key cascades. No new throughput, multi-host or long-duration performance claim is made.
+
+## November 7, 2026: earlier verification
 
 This round continued the development and verification that can be run on this machine; the official Hex/npm release and the licence decision are deferred as requested. Real email credentials and a recipient have not been provided, and physical mobile devices, multi-host production environments and 24-hour stability are still pending verification and are not counted as passed results.
 
-## Verifications that passed
+### Verifications that passed
 
 Roadmap 1A on the same date passed **687 Elixir tests** (core 617, examples 35, packages 35), **132 SDK unit tests**, SDK type checking and **18 real-server integration scenarios**. Relative to the preceding pass, this adds 16 Elixir, 29 SDK unit and 3 integration tests. Verification covers completed/committed/accepted outcomes, definite versus unknown failures, cancellation before and after dispatch, stalled response bodies, listener cleanup, receipt expiry, normalized input, authorization and identity isolation. Real HTTP and Socket tests deliberately discard a reply after the database commit, recover the original receipt and verify exactly one business record with no replay. Commands: `bash scripts/test_all.sh`, `npm --prefix sdks/typescript test`, `npm --prefix sdks/typescript run typecheck`, `INTEGRATION_PORT=4197 bash scripts/integration.sh`. The [outcome guide](MUTATIONS.md) defines the recovery boundaries; authoritative subscription confirmation (1B) remains pending.
 
@@ -30,13 +49,15 @@ mix compile --warnings-as-errors
 bash scripts/test_all.sh
 npm --prefix sdks/typescript test
 npm --prefix sdks/typescript run typecheck
+(cd examples/inbox && mix fyrlet.contract ../../.local/ci/contract.json)
+node scripts/check_contract.mjs .local/ci/contract.json
 bash scripts/integration.sh
 DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-The SDK integration script uses the independent `fyrlet_integration` database and port 4100 by default (`INTEGRATION_PORT` overrides it), and verifies 18 real HTTP / WebSocket scenarios covering multiple devices, concurrent idempotency, isolation, revocation, restart, Run, append and mixed channels. The domain script uses ports 4180/4181 by default, which can be changed as in the example above, and runs the 8 business and web resource scenarios of the four applications in turn. Every script starts and stops its own services; credentials and logs are in `.local/integration/`. The distribution packages and SHA256 manifest are in `.local/releases/` and have not been published to any external registry. Verification of browsers, two nodes and real email is described in the sections below.
+The SDK integration script uses the independent `fyrlet_integration` database and port 4100 by default (`INTEGRATION_PORT` overrides it), and verifies 19 real HTTP / WebSocket scenarios covering multiple devices, concurrent idempotency, isolation, revocation, restart, Run, append, shared client queries, view confirmation and mixed channels. The domain script uses ports 4180/4181 by default, which can be changed as in the example above, and runs the 8 business and web resource scenarios of the four applications in turn. Every script starts and stops its own services; credentials and logs are in `.local/integration/`. The distribution packages and SHA256 manifest are in `.local/releases/` and have not been published to any external registry. Verification of browsers, two nodes and real email is described in the sections below.
 
 ## Browser coverage
 

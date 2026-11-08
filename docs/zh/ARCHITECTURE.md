@@ -33,7 +33,7 @@ Fyrlet 的中心抽象是：
 
 通用事务边界由 `Fyrlet.Transaction` 与 `Fyrlet.AfterCommit` 管理。经 `AfterCommit` 触发的失效任务在事务内持久化；Operation 写入路径仅在 `durable_invalidation: true` 时这样做（见 [OPERATIONS.md](OPERATIONS.md)）。立即广播与遥测在最外层受管事务提交后释放；回滚时清理待处理内容。`Fyrlet.Runs.Notify` 只组织 Run 的通知范围并委托基础层处理，基础事务不依赖 Run 模块。
 
-TypeScript SDK 的 `client.ts` 管理身份、连接和通道生命周期，`requests.ts` 管理请求时限、取消和一次认证刷新，`subscription.ts` 管理快照、增量、追加、Presence 与乐观更新的状态。订阅状态处理返回 ACK、刷新或重连请求，由客户端执行网络操作。
+TypeScript SDK 的 `client.ts` 管理身份、连接、引用计数查询句柄和通道生命周期，`query.ts` 规范化共享查询参数，`requests.ts` 管理请求时限、取消和一次认证刷新，`subscription.ts` 管理快照、增量、追加、Presence、预测与关联式视图确认。订阅状态处理返回 ACK、刷新或重连请求，由客户端执行网络操作。
 
 `FyrletWeb.ChannelSupport` 负责通道共有的标识校验、错误封装、匿名能力检查、配额申领、定时器调度与清理，以及快照序列化。各 Channel 仍负责自己的授权顺序、事件处理和背压策略。SDK 的 refresh 与 Presence update 复用带确认的推送逻辑；Presence 直接扩展已登记的订阅句柄，使归属检查和乐观更新使用同一对象。
 

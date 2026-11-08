@@ -22,6 +22,7 @@ export class TestWebSocket {
   bufferedAmount = 0;
   messages = [];
   joins = new Map();
+  confirmations = new Map();
 
   constructor(url, protocols) {
     this.url = url;
@@ -50,9 +51,11 @@ export class TestWebSocket {
         protocol_version: payload.protocol_version, subscription_id: topic.slice("append:".length),
         generation: crypto.randomUUID(), seq: 1, cursor: "e:0", mode: "append", max_items: 3,
         project_id: "project", subject_id: "alice", data: [],
+        capabilities: payload.capabilities,
       } : {
         protocol_version: payload.protocol_version, subscription_id: topic.slice("subscription:".length),
         generation: crypto.randomUUID(), seq: 1, project_id: "project", subject_id: "alice", data: ["initial"], delivery: payload.delivery,
+        capabilities: payload.capabilities,
       };
       this.joins.set(topic, { joinRef, snapshot });
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: snapshot }]));
@@ -61,13 +64,19 @@ export class TestWebSocket {
     } else if (event === "call") {
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: { outcome: "committed", data: payload } }]));
     } else {
+      if (event === "refresh" && payload.confirmation_id) {
+        const pending = this.confirmations.get(topic) ?? [];
+        this.confirmations.set(topic, [...pending, payload.confirmation_id]);
+      }
       queueMicrotask(() => this.emit([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]));
     }
   }
 
   snapshot(data, changes = {}) {
     const [topic, entry] = [...this.joins][0];
-    this.emit([entry.joinRef, null, topic, "snapshot", { ...entry.snapshot, seq: 2, data, ...changes }]);
+    const confirmed = this.confirmations.get(topic) ?? [];
+    this.confirmations.delete(topic);
+    this.emit([entry.joinRef, null, topic, "snapshot", { ...entry.snapshot, seq: 2, data, confirmed, ...changes }]);
   }
 
   presenceDiff(diff) {

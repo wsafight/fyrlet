@@ -7,6 +7,7 @@ defmodule Fyrlet.Application do
     Fyrlet.Registry.validate!()
     Fyrlet.Quota.validate!()
     Fyrlet.Retention.validate!()
+    Fyrlet.Pruning.validate!()
     Fyrlet.Metrics.validate!()
     Fyrlet.Subscriptions.Tracker.validate!()
 

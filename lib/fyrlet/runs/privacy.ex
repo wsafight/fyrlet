@@ -105,11 +105,15 @@ defmodule Fyrlet.Runs.Privacy do
               r.status in ["completed", "failed", "cancelled", "expired"] and
                 r.finished_at < ^cutoff and is_nil(r.purged_at),
             select: r.id,
-            limit: ^Limits.get(:scan_batch)
+            limit: ^Fyrlet.Pruning.batch_size(Limits.get(:scan_batch))
           )
         )
 
-      Enum.count(ids, &(purge_run(&1) == :purged))
+      Enum.reduce_while(ids, 0, fn identifier, purged ->
+        if Fyrlet.Pruning.available?(),
+          do: {:cont, purged + if(purge_run(identifier) == :purged, do: 1, else: 0)},
+          else: {:halt, purged}
+      end)
     else
       _keep -> 0
     end

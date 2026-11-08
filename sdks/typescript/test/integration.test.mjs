@@ -22,7 +22,7 @@ async function startServer() {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (server.exitCode !== null) throw new Error("Integration server exited; inspect .local/integration/server.log");
-    try { if ((await fetch(`${endpoint}/health`)).ok) return; } catch {}
+    try { if ((await fetch(`${endpoint}/ready`)).ok) return; } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Integration server did not start");
@@ -38,6 +38,28 @@ async function stopServer() {
 
 before(startServer);
 after(async () => { await stopServer(); await log.close(); });
+
+test("committed writes confirm each fresh view, including unchanged and shared client queries", async (context) => {
+  const { client } = await user(context, 0, crypto.randomUUID(), { shareSubscriptions: true });
+  const first = client.subscribe("inbox.recent", { limit: 10 });
+  const second = client.subscribe("inbox.recent", { limit: 10 });
+  await until(() => first.getState().status === "ready" && second.getState().status === "ready");
+  const mutation = client.mutate("inbox.add", { text: "confirmed commit" }, {
+    optimistic: [{ subscription: first, update: (items) => [{ id: "local", text: "pending" }, ...items] }],
+    confirm: [second],
+  });
+  const item = await mutation.result;
+  const views = await mutation.views;
+  assert.deepEqual(views.map((view) => view.status), ["confirmed", "confirmed"]);
+  assert.deepEqual(first.getState().data, second.getState().data);
+  assert.ok(first.getState().data.some((record) => record.id === item.id));
+  assert.ok(first.getState().data.every((record) => record.id !== "local"));
+  assert.equal(first.getState().pending, undefined);
+  await first.confirm();
+  first.unsubscribe();
+  await second.confirm();
+  assert.equal(second.getState().status, "ready");
+});
 
 async function user(context, project = 0, subject = crypto.randomUUID(), extra = {}) {
   const session = await services[project].issueSession({ external_subject: subject });

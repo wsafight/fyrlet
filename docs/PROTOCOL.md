@@ -37,6 +37,7 @@ Successful operation responses require `outcome` beside `data`: `completed` for 
 | EFFECT_CONFLICT | 409 | The same side effect key corresponds to different requests |
 | LEASE_LOST | 409 | The executor's lease is no longer valid; this attempt should stop |
 | INTERNAL_ERROR | 500 | Unexpected server failure; stack traces and database details are not exposed |
+| UNAVAILABLE | 503 | The database readiness check could not obtain a working connection |
 
 The mapping between HTTP status codes and error codes is fixed in this document; applications do not choose their own.
 
@@ -79,6 +80,14 @@ The client replaces the data of that subscription with the full snapshot and sen
 The `refresh` event takes parameters `{}`, replies `{accepted:true}`, and then pushes a new snapshot. `phx_leave` cancels the subscription. The `status` event carries `{"state":"closed","error":{…}}` to indicate termination, after which the channel closes. Authentication failure may also disconnect the Socket directly; on recovery the SDK uses an authenticated HTTP request to tell a network interruption from an invalid credential.
 
 A new join must use a new generation; the client accepts only the generation confirmed by the current join and rejects events from old instances. Within the same generation only messages with a seq greater than the current one are applied, and duplicate messages can still be acknowledged. seq is not a database version or a recovery cursor.
+
+### View confirmation
+
+The core supports `view_confirmation=1`. Snapshot and append joins from the TypeScript SDK request it automatically; other clients opt in through their capability declaration. Presence does not provide database view confirmation.
+
+After a successful operation response, send `refresh` with `{"confirmation_id":"unique-request-id"}`. Identifiers are nonempty strings of at most 128 UTF-8 bytes. The immediate `{accepted:true}` reply only acknowledges the request. The server bypasses the Observer's cached view for this load, repeats authorization and session checks, and builds a fresh view through the primary Repo. Its full `snapshot` carries `"confirmed":["unique-request-id"]`. Unchanged or empty results still produce a confirmed snapshot. An append confirmation replaces the current window, including an unacknowledged older snapshot.
+
+Only applying a newer snapshot for the current subscription, identity and generation confirms that request. Unrelated pushes, deltas, stale snapshots and another subscription's response cannot confirm it. Identifiers may be coalesced when their requests precede the same fresh load. Snapshot subscriptions bound outstanding confirmations to 32 per channel and retain normal ACK backpressure. Confirmation does not order database commits, synchronize multiple subscriptions atomically, guarantee a record matches the query, or establish Run or Effect completion. Business queries must use the primary Repo; custom replica or cache reads need their own consistency contract.
 
 ### Delta negotiation
 

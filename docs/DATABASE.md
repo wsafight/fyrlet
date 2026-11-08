@@ -79,7 +79,9 @@ When a Run is deleted, its steps, attempts, signals, events and Effects are dele
 
 ## Cleanup and retention
 
-`Fyrlet.PruneWorker` (an Oban scheduled job, every 10 minutes) cleans up in batches, and a single batch does not hold long locks.
+`Fyrlet.PruneWorker` (an Oban scheduled job, every 10 minutes) uses bounded batches and a shared row/time budget. A limited pass schedules continuation with a rotated starting category. Duration is checked between statements; it does not interrupt running SQL, and row accounting excludes foreign-key cascades. Configuration and metrics are in [OPERATIONS.md](OPERATIONS.md).
+
+The `20261108000000_index_session_expiry` migration adds an index on `sessions.expires_at` for expiry cleanup. Apply it to existing databases with `mix fyrlet.migrate`.
 
 | Table | Cleanup condition | Notes |
 | --- | --- | --- |

@@ -111,7 +111,7 @@ defmodule Fyrlet.Features.Anonymous do
 
   @doc "Removes anonymous subjects (and with them their sessions) that expired before `before`."
   def prune(before) do
-    Repo.delete_all(
+    subjects =
       from(s in Subject,
         as: :subject,
         where: s.issuer == "anonymous",
@@ -121,8 +121,11 @@ defmodule Fyrlet.Features.Anonymous do
               where:
                 session.subject_id == parent_as(:subject).id and session.expires_at >= ^before
             )
-          )
+          ),
+        select: s.id,
+        limit: ^Fyrlet.Pruning.batch_size(5_000)
       )
-    )
+
+    Fyrlet.Pruning.delete_all(from(s in Subject, where: s.id in subquery(subjects)))
   end
 end

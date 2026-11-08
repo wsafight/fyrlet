@@ -94,6 +94,32 @@ defmodule FyrletWeb.SharedScopeTest do
     leave(socket_b)
   end
 
+  test "confirmation bypasses a warm shared cache and belongs only to the requesting member", %{
+    alice: alice,
+    bob: bob
+  } do
+    slow_reconcile()
+    options = Map.put(@v1, "capabilities", %{"view_confirmation" => 1})
+    {:ok, initial, first} = join_room(alice, "r1", options)
+    {:ok, other, second} = join_room(bob, "r1", options)
+    push(first, "ack", ack(initial))
+    push(second, "ack", ack(other))
+    SharedRooms.post("r1", "written without notification")
+    reference = push(first, "refresh", %{"confirmation_id" => "fresh-primary-read"})
+    assert_reply reference, :ok, %{"accepted" => true}
+    assert_push "snapshot", snapshot
+    assert_push "snapshot", sibling
+
+    requested =
+      Enum.find([snapshot, sibling], &(&1["subscription_id"] == initial["subscription_id"]))
+
+    other = Enum.find([snapshot, sibling], &(&1["subscription_id"] != initial["subscription_id"]))
+    assert requested["confirmed"] == ["fresh-primary-read"]
+    assert [%{"text" => "written without notification"}] = requested["data"]
+    refute Map.has_key?(other, "confirmed")
+    for socket <- [first, second], do: leave(socket)
+  end
+
   test "a warm cache gives a non-member nothing", %{alice: alice, outsider: outsider} do
     SharedRooms.post("r1", "private to the room")
     {:ok, _snapshot, socket} = join_room(alice)

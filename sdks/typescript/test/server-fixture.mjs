@@ -21,7 +21,7 @@ export async function serverFixture(name = process.env.FYRLET_DOMAIN, { simulate
     while (Date.now() < deadline) {
       if (server.exitCode !== null) throw new Error(`${name} server exited; inspect its integration log`);
       try {
-        const health = await fetch(`${process.env.INTEGRATION_ENDPOINT}/health`, { signal: AbortSignal.timeout(1000) });
+        const health = await fetch(`${process.env.INTEGRATION_ENDPOINT}/ready`, { signal: AbortSignal.timeout(1000) });
         if (health.ok && !simulateProvider) return;
         const metrics = await fetch(`http://127.0.0.1:${process.env.DOMAIN_PROVIDER_PORT}/metrics`, { signal: AbortSignal.timeout(1000) });
         if (health.ok && metrics.ok) return;

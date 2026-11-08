@@ -92,6 +92,24 @@ defmodule FyrletWeb.AppendChannelTest do
     assert snapshot["capabilities"] == %{"append" => 1}
   end
 
+  test "confirmation replaces even an unacknowledged snapshot with a fresh window", %{
+    alice: alice,
+    room: room
+  } do
+    {:ok, initial, socket} =
+      join_feed(alice, room, %{"capabilities" => %{"append" => 1, "view_confirmation" => 1}})
+
+    post(alice, room, "committed")
+    reference = push(socket, "refresh", %{"confirmation_id" => "after-commit"})
+    assert_reply reference, :ok, %{"accepted" => true}
+    assert_push "snapshot", confirmed
+    assert confirmed["confirmed"] == ["after-commit"]
+    assert confirmed["seq"] > initial["seq"]
+    assert texts(confirmed["data"]) == ["committed"]
+    ack(socket, confirmed)
+    leave(socket)
+  end
+
   test "batches continue exactly at the cursor and acknowledgements are cumulative", %{
     alice: alice,
     room: room

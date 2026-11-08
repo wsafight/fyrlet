@@ -85,7 +85,7 @@ client.close();
 
 The SDK requests `delta-v1` by default. Once confirmed by the server, field deltas are applied locally and `onChange` still receives a complete business view. Initial joins, explicit refreshes and rejoins receive full snapshots. A sequence gap triggers reconnection. Subscription data is recursively frozen; later deltas do not mutate previously delivered views. Make a copy before editing locally, or set `delta: false` to use full snapshots.
 
-Sharing is determined by the server contract, not an SDK or join option. `"shared": true`, as in `inbox.recent`, keys sharing by the complete Actor and normalized subscription descriptor, so it shares only between devices on the same node using the same session. Different sessions remain isolated. Public results shared across users require `"sharing": "identical"`, member checks and a public query projection, as in Chat room state. Sharing never skips session, authorization or membership checks, and does not cache authorization decisions. Each client's `generation`, `seq` and ACK are independent. Slow clients catch up through a newly authorized full snapshot without blocking other clients or replaying historical deltas.
+Server-side Observer sharing is determined by the server contract. `"shared": true`, as in `inbox.recent`, keys sharing by the complete Actor and normalized subscription descriptor, so it shares only between devices on the same node using the same session. Different sessions remain isolated. Public results shared across users require `"sharing": "identical"`, member checks and a public query projection, as in Chat room state. Sharing never skips session, authorization or membership checks, and does not cache authorization decisions. Each client's `generation`, `seq` and ACK are independent. Slow clients catch up through a newly authorized full snapshot without blocking other clients or replaying historical deltas.
 
 If a running Observer exits or a session-check worker fails or times out with a retryable internal status, the SDK enters `recovering`, retains previous data, refreshes the token, verifies identity and rebuilds the connection and subscriptions. It returns to `ready` only after a full snapshot with a new generation. Recovery backs off from 250 ms to at most 30 seconds unless `retryDelayMs` overrides it. Unconfirmed writes are not replayed. Terminal authentication and business permission errors clear data. The server retries an exited attach call once internally. Retryable initial join errors recover on the affected subscription through Phoenix rejoin backoff; they do not interrupt other subscriptions. More than 10 consecutive failures produce an error. `UNAUTHENTICATED` rebuilds the whole connection; non-retryable join errors fail immediately.
 
@@ -146,12 +146,35 @@ items.getState().pending;
 The update replaces by ID instead of blindly appending, because `current` may already contain the server's change. `data` includes predictions; `pending` counts predictions not yet replaced by server data.
 
 - A definite failure immediately rolls back its prediction and throws the original error.
-- Success and unknown outcomes keep predictions until the next server snapshot or delta for that subscription, or `optimisticTtlMs` expires (5000 ms by default). Expiry does not resolve an unknown operation.
+- After success, snapshot and append predictions remain until a correlated, freshly queried server snapshot confirms the view, or `optimisticTtlMs` expires (5000 ms by default). Unrelated snapshots and deltas do not retire them. An unknown outcome retains predictions until TTL expiry; expiry does not resolve the operation or confirm its view.
 - Predictions are reapplied when server data arrives during the write. `update` must be idempotent and return a new value; mutating frozen data throws. A prediction that throws is discarded and reported to `onListenerError` without affecting the call.
 - Only active subscriptions created by the same client are accepted. Invalid subscriptions cause a `TypeError` before sending the request. Subscriptions without data are skipped.
 - Internal state remains the server's truth; overlays are derived only for `getState()` and listeners.
 
-The server does not identify which push includes a particular write, so ending predictions is heuristic. A push computed before the commit can briefly remove a prediction before the actual update arrives. Predictions do not survive page reloads and do not provide an offline queue. A disconnected call can be failed or unknown depending on whether dispatch began. Append predictions must respect their window semantics; Presence predictions only affect the local roster and do not publish meta.
+Predictions do not survive page reloads and do not provide an offline queue. A disconnected call can be failed or unknown depending on whether dispatch began. Append predictions must respect their window semantics. Presence predictions only affect the local roster, do not publish meta and retain their roster-update/TTL retirement behavior.
+
+## View confirmation
+
+`call` and `mutation.result` return the business result. Use `mutation.views` to separately wait for the subscriptions to catch up:
+
+```ts
+const mutation = client.mutate("inbox.add", { text }, { confirm: [items] });
+const saved = await mutation.result;
+const views = await mutation.views;
+if (views.some((view) => view.status === "unconfirmed")) {
+  await items.confirm();
+}
+```
+
+Snapshot and append subscriptions targeted by optimistic updates are confirmed automatically after success; `CallOptions.confirm` adds explicit targets. Each result contains `subscription`, `status` (`confirmed` or `unconfirmed`) and an optional `error`. `subscription.confirm({ signal })` requests a fresh authoritative snapshot directly. Confirmation requires a matching correlation identifier, the current identity and generation, and a newer sequence. An accepted refresh reply, unrelated data or a delta cannot confirm a view. Even unchanged or empty results receive a new full snapshot.
+
+The SDK negotiates `view_confirmation=1` automatically on snapshot and append channels. Each active subscription permits at most 32 pending confirmations. Timeouts, cancellation, reconnection, unsubscribe, permission failures and unsupported capabilities leave a view unconfirmed without changing a committed outcome or replaying the operation. Unknown outcomes do not start confirmation; after receipt recovery, request it explicitly. TTL expiry is a display fallback only. Filters and windows still apply, and subscriptions confirm independently. See [MUTATIONS.md](../../docs/MUTATIONS.md) for consistency boundaries.
+
+## Shared client queries
+
+Set `shareSubscriptions: true` when creating a client to reuse identical snapshot and append queries. `maxSharedSubscriptions` bounds active shared entries (default 100). Query keys include the project, name, mode and canonical JSON parameters within that client's identity context. Object key order is ignored; array order is preserved. Parameters are copied and frozen, with a 64 KiB encoded limit; undefined values, non-finite numbers, cycles and custom objects are rejected.
+
+Each subscribe call returns an independent handle and listener registrations. Unsubscribing one handle leaves the others active; the last release leaves the channel and removes the entry immediately. No unreferenced cache is retained. Presence handles remain separate. Authentication failures and identity changes clear private state. This option reuses queries within one client; server-side Observer sharing continues to follow the application contract. A React adapter and SSR integration remain planned.
 
 ## Presence
 
@@ -201,6 +224,6 @@ DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 
 Run these commands from the repository root. The generator supports the current restricted contract dialect and rejects unsupported schemas. Input fields with defaults become optional; output fields follow `required`. Generated types provide compile-time checks, while the server validates all input and output at runtime.
 
-The 203 unit tests cover mutation outcomes, receipt recovery after lost committed responses, invalid recovery receipts, concurrent request cancellation, authorization refresh deadlines and races, operation channel join failures, channel isolation, malformed deltas, optimistic write ordering, and backend session issuance and revocation, including credential and endpoint validation, malformed responses and cancellation. `test:coverage` uses Node's built-in coverage tooling to report SDK runtime coverage. The recorded real-server verification includes 18 integration scenarios covering Run idempotency, signals, subject/project isolation, restart recovery, append windows and revocation. Four domain applications add 8 end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for commands and boundaries.
+Unit tests cover mutation outcomes, receipt recovery, cancellation, authentication races, channel isolation, malformed deltas, correlated view confirmation, shared query lifetimes, listener failures, optimistic ordering and backend session services. `test:coverage` uses Node's built-in coverage tooling. Real-server tests cover HTTP/Socket outcomes, confirmation, query reuse, Run idempotency, isolation, restart recovery, append windows and revocation. Four domain applications add end-to-end scenarios. See the [acceptance record](../../docs/ACCEPTANCE.md) for current counts, commands and boundaries.
 
 `bash scripts/package.sh` produces `.local/releases/fyrlet-client-0.1.0.tgz`; another project can install it with `npm install /absolute/path/fyrlet-client-0.1.0.tgz`. `bash scripts/install_smoke.sh` installs the package into a consumer outside the repository and imports both the main and server entry points. See [installation](../../docs/INSTALL.md) for distribution and version boundaries.

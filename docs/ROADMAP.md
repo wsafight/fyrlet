@@ -2,7 +2,7 @@
 
 English | [简体中文](zh/ROADMAP.md)
 
-Updated November 7, 2026. This document sets priorities, dependencies and completion criteria without committing to release dates. The project has not launched; changes may replace interfaces directly, with the server, SDK, examples and documentation updated together. Milestone 1A is delivered; the remaining items are planned. Capabilities and verification records are maintained in [STATUS.md](STATUS.md) and [ACCEPTANCE.md](ACCEPTANCE.md).
+Updated November 8, 2026. This document sets priorities, dependencies and completion criteria without committing to release dates. The project has not launched; changes may replace interfaces directly, with the server, SDK, examples and documentation updated together. Milestones 1A and 1B and optional client query reuse are delivered. React integration and the remaining milestones are planned. Capabilities and verification records are maintained in [STATUS.md](STATUS.md) and [ACCEPTANCE.md](ACCEPTANCE.md).
 
 ## Direction
 
@@ -24,28 +24,28 @@ P0 addresses outcomes and consistency, P1 improves application development, and 
 
 ## Execution order and decision points
 
-- Define 1A outcome categories, idempotency-key lifecycle and unknown-outcome recovery first. Treat 1B as a separate protocol design, validated through race reproductions and a minimum prototype before changing prediction retirement.
-- Query reuse, contract types and login integration can proceed independently. Validate a minimum workflow in a real application before extending each API.
+- Preserve the delivered 1A outcome categories, idempotency-key lifecycle and receipt recovery, and 1B's correlated authoritative refresh. A committed operation and a confirmed view remain separately observable.
+- Build on query reuse with a React adapter and page. Contract types and login integration can proceed independently; validate a minimum workflow in a real application before extending each API.
 - Bounded retries require 1A and endpoint idempotency guarantees, without waiting for 1B. Applications separately choose whether to wait for updated views; a committed write and a caught-up UI remain distinct results.
 - Define observable behavior, resource bounds and failure handling before implementing each deliverable. Undecided work remains planned; [STATUS.md](STATUS.md) records implementation progress.
 
 ## Milestone 1: mutation outcomes and view confirmation
 
-Progress: **1A delivered; 1B pending.** `mutate` exposes an outcome lifecycle while `call` preserves the business return value. HTTP and Socket support read-only receipt recovery. See [MUTATIONS.md](MUTATIONS.md) for interfaces and boundaries.
+Progress: **1A and 1B delivered.** `mutate` exposes an outcome lifecycle and separate `views` results while `call` preserves the business return value. HTTP and Socket support read-only receipt recovery. See [MUTATIONS.md](MUTATIONS.md) for interfaces and boundaries.
 
-A successful `call` establishes an operation outcome but does not establish that subscriptions have observed its commit. Optimistic updates currently retire predictions on later server data or a TTL, which can briefly expose an older view. Network failure or client cancellation may also happen after the server commits, requiring an explicit unknown outcome.
+A successful `call` establishes an operation outcome but does not establish that subscriptions have observed its commit. Snapshot and append predictions now retire on correlated authoritative confirmation or a display TTL; unrelated updates cannot confirm them. Network failure or client cancellation may happen after the server commits, requiring an explicit unknown outcome.
 
-Planned deliverables:
+Delivered interfaces:
 
 - **1A: operation outcomes (delivered).** An optional lifecycle distinguishes definite failure, read completion, write commit, Run/ingest acceptance and unknown results. Preserve the business-result return from `call`. Ambiguous failures retain the key; recovery only queries write/run receipts, leaves absent or expired receipts unknown and never replays business execution.
-- **1B: view confirmation.** A defined association between successful writes and updated subscriptions. First validate a refresh requested after success, carrying a correlation identifier; the server reads the primary again and confirms the view with a matching response.
+- **1B: view confirmation (delivered).** `mutation.views`, `CallOptions.confirm` and `subscription.confirm()` use a refresh requested after success, carrying a correlation identifier. The server bypasses old view caches and confirms a fresh full snapshot. Each active subscription permits at most 32 pending confirmations.
 - An idempotency key and recovery path for unknown outcomes, with an explicit unconfirmed state when waiting for a view times out.
 - Define new wire semantics and capability negotiation together; update server and SDK as one change without retaining an old protocol implementation.
 
 Completion criteria:
 
 - 1A verifies cancellation before and after dispatch, fixed input and keys during authentication refresh, lost committed responses, receipt expiry, normalized-input conflicts and authorization isolation. Recovery failures and prediction expiry cannot turn an unknown result into a definite failure.
-- The following view-confirmation criteria belong to pending milestone 1B.
+- The view-confirmation guarantees below are implemented; TTL expiry remains a display fallback and never confirms a view.
 - Delayed older queries, unrelated updates, cached old snapshots and refresh accepted replies cannot retire predictions early.
 - Cover updates before responses, successive writes, independent confirmation for several subscriptions, unchanged results, filtering and deletion.
 - Cover lost responses after commit, idempotent retries, reconnects, revoked permissions, delta and append fallbacks.
@@ -55,11 +55,11 @@ Correlation identifiers match requests and responses. Channel `seq`, Observer re
 
 ## Milestone 2: shared client queries and React integration
 
-Several components can subscribe to the same query and create separate client Entries and Channels. First reuse identical queries, then provide a stable UI integration.
+Progress: **query reuse delivered; React, selectors and SSR integration pending.** With `shareSubscriptions: true`, identical snapshot and append queries share one active Entry and Channel. Independent handles use reference counting, the final release removes the entry immediately, and active entries default to a limit of 100. Canonical JSON parameters have a 64 KiB encoded limit.
 
 Planned deliverables:
 
-- An optional reference-counted query store within one client, keyed by identity context, query name, structurally defined parameters and delivery mode.
+- **Delivered:** an optional reference-counted query store within one client, keyed by identity context, query name, structurally defined parameters and delivery mode.
 - Pure selectors and a separate React adapter using `useSyncExternalStore`. Keep the core SDK independent of UI frameworks.
 - An Inbox or Chat React page demonstrating shared queries, parameter changes, optimistic updates and connection state.
 - Defined SSR initial state and request isolation. The initial implementation can use a deterministic empty state.
@@ -121,7 +121,7 @@ Completion criteria:
 | Multiplex subscription channel | Process memory remains a measured bottleneck after private state is embedded | Independent per-view authorization, ACK, expiry and quotas; compare against the current Channel baseline before adopting a new wire format |
 | Entity and projection caching | At least two real applications repeatedly need cross-view coordination | Explicit entities, versions, field permissions, deletion and reference counting; absence from a list is not global deletion |
 | Offline caches and persistent write queues | A specific offline use case | Expiry, revocation, account changes, conflicts, idempotency retention and storage cleanup |
-| Production deployment improvements | Defined topology, load and recovery targets | Database readiness, pool and backlog alerts, mixed workloads, multi-host network faults and long-duration stability |
+| Production deployment improvements | Defined topology, load and recovery targets | Database readiness is delivered; pool and backlog alerts, mixed workloads, multi-host network faults and long-duration stability remain |
 | Global project quotas | Strict cross-node tenant limits become a requirement | Distributed accounting, consistency cost and limits during failures |
 
 Password accounts, a complete client query engine, frontend build tools and mobile packaging are outside the near-term schedule. Introduce abstractions based on application needs and verification results.
@@ -144,4 +144,4 @@ Ship each milestone independently with public interfaces, boundaries, relevant t
 
 Reuse current tests, telemetry and benchmarks. Verify new reliability guarantees through failures and races. State workload, topology and measurement scope for performance claims, following [PERFORMANCE.md](PERFORMANCE.md). Update [STATUS.md](STATUS.md) on completion and record evidence in [ACCEPTANCE.md](ACCEPTANCE.md).
 
-Next, build race reproductions and a minimum 1B confirmation prototype. Verify primary refreshes and per-subscription confirmation before changing prediction retirement. Contract types and the login example can proceed independently.
+Next, add the React adapter and a page exercising query reuse and view confirmation. Contract types and the login example can proceed independently. Production load and multi-host failure verification retain their separate acceptance boundaries.

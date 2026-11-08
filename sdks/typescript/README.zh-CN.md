@@ -87,7 +87,7 @@ refresh 返回 Promise<void>，只表示服务端接受刷新请求；观察之�
 
 SDK 默认请求 delta-v1；服务端确认后，SDK 在本地应用字段增量，onChange 继续提供完整业务视图。初始、显式刷新与重新加入均接收完整快照；序号缺口触发重新连接以恢复。订阅数据递归冻结，之前交给消费者的视图不会被后续增量修改；需要本地编辑时先创建副本。设置 `delta: false` 可使用完整快照模式。
 
-共享由服务端契约决定，不是 SDK 或 join 选项。`"shared": true`（例如 inbox.recent）以完整 Actor 和规范化订阅描述为 key，仅在本节点、同 session 的设备间共享；不同 session 仍隔离。跨用户的公共结果需服务端声明 `"sharing": "identical"` 并实现成员检查和公共查询投影，例如 Chat 的房间状态。共享不跳过会话、业务授权或成员检查，不缓存授权结论；各客户端的 generation、seq 和 ACK 独立。慢端不阻塞其他设备，落后后经重新授权的完整快照追平，不补放历史 delta。
+服务端 Observer 共享由服务端契约决定。`"shared": true`（例如 inbox.recent）以完整 Actor 和规范化订阅描述为 key，仅在本节点、同 session 的设备间共享；不同 session 仍隔离。跨用户的公共结果需服务端声明 `"sharing": "identical"` 并实现成员检查和公共查询投影，例如 Chat 的房间状态。共享不跳过会话、业务授权或成员检查，不缓存授权结论；各客户端的 generation、seq 和 ACK 独立。慢端不阻塞其他设备，落后后经重新授权的完整快照追平，不补放历史 delta。
 
 运行中 Observer 退出、会话检查 worker 故障或超时产生 retryable 的内部错误 status 时，SDK 自动进入 recovering，保留旧数据，刷新令牌并重新验证身份、重建连接与订阅；收到新 generation 的完整快照后才 ready。默认重试从 250 ms 指数增长至最多 30 秒，可用 retryDelayMs 覆盖。这是订阅恢复，不自动重放未确认的业务写入；认证或业务权限终止错误仍清空数据。attach 调用退出时服务端会内部重试一次。首次加入返回 retryable 错误（例如 Observer 短暂不可用）时，该订阅进入 recovering，由 Phoenix 按 `retryDelayMs`（未设置时用 Phoenix 默认退避）自动重新加入，不影响连接上的其他订阅；连续失败超过 10 次才报告为 error。UNAUTHENTICATED 仍按认证失败重建整个连接，不可重试的 join 错误立即失败。
 
@@ -149,16 +149,38 @@ items.getState().pending;  // 当前叠加着多少个未被服务端数据取�
 ```
 
 - **确定失败立即回滚**：预测马上撤销，错误原样抛出。
-- **成功和未知结果保留预测**，直到这个订阅**下一次收到服务端数据**（快照或增量），或超过 `optimisticTtlMs`（默认 5000 毫秒）。预测到期不会解决未知的操作结果。
+- **成功后保留 snapshot / append 预测**，直到关联的重新查询快照确认视图，或超过 `optimisticTtlMs`（默认 5000 毫秒）。无关快照和增量不会提前移除预测；未知结果保留预测到 TTL 到期，到期不会解决操作结果或确认视图。
 - 服务端数据在写入进行中到达时，预测会重新叠加在新数据上；因此 `update` **必须幂等**，且必须返回新值（收到的数据是冻结的，原地修改会抛错）。抛错的预测会被丢弃并交给 `onListenerError`，调用本身不受影响。
 - 只对已经有数据的、由同一个客户端创建的、尚未取消的订阅生效；传入别的订阅会在发出请求前抛 `TypeError`，不会有任何副作用。没有数据的订阅被跳过。
 - 内部状态始终是服务端的真值（增量补丁基于它应用），预测只在 `getState()` 和监听回调里派生出来。
 
 **保证的边界，请按需评估：**
 
-- 服务端不会告诉客户端“这次推送已经包含你的写入”，所以预测的结束时机是启发式的。少见的竞态下——例如下一次推送是在你的写入提交之前算好的——界面可能短暂回退到没有这次写入的状态，随后被真正的更新纠正。
 - 预测不会跨页面刷新保留，没有离线队列；断线调用根据是否已经开始发送，区分确定失败与结果未知。
-- 追加订阅可以传入（数据是窗口，请自行确认 `update` 的语义）；Presence 预测只改变本地 roster，不发布 meta。
+- 追加订阅可以传入（数据是窗口，请自行确认 `update` 的语义）；Presence 预测只改变本地 roster，不发布 meta，仍按 roster 更新或 TTL 移除。
+
+## 视图确认
+
+`call` 和 `mutation.result` 返回业务结果；通过 `mutation.views` 单独等待订阅追平：
+
+```ts
+const mutation = client.mutate("inbox.add", { text }, { confirm: [items] });
+const saved = await mutation.result;
+const views = await mutation.views;
+if (views.some((view) => view.status === "unconfirmed")) {
+  await items.confirm();
+}
+```
+
+乐观更新涉及的 snapshot / append 订阅在成功后自动确认，`CallOptions.confirm` 可指定额外订阅。每项结果包含 `subscription`、`status`（`confirmed` 或 `unconfirmed`）及可选 `error`。`subscription.confirm({ signal })` 可直接请求权威快照。确认必须匹配关联标识、当前身份与 generation，且 seq 更新；刷新受理回执、无关数据和 delta 均不能完成确认。结果未变或为空时，也会收到新的完整快照。
+
+SDK 在 snapshot / append Channel 自动协商 `view_confirmation=1`，每份活跃订阅最多 32 个待确认请求。超时、取消、重连、退订、权限失败或能力不支持均使视图保持未确认，不改变已提交结果，也不重放业务。未知结果不会自动发起确认，回执恢复后可显式调用。TTL 仅作为显示兜底；过滤与窗口规则仍然生效，多订阅分别确认。一致性边界见 [MUTATIONS.md](../../docs/zh/MUTATIONS.md)。
+
+## 客户端查询复用
+
+创建 client 时设置 `shareSubscriptions: true`，复用相同的 snapshot / append 查询。`maxSharedSubscriptions` 限制活跃共享条目数，默认 100。共享键在当前 client 身份上下文内包含项目、名称、模式和规范化 JSON 参数；对象键顺序不影响相等，数组顺序保留。参数会复制冻结，编码大小最多 64 KiB；拒绝 undefined、非有限数、循环引用和自定义对象。
+
+每次 subscribe 返回独立句柄与监听注册；释放一个句柄不影响其他句柄，最后一个释放后立即离开 Channel 并删除条目，不保留无引用缓存。Presence 单独管理。认证失败和身份变化会清空私有状态。此选项复用同一 client 的查询，服务端 Observer 共享仍遵守应用契约。React 适配与 SSR 接入仍待开发。
 
 ## 在线状态（能力 `presence`）
 
@@ -207,6 +229,6 @@ DOMAIN_PORT=4182 DOMAIN_PROVIDER_PORT=4183 bash scripts/domains.sh
 
 命令从仓库根目录执行。生成器支持当前受限契约，拒绝不支持的 schema；输入默认字段生成可选属性，输出按 required 字段生成。生成类型提供编译期约束，服务端仍对所有输入输出进行运行时校验。
 
-单元测试 203 个，覆盖操作结果分类、提交后丢失响应的回执恢复、异常恢复回执、并发请求取消、认证刷新期间的总超时与竞争、操作通道加入失败、通道间故障隔离、畸形增量、乐观写入乱序完成，以及服务端会话签发与撤销、凭证和端点校验、响应格式错误与请求取消。`test:coverage` 使用 Node 内置覆盖率工具统计 SDK 运行时代码。真实服务端集成 18 个，覆盖 Run 幂等、信号、主体/项目隔离、重启恢复、append 窗口与撤销。四个领域应用另有 8 个端到端场景，命令与验收边界见[验收记录](../../docs/zh/ACCEPTANCE.md)。
+单元测试覆盖操作结果、回执恢复、取消、认证竞争、通道隔离、畸形增量、关联式视图确认、共享查询生命周期、监听器异常、乐观更新顺序与后端会话服务。`test:coverage` 使用 Node 内置覆盖率工具。真实服务端测试覆盖 HTTP / Socket 结果、确认、查询复用、Run 幂等、隔离、重启、append 窗口与撤销；四个领域应用另有端到端场景。当前数量、命令与边界见[验收记录](../../docs/zh/ACCEPTANCE.md)。
 
 执行 `bash scripts/package.sh` 生成 `.local/releases/fyrlet-client-0.1.0.tgz`，其他项目可用 `npm install /绝对路径/fyrlet-client-0.1.0.tgz` 安装。`bash scripts/install_smoke.sh` 会在仓库外创建 consumer，实际安装并导入主入口与 `@fyrlet/client/server`；分发和版本边界见 [INSTALL.md](../../docs/zh/INSTALL.md)。
