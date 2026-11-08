@@ -49,6 +49,7 @@ defmodule Fyrlet.Metrics do
     [:fyrlet, :transport, :batch],
     [:fyrlet, :quota, :rejected],
     [:fyrlet, :prune],
+    [:fyrlet, :ops, :status],
     [:fyrlet, :repo, :query]
   ]
 
@@ -85,6 +86,11 @@ defmodule Fyrlet.Metrics do
     "fyrlet_prune_limited_total" =>
       {"counter", "Retention jobs that exhausted their work budget."},
     "fyrlet_prune_duration_seconds" => {"histogram", "Retention job duration."},
+    "fyrlet_ops_alerts" => {"gauge", "Firing operational alerts on this node."},
+    "fyrlet_runs_stuck" => {"gauge", "Runs that exceeded the configured inactivity threshold."},
+    "fyrlet_queue_age_seconds" => {"gauge", "Age of the oldest pending run."},
+    "fyrlet_effects_unresolved" => {"gauge", "Effects requiring reconciliation."},
+    "fyrlet_ops_evaluated_at_seconds" => {"gauge", "Unix timestamp of the last Ops evaluation."},
     "fyrlet_observers" => {"gauge", "Running observers on this node."},
     "fyrlet_vm_processes" => {"gauge", "Erlang processes."},
     "fyrlet_vm_memory_bytes" => {"gauge", "Erlang VM memory in use."},
@@ -215,6 +221,24 @@ defmodule Fyrlet.Metrics do
 
     if is_integer(measurements[:query_time]),
       do: observe("fyrlet_db_query_seconds", [], micros(measurements.query_time), @buckets_us)
+  end
+
+  def handle_event([:fyrlet, :ops, :status], measurements, _meta, _config) do
+    for {measurement, name} <- [
+          alerts: "fyrlet_ops_alerts",
+          stuck_runs: "fyrlet_runs_stuck",
+          queue_age_seconds: "fyrlet_queue_age_seconds",
+          unresolved_effects: "fyrlet_effects_unresolved"
+        ],
+        value = measurements[measurement],
+        is_number(value) do
+      :ets.insert(@table, {{:gauge, name, []}, value})
+    end
+
+    :ets.insert(
+      @table,
+      {{:gauge, "fyrlet_ops_evaluated_at_seconds", []}, System.system_time(:second)}
+    )
   end
 
   def handle_event(_event, _measurements, _meta, _config), do: :ok

@@ -28,4 +28,12 @@ defmodule Fyrlet.InvalidationWorker do
 
     :ok
   end
+
+  def broadcast_local(%Oban.Job{id: identifier, args: %{"scopes" => scopes}}) do
+    Enum.each(scopes, fn scope ->
+      :ok = Phoenix.PubSub.local_broadcast(Fyrlet.PubSub, scope, {:invalidated, identifier})
+    end)
+
+    :ok
+  end
 end

@@ -1,0 +1,338 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-08T07:12:35.781Z",
+  "scope": "Short limited-resource Fyrlet mixed-workload harness verification; not saturation, speedup, Meteor comparison, production capacity or 24-hour stability evidence",
+  "sourceFingerprint": {
+    "algorithm": "sha256",
+    "digest": "79003ffaaa8b491853f487b2dec7e17ecb9afd9a9ea71a1cdd16167e6242323a",
+    "fileCount": 189
+  },
+  "image": "sha256:6089e4db045aca27966074477463c0b30a1ea5a9988f3f22cae9b1db1ca99d11",
+  "databaseImage": "sha256:748a18a54d3842d43bc156f0840d78029b8d349e0feca98c12b9c4ce3404a6b3",
+  "configuration": {
+    "image": "fair-fyrlet:followup-final",
+    "label": "mixed-density-final-20261108",
+    "users": [
+      10
+    ],
+    "devices": [
+      1,
+      4
+    ],
+    "scenario": "mixed",
+    "dimensions": true,
+    "rates": [
+      20
+    ],
+    "repeats": 3,
+    "durationMs": 5000
+  },
+  "generators": {
+    "count": 2,
+    "cpuset": "4-9"
+  },
+  "limits": [
+    {
+      "name": "/fair-fyrlet",
+      "nanoCpus": 1000000000,
+      "cpuset": "0",
+      "memory": 1073741824,
+      "memorySwap": 1073741824
+    },
+    {
+      "name": "/fair-pg",
+      "nanoCpus": 2000000000,
+      "cpuset": "1-2",
+      "memory": 2147483648,
+      "memorySwap": 2147483648
+    }
+  ],
+  "workload": {
+    "name": "mixed",
+    "users": 10,
+    "devices": 1,
+    "mode": "mixed",
+    "rows": 50,
+    "sessions": "shared",
+    "payloadBytes": 128,
+    "durationMs": 5000,
+    "offeredRate": 20,
+    "mix": "add/update/archive/restore/delete cycle; history after every delete; explicit confirmation on every observer after every write; no automatic retry",
+    "warmupCyclesPerUser": 1
+  },
+  "measurementNotes": [
+    "Alternating point order by repetition: 1 device, 4 devices; 4 devices, 1 device; 1 device, 4 devices.",
+    "Offered rate counts writes; history reads and explicit observer confirmations are additional work. Latency includes confirmations and polling.",
+    "CPU includes setup, warmup and completion of unfinished cycles outside the paced window. Memory is cgroup anonymous sampled peak, not process RSS.",
+    "The physical host had an unrelated Node process using over 400% CPU. Container limits do not isolate the physical host.",
+    "Fingerprints identify the measured source snapshot, not a later reporting-only edit. No extrapolation to other builds or loads."
+  ],
+  "runs": [
+    {
+      "users": 10,
+      "devices": 1,
+      "rate": 20,
+      "repetition": 1,
+      "measuredAt": "2026-11-08T07:12:43.325Z",
+      "sourceMatches": true,
+      "success": true,
+      "capacityHarnessPassed": true,
+      "operations": {
+        "add": 20,
+        "update": 20,
+        "archive": 20,
+        "restore": 20,
+        "delete": 20,
+        "history": 20,
+        "confirmations": 100
+      },
+      "completedWrites": 100,
+      "expectedDeliveries": 100,
+      "observedDeliveries": 100,
+      "deliveryCoverage": 1,
+      "generatorDropped": 0,
+      "measurementValid": true,
+      "propagationMs": {
+        "count": 100,
+        "min": 6.077334000001429,
+        "p50": 8.180333000000246,
+        "p95": 13.078541999999288,
+        "p99": 18.637041000001773,
+        "max": 20.155209000000468,
+        "mean": 8.918045910000055,
+        "sampleCount": 100,
+        "percentiles": "exact"
+      },
+      "appCpuSeconds": 0.642215,
+      "databaseCpuSeconds": 0.3712,
+      "anonymousPeakBytes": 127401984,
+      "appOomKills": 0,
+      "databaseOomKills": 0,
+      "appThrottledPeriods": 0
+    },
+    {
+      "users": 10,
+      "devices": 4,
+      "rate": 20,
+      "repetition": 1,
+      "measuredAt": "2026-11-08T07:13:14.837Z",
+      "sourceMatches": true,
+      "success": true,
+      "capacityHarnessPassed": true,
+      "operations": {
+        "add": 20,
+        "update": 20,
+        "archive": 20,
+        "restore": 20,
+        "delete": 20,
+        "history": 20,
+        "confirmations": 400
+      },
+      "completedWrites": 100,
+      "expectedDeliveries": 400,
+      "observedDeliveries": 400,
+      "deliveryCoverage": 1,
+      "generatorDropped": 0,
+      "measurementValid": true,
+      "propagationMs": {
+        "count": 400,
+        "min": 5.609375,
+        "p50": 7.314958999999362,
+        "p95": 11.104041000000507,
+        "p99": 13.610499999998865,
+        "max": 14.974708000001556,
+        "mean": 7.658514190000169,
+        "sampleCount": 400,
+        "percentiles": "exact"
+      },
+      "appCpuSeconds": 0.667682,
+      "databaseCpuSeconds": 0.365166,
+      "anonymousPeakBytes": 134365184,
+      "appOomKills": 0,
+      "databaseOomKills": 0,
+      "appThrottledPeriods": 0
+    },
+    {
+      "users": 10,
+      "devices": 4,
+      "rate": 20,
+      "repetition": 2,
+      "measuredAt": "2026-11-08T07:13:46.318Z",
+      "sourceMatches": true,
+      "success": true,
+      "capacityHarnessPassed": true,
+      "operations": {
+        "add": 20,
+        "update": 20,
+        "archive": 20,
+        "restore": 20,
+        "delete": 20,
+        "history": 20,
+        "confirmations": 400
+      },
+      "completedWrites": 100,
+      "expectedDeliveries": 400,
+      "observedDeliveries": 400,
+      "deliveryCoverage": 1,
+      "generatorDropped": 0,
+      "measurementValid": true,
+      "propagationMs": {
+        "count": 400,
+        "min": 7.082583000003069,
+        "p50": 10.935999999999694,
+        "p95": 27.096333000001323,
+        "p99": 48.2009169999983,
+        "max": 48.869833000000654,
+        "mean": 13.336307847499889,
+        "sampleCount": 400,
+        "percentiles": "exact"
+      },
+      "appCpuSeconds": 0.988701,
+      "databaseCpuSeconds": 0.57407,
+      "anonymousPeakBytes": 131936256,
+      "appOomKills": 0,
+      "databaseOomKills": 0,
+      "appThrottledPeriods": 0
+    },
+    {
+      "users": 10,
+      "devices": 1,
+      "rate": 20,
+      "repetition": 2,
+      "measuredAt": "2026-11-08T07:14:18.132Z",
+      "sourceMatches": true,
+      "success": true,
+      "capacityHarnessPassed": true,
+      "operations": {
+        "add": 20,
+        "update": 20,
+        "archive": 20,
+        "restore": 20,
+        "delete": 20,
+        "history": 20,
+        "confirmations": 100
+      },
+      "completedWrites": 100,
+      "expectedDeliveries": 100,
+      "observedDeliveries": 100,
+      "deliveryCoverage": 1,
+      "generatorDropped": 0,
+      "measurementValid": true,
+      "propagationMs": {
+        "count": 100,
+        "min": 5.471125000000029,
+        "p50": 7.854917000000569,
+        "p95": 11.154083000001265,
+        "p99": 23.50970800000141,
+        "max": 30.998415999998542,
+        "mean": 8.52392294999985,
+        "sampleCount": 100,
+        "percentiles": "exact"
+      },
+      "appCpuSeconds": 0.738413,
+      "databaseCpuSeconds": 0.411207,
+      "anonymousPeakBytes": 127315968,
+      "appOomKills": 0,
+      "databaseOomKills": 0,
+      "appThrottledPeriods": 0
+    },
+    {
+      "users": 10,
+      "devices": 1,
+      "rate": 20,
+      "repetition": 3,
+      "measuredAt": "2026-11-08T07:14:49.670Z",
+      "sourceMatches": true,
+      "success": true,
+      "capacityHarnessPassed": true,
+      "operations": {
+        "add": 20,
+        "update": 20,
+        "archive": 20,
+        "restore": 20,
+        "delete": 20,
+        "history": 20,
+        "confirmations": 100
+      },
+      "completedWrites": 100,
+      "expectedDeliveries": 100,
+      "observedDeliveries": 100,
+      "deliveryCoverage": 1,
+      "generatorDropped": 0,
+      "measurementValid": true,
+      "propagationMs": {
+        "count": 100,
+        "min": 5.687250000000859,
+        "p50": 8.174999999999272,
+        "p95": 12.527916000002733,
+        "p99": 13.817166000000725,
+        "max": 18.03254199999901,
+        "mean": 8.385777490000073,
+        "sampleCount": 100,
+        "percentiles": "exact"
+      },
+      "appCpuSeconds": 0.637524,
+      "databaseCpuSeconds": 0.376027,
+      "anonymousPeakBytes": 125042688,
+      "appOomKills": 0,
+      "databaseOomKills": 0,
+      "appThrottledPeriods": 0
+    },
+    {
+      "users": 10,
+      "devices": 4,
+      "rate": 20,
+      "repetition": 3,
+      "measuredAt": "2026-11-08T07:15:20.917Z",
+      "sourceMatches": true,
+      "success": true,
+      "capacityHarnessPassed": true,
+      "operations": {
+        "add": 20,
+        "update": 20,
+        "archive": 20,
+        "restore": 20,
+        "delete": 20,
+        "history": 20,
+        "confirmations": 400
+      },
+      "completedWrites": 100,
+      "expectedDeliveries": 400,
+      "observedDeliveries": 400,
+      "deliveryCoverage": 1,
+      "generatorDropped": 0,
+      "measurementValid": true,
+      "propagationMs": {
+        "count": 400,
+        "min": 5.947499999998399,
+        "p50": 7.862457999999606,
+        "p95": 11.323041999999987,
+        "p99": 16.85554200000115,
+        "max": 18.731916000000638,
+        "mean": 8.379861742500056,
+        "sampleCount": 400,
+        "percentiles": "exact"
+      },
+      "appCpuSeconds": 0.761602,
+      "databaseCpuSeconds": 0.440118,
+      "anonymousPeakBytes": 129208320,
+      "appOomKills": 0,
+      "databaseOomKills": 0,
+      "appThrottledPeriods": 0
+    }
+  ],
+  "points": [
+    {
+      "users": 10,
+      "devices": 1,
+      "rate": 20,
+      "pass": true
+    },
+    {
+      "users": 10,
+      "devices": 4,
+      "rate": 20,
+      "pass": true
+    }
+  ]
+}

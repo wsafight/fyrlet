@@ -1,5 +1,75 @@
 # 本地验收记录
 
+## 2026-11-08：按顺序推进路线图
+
+继续在 `feat/readiness-and-performance` 按 CI、共享宿主存储、性能、可靠性、发布准备的顺序处理。最终代码验收的 **15 个阶段全部通过**：`.local/readiness/followup-20261108-guarded/result.json`，SHA-256 源码指纹 `ff647bdd4eacfe1e87225da197cb60056df1973dfef2e9298f5b55ff46ade615`，覆盖 683 个 Git 已跟踪／未忽略文件。这是补写本记录前的代码快照；下方较早的 13 阶段记录保留当时数量。
+
+```sh
+node scripts/acceptance.mjs --groups core,client,host,bench,contract,integration,restore,browser \
+  --out .local/readiness/followup-20261108-guarded
+node scripts/acceptance.mjs --groups package,site \
+  --out .local/readiness/followup-20261108-artifacts
+node scripts/release_check.mjs --out .local/readiness/followup-20261108-release-check.json
+```
+
+| 验证 | 结果 | 最终代码报告同目录证据 |
+| --- | --- | --- |
+| Elixir 格式／编译及测试 | 通过，**776 项**：核心 706、示例 35、包 35 | `core-1.log` 至 `core-3.log` |
+| TypeScript SDK 与类型检查 | **304 项通过**，行／分支覆盖率 **99.27% / 95.66%** | `client-1.log`、`client-2.log` |
+| React 适配与类型检查 | **20 项通过**，行／分支覆盖率 **100% / 100%** | `client-3.log`、`client-4.log` |
+| 宿主单元／启动／部署检查 | **68 项通过** | `client-5.log` |
+| 含真实 PostgreSQL 的宿主检查 | **78 项通过**（相同的 68 项加 10 项集成）；已加载服务端模块行／分支覆盖率 **90.47% / 91.49%** | `host-1.log` |
+| 性能／就绪工具 | **37 项通过** | `bench-1.log` |
+| 契约导出与生成类型 | 通过 | `contract-1.log`、`contract-2.log` |
+| 真实 HTTP／WebSocket 集成 | **20 项通过** | `integration-1.log` |
+| 独立快照恢复与重复迁移 | 通过 | `restore-1.log` |
+| 浏览器流程 | **14 项通过**，含父用例；签名本地 IdP | `browser-1.log` |
+
+CI 使用同一冻结源码入口，包含 host／restore 阶段，并始终上传报告；未宣称这个未推送分支已有新的托管结果。共享宿主现支持 PostgreSQL 加密状态、登录 state 原子消费、跨池续期／退出和重启，要求直接／session-affine 连接，不支持 transaction pooling。回归覆盖杀死持锁进程、scope 容量、锁等待、超过池连接数的签发、退出保留入口，以及持久化／活跃检查失败时撤销已知令牌。启动配置错误已脱敏；本地数据库演练在建连前拒绝 URL 查询参数／片段重定向。中间的 `.local/readiness/followup-20261108-verified/` 在宿主阶段被主动停止以补强 URL 守卫，不计完整通过。覆盖率纳入启动模块的失败路径，不包含浏览器执行的全部静态服务代码。
+
+混合负载／密度的六次短跑在 10 个用户、每用户 1／4 个设备、目标每秒 20 次写入、每点三次重复下通过正确性及工具阈值。见 [PERFORMANCE.md](PERFORMANCE.md) 与[脱敏证据](../bench/mixed-density-2026-11-08.json)。它们不证明饱和、加速或生产容量，仍有物理宿主 CPU 干扰。PostgreSQL 失效通知继续默认关闭。原生 `promtool` 再次验证四条告警规则通过。
+
+长时包装器的短演练以四客户端运行 30 秒通过：**527 次写入、10 次重连、10 次续期**，全量历史核对通过，订阅／Observer／读取缓存归零。共 10 个数据库样本，无采样失败；数据库从 27,784,883 增至 28,169,907 字节。节点样本保留内存及累计数据库排队／查询遥测，Chat／Agent 的切换／幂等检查通过。报告 `.local/readiness/stability-followup-20261108/result.json`，实测工具指纹 `b2a60f44f74e7054bf65fdf8512f09097c3ff0da1f3cf68375e25e53de13b806`。这仍是同机短演练，明确保留 24 小时未验证；未选择生产资源阈值。
+
+另一次 Notify 快照／恢复保留全部 22 张 public 表的事实清单，包括 **11 个 Run、10 个 Effect、16 条幂等记录、10 条通知**；两次 Notify 迁移均未改变事实。只删除本次新建的目标库，私有 dump 已移除。报告 `.local/readiness/restore-notify-followup-20261108/result.json`。这些是本地模拟供应商的事实，不是真实邮件、生产恢复或跨版本升级证明。
+
+文档快照对应的分发包／安装／站点检查另记于 `.local/readiness/followup-20261108-artifacts/result.json`；发布预检查为 `.local/readiness/followup-20261108-release-check.json`，应独立查看结果，不从上述代码回归推断。打包记录源码指纹、提交、干净／脏状态及校验和。预检查从不发布；本分支尚未提交／推送，也没有维护者批准的许可证／发布策略和精确提交托管 CI。外部 IdP／生产共享宿主、多主机故障、24 小时执行、实体设备与真实邮件仍是[发布检查单](RELEASE_CHECKLIST.md)中的独立关卡。
+
+## 2026-11-08：就绪性与性能后续
+
+分支 `feat/readiness-and-performance`，基于 main 的 `7f97e40005b901fa11fd16ca4020210af94f6862`。下列冻结源码验收的 **13 个阶段全部通过**；报告为 `.local/readiness/2026-11-08-final-pass/result.json`，逐阶段日志在同一目录。SHA-256 源码指纹 `c445871cd7a55269c35d8de7dab968563a65acb31b9dcaa846fa63626c910394` 覆盖 670 个 Git 已跟踪及未忽略文件。此验收之后仅更新了验收记录；分发包检查另用报告记录更新后的文档。
+
+```sh
+node scripts/acceptance.mjs --groups core,client,bench,contract,integration,browser \
+  --out .local/readiness/2026-11-08-final-pass
+node scripts/acceptance.mjs --groups package,site \
+  --out .local/readiness/2026-11-08-artifacts
+```
+
+| 验证 | 结果 | 冻结源码报告目录中的证据 |
+| --- | --- | --- |
+| Elixir 格式与编译 | 通过，编译警告视为错误 | `core-1.log`、`core-2.log` |
+| 核心、示例与插件包 | **776 项通过**：核心 706、示例 35、插件包 35 | `core-3.log` |
+| TypeScript SDK | **304 项通过**，类型检查通过；行/分支覆盖率 **99.27% / 95.66%** | `client-1.log`、`client-2.log` |
+| React 适配器 | **20 项通过**，类型检查通过；行/分支覆盖率 **100% / 100%** | `client-3.log`、`client-4.log` |
+| OIDC 宿主与部署检查 | **60 项通过**；已加载服务端模块的行/分支覆盖率 **98.24% / 97.67%** | `client-5.log` |
+| 性能与验收工具 | **30 项通过** | `bench-1.log` |
+| 契约导出与生成类型 | 通过 | `contract-1.log`、`contract-2.log` |
+| 真实 HTTP/WebSocket 集成 | **20 项通过** | `integration-1.log` |
+| 真实浏览器流程 | **14 项通过**，含父用例；使用本地签名测试 IdP，不是外部供应商 | `browser-1.log` |
+
+补充验证：会话批处理测试使用曾出问题的种子 `926877`，9 项通过；通知与模式测试 18 项通过；启用 `FYRLET_POSTGRES_INVALIDATION=true` 的真实集成测试 20 项通过。日志分别为 `/tmp/fyrlet-session-final.log`、`/tmp/fyrlet-notify-final.log`、`/tmp/fyrlet-pg-integration.log`。原生 `promtool` 3.1.0 检查 **4 条告警规则通过**（`/tmp/fyrlet-promtool-native.log`），官方压缩包已按发布版 SHA-256 清单核对。最初 Docker 镜像拉取失败，因此这不是托管 CI 容器检查通过的证据。重复使用已有扫描与 ABBA 标签均在执行前被拒绝，原证据校验和未变。
+
+上游 main 的 CI `42451376341` 在两个共享 worker 遥测断言上失败。本分支隔离测试 worker 和发出事件的进程，限制排队等待，并在调用进程内检查绕过批处理的数据库查询。更早的 PR 运行 `42450925475` 成功，但它和本地回归都不是本分支的托管结果。工作流已加入工具测试、告警规则检查和手动触发；**新的托管 CI 仍待运行**。被源码指纹守卫中止的中间尝试（包括 `.local/readiness/2026-11-08-verified/result.json`）是失败尝试，不能作为完整验收通过的证据。
+
+性能证据见 [PERFORMANCE.md](PERFORMANCE.md) 和[脱敏 JSON](../bench/readiness-performance-2026-11-08.json)：100/s、500/s 共 6 次基线均通过所设 SLO，投递覆盖率 100%、无 OOM，但不能据此确定容量上限。PostgreSQL 通知的同镜像 ABBA 共 8 次，正确性均通过，目标负载与延迟 SLO 则为默认模式 3/4、通知模式 2/4。物理主机 CPU 干扰且波动明显，**没有提速证据**，新选项仍默认关闭。最终 10 用户、单生成器、通知模式冒烟也通过（`/tmp/fyrlet-smoke.log`）。
+
+`FYRLET_POSTGRES_INVALIDATION=true CLUSTER_SOAK_SECONDS=300 CLUSTER_CLIENTS=20 CLUSTER_BASE_PORT=4240 bash scripts/cluster.sh` 的 Chat、Agent 检查通过。Chat 共 5,070 次写入、101 次重连、102 次续期，全量历史无空洞/重复，p50 为 32.12 ms、p95 为 36.43 ms（含 25 ms 轮询）；两节点订阅、Observer、读取缓存均归零。Agent 覆盖跨节点 Run 幂等、所有权与故障切换。报告为 `.local/cluster/chat.json`、`.local/cluster/agent.json`。这仍是本机双节点证据，**不是多主机或 24 小时验收**。
+
+在这个较早检查点，外部预检查仍未通过：OIDC 缺少 `PUBLIC_ORIGIN`、`FYRLET_ENDPOINT`、`FYRLET_PROJECT_ID`、`FYRLET_SERVICE_KEY`、`OIDC_PROVIDERS`；真实邮件缺少 `RESEND_API_KEY`、`MAIL_FROM`、`MAIL_TO`。报告在 `.local/readiness/oidc-preflight.json`、`.local/readiness/mail-preflight.log`。未进行真实登录、邮件发送或注册表发布。当时多实例宿主共享存储尚未实现，部署检查拒绝 `HOST_INSTANCES != 1`；上方后续记录已替代此项存储限制。实体设备、外部 IdP 生命周期、多主机故障、长时稳定性、生产恢复/升级与告警阈值仍是 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) 中的独立门槛。
+
+分发包分组另行记录源码归档/npm 构建、外部消费者安装冒烟、文档站构建与链接检查。它们是本地检查，不等于 Hex/npm 发布或生产上线。
+
 ## 2026-11-08：路线图回归测试扩充
 
 本轮在 `feat/react-contract-auth-retry` 新增 **108 项可执行测试**，另补充编译期契约断言；未修改生产实现。下表统计完整 SDK、React、宿主单元测试，以及包含父用例的浏览器测试；更早的实现记录保留当时数量。

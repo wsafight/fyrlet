@@ -12,7 +12,9 @@ defmodule Fyrlet.InvalidationModeTest do
     )
 
     previous = Application.fetch_env!(:fyrlet, :durable_invalidation)
+    postgres = Application.get_env(:fyrlet, :postgres_invalidation, false)
     on_exit(fn -> Application.put_env(:fyrlet, :durable_invalidation, previous) end)
+    on_exit(fn -> Application.put_env(:fyrlet, :postgres_invalidation, postgres) end)
     %{alice: alice}
   end
 
@@ -48,6 +50,76 @@ defmodule Fyrlet.InvalidationModeTest do
       refute_receive {:invalidated, _identifier, _change}, 50
       refute_receive {:invalidated, _identifier}, 0
     end
+  end
+
+  test "PostgreSQL mode uses a transactional notice without an Oban job", %{alice: alice} do
+    Application.put_env(:fyrlet, :durable_invalidation, false)
+    Application.put_env(:fyrlet, :postgres_invalidation, true)
+    assert {:ok, _item} = add(alice.actor)
+    assert received_identifier() < 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "durable mode takes precedence over PostgreSQL notifications", %{alice: alice} do
+    Application.put_env(:fyrlet, :durable_invalidation, true)
+    Application.put_env(:fyrlet, :postgres_invalidation, true)
+    assert {:ok, _item} = add(alice.actor)
+    assert received_identifier() > 0
+  end
+
+  test "PostgreSQL mode handles an unmanaged outer transaction without retaining a callback", %{
+    alice: alice
+  } do
+    Application.put_env(:fyrlet, :durable_invalidation, false)
+    Application.put_env(:fyrlet, :postgres_invalidation, true)
+    assert {:ok, {:ok, _item}} = Repo.transaction(fn -> add(alice.actor) end)
+    assert Repo.aggregate(Oban.Job, :count) == 0
+    refute_receive {:invalidated, _identifier, _change}, 50
+    refute_receive {:invalidated, _identifier}, 0
+    refute Process.get(:fyrlet_after_commit_jobs)
+  end
+
+  test "PostgreSQL mode never repeats notification SQL for an idempotent replay", %{alice: alice} do
+    Application.put_env(:fyrlet, :durable_invalidation, false)
+    Application.put_env(:fyrlet, :postgres_invalidation, true)
+    handler = "notify-query-#{Ecto.UUID.generate()}"
+
+    :telemetry.attach(
+      handler,
+      [:fyrlet, :repo, :query],
+      fn _event, _measurements, metadata, owner ->
+        if self() == owner and String.contains?(metadata.query, "pg_notify"),
+          do: send(owner, :notified)
+      end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    key = Ecto.UUID.generate()
+    input = %{"text" => "once"}
+    assert {:ok, item} = Fyrlet.Runtime.call(alice.actor, "records.add", input, key)
+    assert {:ok, ^item} = Fyrlet.Runtime.call(alice.actor, "records.add", input, key)
+    assert_receive :notified
+    refute_receive :notified
+    assert Repo.aggregate(TestRecord, :count) == 1
+  end
+
+  test "PostgreSQL mode discards managed callbacks when the outer transaction rolls back", %{
+    alice: alice
+  } do
+    Application.put_env(:fyrlet, :durable_invalidation, false)
+    Application.put_env(:fyrlet, :postgres_invalidation, true)
+
+    assert {:error, :rejected} =
+             Fyrlet.Transaction.run(fn ->
+               assert {:ok, _item} = add(alice.actor)
+               Repo.rollback(:rejected)
+             end)
+
+    refute_receive {:invalidated, _identifier, _change}, 50
+    refute_receive {:invalidated, _identifier}, 0
+    assert Repo.aggregate(TestRecord, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
   describe "writes nested in a larger transaction" do

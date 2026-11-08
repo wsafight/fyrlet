@@ -27,7 +27,7 @@ export function mergeShards(results) {
       .map((key) => [key, add(results.map((result) => result.pacedLoad[key]))])),
     schedulerLagMs: { p95: Math.max(...results.map((result) => result.pacedLoad.schedulerLagMs.p95 ?? 0)),
       max: Math.max(...results.map((result) => result.pacedLoad.schedulerLagMs.max ?? 0)), note: "worst shard" },
-    offeredRate: first.pacedLoad.offeredRate, durationMs: first.pacedLoad.durationMs,
+    offeredRate: add(results.map((result) => result.pacedLoad.offeredRate)), durationMs: first.pacedLoad.durationMs,
     elapsedMs: Math.max(...results.map((result) => result.pacedLoad.elapsedMs)),
   } : first.pacedLoad;
   const traffic = results.reduce((total, result) => {
@@ -48,6 +48,7 @@ export function mergeShards(results) {
     measurementValidity: { valid: results.every((result) => result.measurementValidity?.valid),
       reason: results.find((result) => !result.measurementValidity?.valid)?.measurementValidity?.reason ?? null },
     completedWrites, expectedDeliveries, observedDeliveries,
+    ...(first.operations ? { operations: Object.fromEntries(Object.keys(first.operations).map((name) => [name, add(results.map((result) => result.operations?.[name]))])) } : {}),
     unobservedIntermediateDeliveries: expectedDeliveries - observedDeliveries,
     deliveryCoverage: expectedDeliveries ? observedDeliveries / expectedDeliveries : null,
     connections: Object.fromEntries(["writers", "observers", "total", "opened"].map((key) => [key, add(results.map((result) => result.connections[key]))])),

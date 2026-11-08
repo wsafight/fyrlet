@@ -324,10 +324,17 @@ defmodule Fyrlet.Runtime do
       case result do
         {:ok, {data, job}} ->
           cond do
-            is_nil(job) -> :ok
-            not nested -> notify_after_commit(job)
-            transient?(job) -> Fyrlet.AfterCommit.broadcast_later(job)
-            true -> :ok
+            is_nil(job) ->
+              :ok
+
+            not nested ->
+              notify_after_commit(job)
+
+            transient?(job) and Fyrlet.Transaction.managed?() ->
+              Fyrlet.AfterCommit.broadcast_later(job)
+
+            true ->
+              :ok
           end
 
           {:ok, data}
@@ -384,24 +391,32 @@ defmodule Fyrlet.Runtime do
     {checked, if(job, do: {job, change})}
   end
 
-  # With `durable_invalidation: true` every write persists a fallback job in its transaction, which
-  # re-broadcasts if the node dies between commit and broadcast. Without it the broadcast is sent
-  # right after commit and a lost one is recovered by the periodic reconciliation of each subscription.
-  # The job costs about five statements per write (insert, insert notice, fetch, completion).
-  #
-  # A write nested in someone else's transaction can only skip the job when that transaction is a
-  # `Fyrlet.Transaction`, whose commit flushes the pending broadcast. In a plain `Repo.transaction`
-  # nothing would ever broadcast, so the job stays the only notice.
   defp invalidation_job(scopes, project_id, nested) do
-    if Application.get_env(:fyrlet, :durable_invalidation, false) or
-         (nested and not Fyrlet.Transaction.managed?()) do
-      %{"scopes" => scopes, "project_id" => project_id}
-      |> Fyrlet.InvalidationWorker.new()
-      |> Oban.insert()
-      |> unwrap!()
-    else
-      Fyrlet.InvalidationWorker.transient(scopes, project_id)
+    cond do
+      Application.get_env(:fyrlet, :durable_invalidation, false) ->
+        durable_invalidation_job(scopes, project_id)
+
+      Fyrlet.InvalidationNotifications.enabled?() ->
+        job = Fyrlet.InvalidationWorker.transient(scopes, project_id)
+
+        case Fyrlet.InvalidationNotifications.enqueue(job) do
+          :ok -> job
+          :too_large -> durable_invalidation_job(scopes, project_id)
+        end
+
+      nested and not Fyrlet.Transaction.managed?() ->
+        durable_invalidation_job(scopes, project_id)
+
+      true ->
+        Fyrlet.InvalidationWorker.transient(scopes, project_id)
     end
+  end
+
+  defp durable_invalidation_job(scopes, project_id) do
+    %{"scopes" => scopes, "project_id" => project_id}
+    |> Fyrlet.InvalidationWorker.new()
+    |> Oban.insert()
+    |> unwrap!()
   end
 
   defp transient?({%Oban.Job{id: id}, _change}), do: id < 0

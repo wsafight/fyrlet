@@ -11,6 +11,7 @@ Fyrlet 是基于 Phoenix 的实时应用框架：在服务端定义业务操作�
 | [PRODUCT.md](PRODUCT.md) | 产品定位、适用场景、范围与非目标、功能需求、一致性承诺、风险与成功判据 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 基础模型、可选模块、三层结构（核心 / 能力包 / 领域包）、鉴权分层与硬规则 |
 | [ROADMAP.md](ROADMAP.md) | 后续阶段、优先级、依赖、完成条件与评估事项 |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | 本地验收入口、身份服务预检查、升级与外部发布门槛 |
 
 ## 接入与使用
 

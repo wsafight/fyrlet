@@ -7,9 +7,38 @@ set -euo pipefail
 cd "$ROOT"
 IMG=$1; RATE=$2; TAG=$3; DUR=${4:-20000}
 USERS=${USERS:-1000}; DEVICES=${DEVICES:-2}; ROWS=${ROWS:-50}; PAYLOAD=${PAYLOAD:-128}
-OUT="$OUT_ROOT/runs/$TAG"; mkdir -p "$OUT"
+N=${GENERATORS:-1}
+SCENARIO=${FAIR_SCENARIO:-soak}
+[[ "$SCENARIO" = soak || "$SCENARIO" = mixed ]] || { echo 'Invalid fair scenario' >&2; exit 1; }
+[[ "$TAG" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$ ]] || { echo 'Invalid run tag' >&2; exit 1; }
+for value in "$RATE" "$DUR" "$USERS" "$DEVICES" "$ROWS" "$PAYLOAD" "$N"; do
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || { echo 'Workload values must be positive integers' >&2; exit 1; }
+done
+[[ "$N" -le 64 && "$N" -le "$USERS" && "$N" -le "$RATE" ]] || { echo 'Invalid generator count' >&2; exit 1; }
+OUT="$OUT_ROOT/runs/$TAG"
+[[ ! -e "$OUT" ]] || { echo "Run already exists: $OUT" >&2; exit 1; }
+mkdir -p "$OUT"
 REL_OUT="${OUT#"$ROOT"/}"
-FIX="$OUT_ROOT/fixtures.json"
+[[ "$REL_OUT" != "$OUT" ]] || { echo 'FAIR_OUT must be inside this checkout' >&2; exit 1; }
+FIX="$OUT/fixtures.json"
+chmod 700 "$OUT"
+SAMPLER=
+generator_pids=()
+generator_containers=()
+for index in $(seq 0 $((N - 1))); do generator_containers+=("fair-gen-$TAG-$index"); done
+generator_containers+=("fair-gen-$TAG-merge")
+cleanup() {
+  [[ -z "$SAMPLER" ]] || kill "$SAMPLER" 2>/dev/null || true
+  for pid in "${generator_pids[@]:-}"; do
+    [[ -z "$pid" ]] || kill "$pid" 2>/dev/null || true
+  done
+  rm -f "$FIX"
+  $DOCKER rm -f fair-fyrlet "${generator_containers[@]}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+npm --prefix sdks/typescript run build > "$OUT/sdk-build.log" 2>&1
 
 $DOCKER rm -f fair-fyrlet fair-gen >/dev/null 2>&1 || true
 $DOCKER start "$PG" >/dev/null 2>&1 || true
@@ -28,10 +57,13 @@ $DOCKER run -d --name fair-fyrlet --network "$NET" --cpus "${CPUS:-1}" --cpuset-
   -e SECRET_KEY_BASE="$(openssl rand -base64 64 | tr -d '\n')" \
   -e ALLOWED_ORIGINS=//127.0.0.1,//localhost,//fair-fyrlet -e CORS_ORIGINS=http://127.0.0.1 -e PORT=4200 \
   -e "ERL_AFLAGS=${ERLF:-}" ${EXTRA:-} "$IMG" >/dev/null
+ready=0
 for _ in $(seq 40); do
-  $DOCKER run --rm --network "$NET" curlimages/curl -s -m 2 http://fair-fyrlet:4200/health 2>/dev/null | grep -q ok && break
+  if $DOCKER run --rm --network "$NET" curlimages/curl -fsS -m 2 http://fair-fyrlet:4200/ready >/dev/null 2>&1; then ready=1; break; fi
   sleep 1
 done
+[[ "$ready" = 1 ]] || { $DOCKER logs fair-fyrlet > "$OUT/server.log" 2>&1; echo 'Application did not become database-ready' >&2; exit 1; }
+$DOCKER inspect fair-fyrlet "$PG" --format '{"name":{{json .Name}},"image":{{json .Image}},"source":{{json (index .Config.Labels "fyrlet.source")}},"nanoCpus":{{.HostConfig.NanoCpus}},"cpuset":{{json .HostConfig.CpusetCpus}},"memory":{{.HostConfig.Memory}},"memorySwap":{{.HostConfig.MemorySwap}}}' > "$OUT/limits.jsonl"
 
 cg() { for c in fair-fyrlet "$PG"; do
   echo "$c $1 $($DOCKER exec "$c" sh -c 'grep -E "usage_usec|nr_throttled" /sys/fs/cgroup/cpu.stat | tr "\n" " "; grep -E "^oom_kill " /sys/fs/cgroup/memory.events; cat /sys/fs/cgroup/memory.current' | tr '\n' ' ')"
@@ -39,47 +71,38 @@ done; }
 cg before > "$OUT/cgroup.txt"
 ( while true; do $DOCKER exec fair-fyrlet sh -c 'grep -E "^anon " /sys/fs/cgroup/memory.stat' >> "$OUT/anon.txt" 2>/dev/null; sleep 2; done ) &
 SAMPLER=$!
-trap 'kill $SAMPLER 2>/dev/null || true' EXIT
 
 # GENERATORS=N shards the users and the offered rate across N runner processes (one container each, all in
 # GEN_CPUSET). A single Node process drops ticks first at high rates, which hides the server's limit.
-N=${GENERATORS:-1}
-GEN="$DOCKER run --rm --network $NET --cpuset-cpus $GEN_CPUSET --ulimit nofile=65536:65536 -v $ROOT:/work -w /work node:24.22.1-bookworm-slim"
-common=(--target fyrlet --endpoint http://fair-fyrlet:4200 --fixtures "${FIX#"$ROOT"/}" --scenario soak
+generator() {
+  local container=$1
+  shift
+  $DOCKER run --rm --name "$container" --network "$NET" --cpuset-cpus "$GEN_CPUSET" \
+    --ulimit nofile=65536:65536 -v "$ROOT:/work" -w /work node:24.22.1-bookworm-slim "$@"
+}
+common=(--target fyrlet --endpoint http://fair-fyrlet:4200 --fixtures "${FIX#"$ROOT"/}" --scenario "$SCENARIO"
   --users "$USERS" --devices "$DEVICES" --sessions shared --rows "$ROWS" --payload-bytes "$PAYLOAD"
   --rate "$RATE" --duration-ms "$DUR" --warmup 1 --repeats 1 --timeout-ms 60000)
+runner_status=0
 if [ "$N" -le 1 ]; then
-  $GEN node bench/runner.mjs "${common[@]}" --concurrency 64 --out "$REL_OUT/r" > "$OUT/log.txt" 2>&1 || true
+  generator "${generator_containers[0]}" node bench/runner.mjs "${common[@]}" --concurrency "${CONCURRENCY:-64}" --out "$REL_OUT/r" > "$OUT/log.txt" 2>&1 || runner_status=$?
 else
   # Every shard waits for the same start time (read from the daemon's clock) so measurement windows coincide.
   START=$($DOCKER run --rm node:24.22.1-bookworm-slim node -e "console.log(Date.now() + ${SETUP_BUDGET_S:-90} * 1000)")
-  pids=()
   for i in $(seq 0 $((N - 1))); do
-    $GEN node bench/runner.mjs "${common[@]}" --concurrency $(( (64 + N - 1) / N )) --shard "$i/$N" --start-at "$START" \
+    generator "${generator_containers[$i]}" node bench/runner.mjs "${common[@]}" --concurrency $(( (${CONCURRENCY:-64} + N - 1) / N )) --shard "$i/$N" --start-at "$START" \
       --out "$REL_OUT/shard-$i" > "$OUT/log-$i.txt" 2>&1 &
-    pids+=($!)
+    generator_pids+=($!)
   done
-  for p in "${pids[@]}"; do wait "$p" || true; done
+  for pid in "${generator_pids[@]}"; do wait "$pid" || runner_status=$?; done
+  generator_pids=()
   shards=(); for i in $(seq 0 $((N - 1))); do shards+=("$REL_OUT/shard-$i"); done
-  $GEN node bench/merge.mjs "$REL_OUT/r" "${shards[@]}" > "$OUT/log.txt" 2>&1 || true
+  generator "fair-gen-$TAG-merge" node bench/merge.mjs "$REL_OUT/r" "${shards[@]}" > "$OUT/log.txt" 2>&1 || runner_status=$?
 fi
 kill $SAMPLER 2>/dev/null || true
+SAMPLER=
 cg after >> "$OUT/cgroup.txt"
+$DOCKER logs fair-fyrlet > "$OUT/server.log" 2>&1
+rm -f "$FIX"
 
-python3 -I - "$OUT" <<'P'
-import json, re, sys
-d = sys.argv[1]
-try:
-    r = json.load(open(d + "/r/results.json"))["results"][0]
-    cg = open(d + "/cgroup.txt").read().splitlines()
-    v = lambda l, k: int(re.search(k + r" (\d+)", l).group(1))
-    cpu = (v(cg[2], "usage_usec") - v(cg[0], "usage_usec")) / 1e6
-    load = r.get("pacedLoad") or {}
-    anon = max([int(l.split()[1]) for l in open(d + "/anon.txt") if l.startswith("anon")] or [0]) / 2**20
-    print(f"RESULT {d.split('/')[-1]:22} writes={r['completedWrites']:6} p95={r['propagationMs']['p95']:8.2f}ms "
-          f"cov={r['deliveryCoverage']:.2f} appCPU={cpu:5.1f}s throttled={v(cg[2],'nr_throttled')-v(cg[0],'nr_throttled'):4} "
-          f"mem={int(cg[2].split()[-1])/2**20:4.0f}MiB oom={v(cg[2],'oom_kill')} setupMs={r['setupDurationMs']:.0f} "
-          f"ok={r['success']} anonPeakMiB={anon:.0f} genDropped={load.get('generatorDropped','?')}")
-except Exception as e:
-    print("RESULT", d, "FAILED", e, open(d + "/log.txt").read()[-200:])
-P
+node bench/fair/result.mjs "$OUT" "$runner_status"

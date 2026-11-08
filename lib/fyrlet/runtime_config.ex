@@ -14,6 +14,7 @@ defmodule Fyrlet.RuntimeConfig do
   `FYRLET_MAX_SUBSCRIPTIONS_PER_NODE` (the node-wide channel ceiling),
   `FYRLET_IDEMPOTENCY_TTL_SECONDS`, `FYRLET_DURABLE_INVALIDATION` (`true` persists a fallback
   invalidation job in every write transaction; default off, see `Fyrlet.Runtime`),
+  `FYRLET_POSTGRES_INVALIDATION` (opt-in transactional notifications; durable mode takes precedence),
   `FYRLET_CLUSTER_NODES` (comma-separated name@host peers),
   and the per-project defaults `FYRLET_PROJECT_READS_PER_SECOND`, `FYRLET_PROJECT_WRITES_PER_SECOND`
   and `FYRLET_PROJECT_MAX_SUBSCRIPTIONS` (see `Fyrlet.Quota`), `FYRLET_INGEST_RETENTION_SECONDS`
@@ -40,6 +41,7 @@ defmodule Fyrlet.RuntimeConfig do
       observer_hibernate_after: hibernate(get_env),
       idempotency_ttl: integer(get_env, "FYRLET_IDEMPOTENCY_TTL_SECONDS", 1),
       durable_invalidation: boolean(get_env, "FYRLET_DURABLE_INVALIDATION"),
+      postgres_invalidation: boolean(get_env, "FYRLET_POSTGRES_INVALIDATION"),
       max_subscriptions_per_node:
         integer(get_env, "FYRLET_MAX_SUBSCRIPTIONS_PER_NODE", 1, 1_000_000),
       cluster_nodes: cluster_nodes(get_env.("FYRLET_CLUSTER_NODES")),

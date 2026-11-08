@@ -67,6 +67,14 @@ config :fyrlet,
 
 ## 可观测性
 
+### 可部署告警与通知传输
+
+[deploy/prometheus/alerts.yml](../../deploy/prometheus/alerts.yml) 提供数据库连接池等待、待执行 Run 年龄、未解决 Effect、Ops 评估停止更新四类规则。启用前按实际 SLO 调整阈值。连接池规则使用已有数据库直方图，其余规则需要 `fyrlet_ops` 插件与已开启的指标。Ops 更新 `fyrlet_ops_alerts`、`fyrlet_runs_stuck`、`fyrlet_queue_age_seconds`、`fyrlet_effects_unresolved`、`fyrlet_ops_evaluated_at_seconds`，覆盖上次值而非累加。没有指标表示尚未观察到评估，不能当作健康的零值；还需配置缺失序列和采集不可用告警。这些指标覆盖整个安装，继续由现有指标鉴权保护。
+
+`postgres_invalidation` 默认 `false`；`FYRLET_POSTGRES_INVALIDATION=true` 为 Operation 失效通知增加一条事务内 `pg_notify`，使用该数据库的所有节点都应开启。每节点多占一个数据库连接，只向本地订阅者转发通知，与立即 PubSub 广播使用相同去重标识。普通外层 `Repo.transaction` 也可使用此路径。超过 7,900 字节的载荷回退到持久 Oban 作业，`durable_invalidation: true` 始终优先。监听断线期间遗漏的通知不会重放，仍需周期对账。这不是持久队列，也不代表已经证明吞吐提升；Run 通知不变。前文关于普通外层事务保留持久作业的说明适用于此选项关闭时。
+
+本地验收、升级流程与外部验收边界见 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)。
+
 ### 遥测事件
 
 Telemetry 事件包括 fyrlet.operation.stop、fyrlet.subscription.query、fyrlet.subscription.snapshot、fyrlet.subscription.delta 和 fyrlet.subscription.count，另有 Ecto / Oban 自身事件。duration 为 monotonic native 单位，snapshot 的 bytes 为完整数据 JSON 字节，delta 的 bytes 为 patch JSON 字节（不含事件外壳），active 为当前本节点订阅数。默认关闭 Phoenix 连接参数及 channel 参数日志，业务异常只记录异常类型，客户端得到统一错误。
@@ -174,3 +182,7 @@ FYRLET_CLUSTER_NODES="fyrlet_a@<本机短主机名>" PHX_SERVER=true PORT=4201 \
 
 `bash scripts/cluster.sh` 已验同机两节点的幂等、共享/append、普通失效下的成员撤销、SIGKILL 后切换、节点重入、持久审批、会话续期与资源清理。详细结果见 [ACCEPTANCE.md](ACCEPTANCE.md)；多主机网络分区、生产容量与 24 小时稳定性尚未验证。
 - 新增配置：`FYRLET_IDEMPOTENCY_TTL_SECONDS`、`POOL_SIZE`、`FYRLET_CHANNEL_HIBERNATE_MS`（构建期）。
+
+## 本地恢复与发布演练
+
+共享宿主存储回归用 `bash scripts/host_store.sh`；本地独立数据库的快照／恢复／重复迁移用 `node scripts/restore_smoke.mjs`；安排 24 小时模式前，先以 `node scripts/stability.mjs --seconds 30 --clients 4 --sample-ms 5000` 验证长时包装器。包装器记录数据库增长／积压及节点内存／连接池遥测，短跑不证明 24 小时稳定性或生产 SLO。`node scripts/release_check.mjs` 检查源码、产物、策略和可选的精确提交 CI，不会发布包。前提、限制与外部关卡见[发布检查单](RELEASE_CHECKLIST.md)。

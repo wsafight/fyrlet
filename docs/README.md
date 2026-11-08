@@ -11,6 +11,7 @@ Fyrlet is a realtime application framework built on Phoenix: you define business
 | [PRODUCT.md](PRODUCT.md) | Product positioning, use cases, scope and non-goals, functional requirements, consistency commitments, risks and success criteria |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Base model, optional modules, the three layers (core / capability package / domain package), authentication layering and hard rules |
 | [ROADMAP.md](ROADMAP.md) | Planned milestones, priorities, dependencies, completion criteria and later evaluations |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Repeatable local acceptance, identity preflight, upgrades and external release gates |
 
 ## Integration and usage
 

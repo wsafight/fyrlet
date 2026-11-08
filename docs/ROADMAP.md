@@ -106,7 +106,7 @@ Interruption or timeout does not cancel a server transaction. External effects r
 
 Provide an example where the host backend derives Fyrlet sessions from its verified login context, covering browser login, renewal and logout. Existing identity systems continue to own passwords, recovery and OAuth authorization services.
 
-Progress: **local example delivered.** Suiji uses OIDC authorization code, PKCE and signed ID tokens, covering renewal, logout, revocation, account changes, cross-tab cleanup and issuer isolation. Tests run the real Fyrlet API and a signed local IdP; external provider deployment and multi-instance session storage remain host responsibilities.
+Progress: **local example and optional PostgreSQL host storage delivered.** Suiji uses OIDC authorization code, PKCE and signed ID tokens, covering renewal, logout, revocation, account changes, cross-tab cleanup and issuer isolation. Shared storage adds encrypted state, atomic login-state consumption, serialized refresh, cross-instance logout and restart recovery. Tests use real local PostgreSQL and a signed test IdP; external provider and production multi-instance acceptance remain pending.
 
 Completion criteria:
 
@@ -118,12 +118,18 @@ Completion criteria:
 
 ## Later evaluations
 
+### Current readiness and performance work
+
+Local follow-up now includes a grouped acceptance runner, HTTPS/OIDC deployment preflight, Prometheus pool/backlog alerts, protected benchmark evidence and repeated rate scans. Optional transactional PostgreSQL invalidations are implemented behind `FYRLET_POSTGRES_INVALIDATION`; the default delivery path is unchanged and disconnected-listener recovery still uses reconciliation. Commands, upgrade steps and external gates are in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+
+Rate scans now also vary user/fanout density and support mixed add/update/archive/restore/delete, paginated history and explicit view confirmation. Keep source fingerprints, resource limits, correctness assertions and at least three repetitions per point; short runs do not establish capacity. Multiplexing still requires evidence that remaining Channel memory is a bottleneck; no VM/GC/NIF rewrite is justified. CI uses the frozen-source acceptance runner; restore and long-run sampling tools are available. External IdP/production shared-store deployment, a new hosted CI run, multi-host faults, 24-hour operation and release-policy approval remain separate gates.
+
 | Direction | Trigger | Questions to resolve first |
 | --- | --- | --- |
 | Multiplex subscription channel | Process memory remains a measured bottleneck after private state is embedded | Independent per-view authorization, ACK, expiry and quotas; compare against the current Channel baseline before adopting a new wire format |
 | Entity and projection caching | At least two real applications repeatedly need cross-view coordination | Explicit entities, versions, field permissions, deletion and reference counting; absence from a list is not global deletion |
 | Offline caches and persistent write queues | A specific offline use case | Expiry, revocation, account changes, conflicts, idempotency retention and storage cleanup |
-| Production deployment improvements | Defined topology, load and recovery targets | Database readiness is delivered; pool and backlog alerts, mixed workloads, multi-host network faults and long-duration stability remain |
+| Production deployment improvements | Defined topology, load and recovery targets | Database readiness and pool/backlog alert rules are delivered; production thresholds, mixed workloads, multi-host faults and long-duration stability remain unverified |
 | Global project quotas | Strict cross-node tenant limits become a requirement | Distributed accounting, consistency cost and limits during failures |
 
 Password accounts, a complete client query engine, frontend build tools and mobile packaging are outside the near-term schedule. Introduce abstractions based on application needs and verification results.

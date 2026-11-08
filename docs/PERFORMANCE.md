@@ -1,8 +1,37 @@
 # Performance comparison
 
-Measurement date: 2026-11-07. This document keeps only the latest same-resource Fyrlet / Meteor comparison and the end-to-end comparison of shared rooms and append streams; for how the optimizations were done, the evidence, and the experiments that were reverted, see [OPTIMIZATIONS.md](OPTIMIZATIONS.md). Earlier rounds of historical reports have been removed, and their conclusions are no longer relied on.
+The Fyrlet/Meteor and shared-stream comparisons below were measured on November 7, 2026. A November 8 current-worktree baseline is recorded separately; it does not update the Meteor comparison. For optimization methods, evidence and reverted experiments see [OPTIMIZATIONS.md](OPTIMIZATIONS.md).
+
+## Current-worktree baseline (November 8, 2026)
+
+Production release, application 1 vCPU / 1 GiB, PostgreSQL 2 vCPU / 2 GiB, disjoint CPU sets, four generator shards, 1,000 users × two observing devices (3,000 connections), 50 records × 128 bytes per user. Each point ran for 20 seconds, three times, reversing rate order on the middle round. Default invalidation mode was used. [Sanitized evidence](bench/readiness-performance-2026-11-08.json) retains the measured source fingerprint and resource settings.
+
+| Offered writes/s | Completed writes per run | Propagation p95 range | Application CPU seconds | Sampled anonymous peak MiB |
+| --- | --- | --- | --- | --- |
+| 100 | 2,000 / 2,000 | 5.86–6.43 ms | 7.20–8.50 | 560–578 |
+| 500 | 9,993–10,000 / 10,000 | 5.43–6.78 ms | 15.03–16.03 | 648–657 |
+
+All six runs passed the stated SLO (p95 ≤250 ms, delivery coverage ≥99%, dropped offered slots ≤1%); observed delivery coverage was 100%, with no OOM. Two 500/s runs dropped 4 and 7 generator slots. These are measured offered-rate points, not a capacity maximum. Only existing-record updates are covered, without explicit view confirmation, automatic retry, React rendering, OIDC traffic or TLS. CPU includes connection setup/warmup. Local correctness checks overlapped part of this baseline; cgroups isolate VM resources, not the physical host. Do not interpret the small latency range as a production promise or compare it directly with earlier Meteor runs.
+
+Reproduce with `GENERATORS=4 SETUP_BUDGET_S=20 node bench/fair/scan.mjs --image fair-fyrlet:current --rates 100,500 --repeats 3 --duration-ms 20000 --label UNIQUE_LABEL` after the setup/build commands in [bench/fair/README.md](../bench/fair/README.md). The measured image predates later report-validation refinements; its exact fingerprint is retained in the evidence.
 
 The raw run data is in `.local/fair/` on the local machine (ignored by version control) and is not committed with the repository. For the comparison conditions and the thresholds for drawing conclusions see [bench/FAIRNESS.md](../bench/FAIRNESS.md).
+
+## Optional PostgreSQL notifications: no demonstrated speedup (November 8, 2026)
+
+Two ABBA rounds compared the same production image with default invalidation (A) and `FYRLET_POSTGRES_INVALIDATION=true` (B), both with durable invalidation off. Each side ran four times at 500 offered writes/s for 20 seconds with the baseline resource limits, 1,000 users and two observing devices. Image/source identity matched in every run; the [sanitized evidence](bench/readiness-performance-2026-11-08.json) retains all eight results, including SLO failures.
+
+| Metric, median (range) | A: default | B: PostgreSQL notifications |
+| --- | --- | --- |
+| Completed writes of 10,000 | 9,941.5 (7,130–9,987) | 9,760 (8,181–10,000) |
+| Propagation p95 ms | 29.5 (8.98–348.90) | 81.1 (6.26–267.39) |
+| Application CPU seconds | 17.9 (17.04–26.24) | 19.9 (18.84–24.53) |
+| Sampled anonymous peak MiB | 681.8 (651.9–723.8) | 692.6 (655.9–724.4) |
+| Runs passing SLO | 3/4 | 2/4 |
+
+All eight runs passed correctness checks, delivered 100% of expected deliveries for completed writes, and had no OOM. The physical host was not isolated: an unrelated high-CPU process was observed during the suite, and both variants varied substantially. **This does not demonstrate a speedup or stable capacity.** The option remains off by default; its transactional notification semantics, rather than a performance gain, are the reason to evaluate it. It is not a durable delivery queue and does not replace reconciliation or `durable_invalidation: true`. See [optimization log, section 17](OPTIMIZATIONS.md#17-optional-transactional-postgresql-notifications-2026-11-08).
+
+Reproduction after building one image: `IMG_A=fair-fyrlet:readiness IMG_B=fair-fyrlet:readiness EXTRA_B='-e FYRLET_POSTGRES_INVALIDATION=true' GENERATORS=4 SETUP_BUDGET_S=20 bash bench/fair/abba.sh 500 2 UNIQUE_LABEL`. An isolated host and longer repetitions are still needed before drawing performance conclusions.
 
 ## Limits of the conclusions
 
@@ -85,7 +114,20 @@ Fyrlet is seeded with `bench/fixtures/seed.exs`; Meteor with `seed()` in `bench/
 
 ## Still not covered
 
-End-to-end add/delete load tests, 24-hour stability, the multi-core group, CPU profiling of Meteor, alignment of the authentication and write-acknowledgement guarantees, and cold-start and disconnect-recovery comparison.
+Sustained mixed-operation saturation tests, 24-hour stability, the multi-core group, CPU profiling of Meteor, alignment of the authentication and write-acknowledgement guarantees, and cold-start and disconnect-recovery comparison. A short Fyrlet-only add/delete and density drill is recorded below, not a capacity result.
+
+## Mixed operations and observer density drill (2026-11-08)
+
+The mixed runner cycles add, update, archive, restore and delete, reads paginated history after each delete, and explicitly confirms every observer after each write. It compares complete records and window refill, rejects duplicates/authorization leakage, and checks final history. Offered rate counts writes, not the additional reads or confirmations; unfinished five-write cycles finish outside the paced window. `scan.mjs` now crosses user, device and rate lists, repeating every point at least three times and reversing point order on alternate rounds.
+
+The measured snapshot used 10 users, 50 initial rows per user, 128-byte text, shared per-user sessions, two generator processes, 20 offered writes/s and a five-second paced window. Application limits were 1 CPU / 1 GiB, PostgreSQL 2 CPU / 2 GiB, swap disabled, with non-overlapping application/database/generator CPU sets. Each run completed 100 writes (20 of each write kind) with 100% observer delivery coverage, no generator drops and no OOM. The one-device and four-device points produced 100 and 400 confirmations per run, respectively.
+
+| Devices per user | Per-round confirmation-inclusive p95 (ms) | Per-round application CPU (s) | Sampled anonymous-memory peak (MiB) |
+| --- | --- | --- | --- |
+| 1 | 13.08 / 11.15 / 12.53 | 0.642 / 0.738 / 0.638 | 119.25–121.50 |
+| 4 | 11.10 / 27.10 / 11.32 | 0.668 / 0.989 / 0.762 | 123.22–128.14 |
+
+Sanitized evidence, exact quantiles, resource limits, image identifiers and the measured source fingerprint are in [mixed-density-2026-11-08.json](bench/mixed-density-2026-11-08.json). Local detailed reports are under `.local/fair/mixed-density-final-20261108.json` and its run directories. CPU includes setup/warmup and cycle completion; memory is a sampled cgroup anonymous peak, not process RSS. An unrelated Node process consumed over 400% physical-host CPU. These **short, low-rate runs validate the harness, not server saturation, speedup or production capacity**. Latency includes explicit confirmation and polling and is not comparable to passive update-only propagation or Meteor. External OIDC, automatic retries, TLS, multi-host faults and 24-hour stability remain outside this drill.
 
 ## Shared rooms and append streams compared end to end (2026-11-07)
 

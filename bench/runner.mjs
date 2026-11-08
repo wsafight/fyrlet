@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { cpus, totalmem, platform, release, arch, hostname } from "node:os";
 import { configuration, help } from "./lib/config.mjs";
 import { runScenario } from "./lib/scenario.mjs";
+import { runMixedScenario } from "./lib/mixed.mjs";
 import { markdown } from "./report.mjs";
 import { schedulerOptions, sourceFingerprint } from "./lib/manifest.mjs";
 
@@ -60,7 +61,7 @@ export async function run(config) {
   for (let repetition = 1; repetition <= config.repeats; repetition++) {
     for (const scenario of config.scenarios) {
       console.log(`${config.target} ${scenario.name} ${repetition}/${config.repeats}: ${scenario.users} users x ${scenario.devices} observers`);
-      const measured = await runScenario(adapter, fixture, config, scenario, repetition);
+      const measured = await (scenario.mode === "mixed" ? runMixedScenario : runScenario)(adapter, fixture, config, scenario, repetition);
       result.results.push(measured);
       await persist();
       const latency = measured.propagationMs.p95 === null ? "n/a" : `${measured.propagationMs.p95.toFixed(2)}ms`;

@@ -1,0 +1,35 @@
+groups:
+  - name: fyrlet
+    rules:
+      - alert: FyrletDatabasePoolWait
+        expr: histogram_quantile(0.95, sum by (le, job, instance) (rate(fyrlet_db_queue_seconds_bucket[5m]))) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database pool wait exceeds 50 ms at p95
+          description: Check database query latency, connection limits and application load before increasing the pool.
+      - alert: FyrletPendingRunAge
+        expr: fyrlet_queue_age_seconds > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Pending runs have waited more than two minutes
+          description: Check worker availability, project concurrency limits and database readiness.
+      - alert: FyrletUnresolvedEffects
+        expr: fyrlet_effects_unresolved > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Effects require reconciliation
+          description: Inspect the trusted Ops status and reconcile the original effect before retrying external work.
+      - alert: FyrletOpsEvaluationStale
+        expr: time() - fyrlet_ops_evaluated_at_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ops status has stopped updating
+          description: Check the FyrletOps ticker and database access. Install the Ops plugin to enable these gauges.

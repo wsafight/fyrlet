@@ -4,14 +4,20 @@ import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSessionService } from "@fyrlet/client/server";
 import { createAuth } from "./auth.mjs";
+import { storeFromEnvironment } from "./store.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.WEB_PORT || 5173);
 const publicOrigin = process.env.PUBLIC_ORIGIN || `http://127.0.0.1:${port}`;
 const endpoint = process.env.FYRLET_ENDPOINT || "http://127.0.0.1:4000";
-const providers = JSON.parse(process.env.OIDC_PROVIDERS || "[]");
-const auth = await createAuth({ publicOrigin, endpoint, projectId: process.env.FYRLET_PROJECT_ID, providers,
-  allowLocal: process.env.ALLOW_INSECURE_OIDC === "1", sessions: createSessionService({ endpoint, serviceKey: process.env.FYRLET_SERVICE_KEY || "" }) });
+let store;
+let auth;
+try {
+  const providers = JSON.parse(process.env.OIDC_PROVIDERS || "[]");
+  store = await storeFromEnvironment(process.env);
+  auth = await createAuth({ publicOrigin, endpoint, projectId: process.env.FYRLET_PROJECT_ID, providers, store,
+    allowLocal: process.env.ALLOW_INSECURE_OIDC === "1", sessions: createSessionService({ endpoint, serviceKey: process.env.FYRLET_SERVICE_KEY || "" }) });
+} catch { await store?.close(); throw new Error("Host authentication startup failed; verify identity and storage configuration"); }
 const production = process.argv.includes("--production");
 let vite;
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
