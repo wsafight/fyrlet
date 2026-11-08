@@ -47,4 +47,45 @@ defmodule Fyrlet.ViewTest do
 
     assert_same_as_fresh(View.reset(previous, data, %{}), data)
   end
+
+  test "encode assembles exactly the JSON of the data, in every view shape" do
+    for data <- [
+          [],
+          [record(1, "a"), record(2, "bb")],
+          %{"not" => "a list"},
+          42
+        ] do
+      view = View.new(data)
+      assert View.encode(view) == Jason.encode!(data)
+      assert byte_size(View.encode(view)) == view.bytes
+    end
+
+    previous = View.new([record(1, "a"), record(2, "bb")])
+    data = [record(2, "bb"), record(3, "ccc")]
+    reset = View.reset(previous, data, %{})
+    assert View.encode(reset) == Jason.encode!(data)
+
+    # Unchanged records reuse the previous binary; changed ones are re-encoded.
+    assert reset.encoded[record(2, "bb")["id"]] == previous.encoded[record(2, "bb")["id"]]
+
+    replaced = View.replace(previous, record(1, "a")["id"], record(1, "changed"), 100)
+    assert View.encode(replaced) == Jason.encode!(View.data(replaced))
+  end
+
+  test "patch diffs against the previous view only when asked" do
+    previous = View.new([record(1, "a"), record(2, "bb")])
+    data = [record(1, "a"), record(2, "changed")]
+    reset = View.reset(previous, data, %{})
+
+    # No diff is computed by reset itself.
+    assert reset.patch == nil
+    assert {:ok, expected} = Fyrlet.Subscriptions.Delta.diff(View.data(previous), data)
+    assert View.patch(reset) == expected
+
+    # A fresh view has nothing to diff against; a replaced one keeps its small patch.
+    assert View.patch(View.new(data)) == nil
+    replaced = View.replace(previous, record(1, "a")["id"], record(1, "zzz"), 50)
+    assert View.patch(replaced) == replaced.patch
+    assert replaced.patch != nil
+  end
 end

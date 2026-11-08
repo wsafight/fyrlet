@@ -293,8 +293,21 @@ defmodule Fyrlet.Subscriptions.Observation do
   end
 
   defp deliver(state, previous_revision, changed) do
-    patch = if changed and state.view.patch != nil, do: Jason.encode!(state.view.patch)
-    patch = if patch && byte_size(patch) + 96 < state.view.bytes, do: patch
+    # The diff is only worth its CPU when at least one member can consume a delta.
+    patch =
+      if changed and
+           Enum.any?(state.clients, fn {_channel, client} ->
+             client.delivery == "delta-v1"
+           end) do
+        case View.patch(state.view) do
+          nil ->
+            nil
+
+          patch ->
+            encoded = Jason.encode!(patch)
+            if byte_size(encoded) + 96 < state.view.bytes, do: encoded
+        end
+      end
 
     :telemetry.execute([:fyrlet, :scope, :shared], %{members: map_size(state.clients)}, %{
       name: state.subscription.name,
@@ -340,7 +353,7 @@ defmodule Fyrlet.Subscriptions.Observation do
 
   defp encode_snapshot(%{encoded: nil} = state) do
     started = System.monotonic_time()
-    encoded = Jason.encode!(View.data(state.view))
+    encoded = View.encode(state.view)
 
     :telemetry.execute(
       [:fyrlet, :subscription, :serialize],
