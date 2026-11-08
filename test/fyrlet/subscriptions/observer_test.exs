@@ -78,15 +78,17 @@ defmodule Fyrlet.ObserverTest do
   end
 
   defp assert_hibernating(observer, attempts \\ 100) do
-    if Process.info(observer, :current_function) ==
-         {:current_function, {:gen_server, :loop_hibernate, 4}} do
-      :ok
-    else
-      assert attempts > 0,
-             inspect(Process.info(observer, [:current_function, :status, :message_queue_len]))
+    case Process.info(observer, :current_function) do
+      {:current_function, function}
+      when function in [{:erlang, :hibernate, 3}, {:gen_server, :loop_hibernate, 4}] ->
+        :ok
 
-      Process.sleep(10)
-      assert_hibernating(observer, attempts - 1)
+      _state ->
+        assert attempts > 0,
+               inspect(Process.info(observer, [:current_function, :status, :message_queue_len]))
+
+        Process.sleep(10)
+        assert_hibernating(observer, attempts - 1)
     end
   end
 
