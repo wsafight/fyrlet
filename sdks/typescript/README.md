@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-The SDK provides business calls and realtime subscriptions without depending on React, browser storage or cookie authentication. The package is currently private, builds into `dist`, and can be installed locally after `npm pack`. It has not been published to npm.
+The SDK provides business calls and realtime subscriptions without depending on React, browser storage or cookie authentication. `@fyrlet/client` is in the initial formal release scope, builds into `dist`, and can be installed locally after `npm pack`; it has not yet been published to npm.
 
 The implementation lives in `sdks/typescript/` and serves JavaScript and TypeScript applications. See the [SDK overview](../README.md) for the language layout and requirements for new SDKs, the independent [React adapter](../react/README.md), and the [Suiji with OIDC](../../examples/inbox-react/README.md). React Native runtime integration also belongs to the TypeScript ecosystem. For a complete server-to-browser walkthrough, start with the [integration tutorial](../../docs/TUTORIAL.md).
 
@@ -210,7 +210,7 @@ room.unsubscribe();
 
 `state.data` maps each subject ID to `{ ref, data, joined_at }` entries; two devices for the same user produce two entries. `update()` replaces this connection's metadata. `self()` returns your subject ID after joining, and `unsubscribe()` leaves the room.
 
-- Room names, parameters and meta are generated from the contract's `presence` section in the [protocol](../../docs/PROTOCOL.md). `subscribePresence` and `update` infer these types, including roster meta; invalid names and inputs are rejected during typechecking. Legacy contracts without a presence section keep the string-based API. Optional `kind` fields preserve legacy operation contracts; generated kinds also restrict `startRun` names. Runtime retry policy requires the separately exported `operationMetadata` value.
+- Room names, parameters and meta are generated from the contract's required `presence` section in the [protocol](../../docs/PROTOCOL.md); use an empty object when there are no rooms. `subscribePresence` and `update` infer these types, including roster meta; invalid names and inputs are rejected during typechecking. Every operation must declare its `kind`, which also restricts `startRun` names. Contracts missing either declaration fail typechecking. Runtime retry policy requires the separately exported `operationMetadata` value.
 - Membership updates by `ref`; repeated diffs are harmless. Reconnecting rejoins with the most recently updated metadata and replaces the roster.
 - Updates are rate-limited. Excessive updates return retryable `LIMIT_EXCEEDED`, invalid metadata returns `VALIDATION_FAILED`, and an unready room returns `NOT_READY`.
 - Anonymous sessions cannot join. Members can see one another's subject IDs and metadata.

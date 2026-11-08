@@ -54,6 +54,9 @@ Fyrlet is a realtime application framework built on Phoenix: you define business
 | --- | --- |
 | [DATABASE.md](DATABASE.md) | Table design: conventions, the role of constraints and indexes, cleanup and retention, conventions for host tables |
 | [OPERATIONS.md](OPERATIONS.md) | Operations commands, data retention and capacity, project quotas, telemetry and Prometheus metrics, two-node deployment |
+| [STAGING.md](STAGING.md) | Opt-in real staging/OIDC browser and SDK acceptance, private configuration and result boundaries |
+| [MULTIHOST.md](MULTIHOST.md) | Operator-controlled physical multi-host fault drills, topology attestation and control hooks |
+| [STABILITY.md](STABILITY.md) | Same-host long-run sampling, explicit resource/backlog thresholds and 24-hour evidence limits |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Diagnose startup, origins, authentication, subscriptions, conflicts and external Effects |
 | [PERFORMANCE.md](PERFORMANCE.md) | Same-resource comparison with Meteor, single-core profiling, shared rooms and append streams compared end to end |
 | [OPTIMIZATIONS.md](OPTIMIZATIONS.md) | Optimization log: what was done, evidence, experiments that were reverted, and directions decided against |

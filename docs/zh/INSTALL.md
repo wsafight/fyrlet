@@ -92,7 +92,7 @@ Fyrlet 与宿主共用一个 `Fyrlet.Repo`。这是有意的：业务写入、�
 | 契约 | 导出服务端能提供的全部条目，并列出已启用的能力；依赖能力的条目只在对应能力启用时出现 |
 | 能力 | 连接在加入时可声明 `capabilities`（`{名称: 版本}` 或名称数组），启用的是与服务端的交集，版本取较小者；未声明而使用依赖能力的订阅会得到 `UNSUPPORTED_CAPABILITY`（HTTP 400） |
 | 定义 | 只实现基础回调的定义可以注册；其余回调只对声明了对应种类的操作要求 |
-| 数据库 | 迁移只追加；回退不得丢弃进行中的执行事实 |
+| 数据库 | 首次发布前核心采用一份合并基线，旧开发／测试库直接重建；发布后迁移只追加，回退不得丢弃进行中的执行事实 |
 
 ### 自动化验证覆盖
 
@@ -116,9 +116,9 @@ bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-打包先运行 client 与 React 的类型检查和单元测试，生成 `.local/releases/fyrlet-source-0.1.0.tar.gz`、`fyrlet-client-0.1.0.tgz`、`fyrlet-react-0.1.0.tgz` 及带大小、SHA256 的 `manifest.json`。源码包包含核心、领域应用、能力包、文档与验证脚本，排除依赖、构建缓存及本地凭证。安装验收解包到独立临时目录，复用已下载的 Elixir 依赖与 TypeScript 工具链，再运行宿主测试；独立 npm consumer 从两份 `.tgz` 安装，并验证 React 适配包导入。这验证了分发内容与路径依赖，不等于离线安装或注册表发布。
+打包会先删除旧 SDK 构建输出，运行 client 与 React 的类型检查和单元测试，再生成四份归档：`.local/releases/fyrlet-source-0.1.0.tar.gz`、`fyrlet-0.1.0.tar`（Hex）、`fyrlet-client-0.1.0.tgz`、`fyrlet-react-0.1.0.tgz`，以及记录精确提交、源码指纹、大小和 SHA-256 的 `manifest.json`。源码包包含核心、领域应用、能力包、文档与验证脚本，排除依赖、构建缓存及本地凭证。安装验收拒绝不安全的归档条目，在临时消费者中编译并加载解包后的 Hex 包，并在仓库外运行源码归档中的 Inbox／Agent 测试。独立 npm consumer 使用本地打包的第三方依赖，在不访问注册表网络的情况下安装两份 `.tgz`，验证导入并以 `skipLibCheck: false` 严格编译 TypeScript 消费者；Elixir 消费者复用已下载依赖。这些是仓库外安装检查，不等于注册表发布。
 
-将源码包解到固定目录后，宿主使用 `{:fyrlet, path: "/固定目录"}`；SDK 使用 `npm install /固定目录/fyrlet-client-0.1.0.tgz`。`private: true` 保留，Hex/npm 发布及许可证决策仍需维护者完成。
+将源码包解到固定目录后，宿主使用 `{:fyrlet, path: "/固定目录"}`；SDK 使用 `npm install /固定目录/fyrlet-client-0.1.0.tgz`。已选择 Apache-2.0 与公开的正式包元数据；实际 Hex/npm 发布、包名所有权及注册表凭证仍是外部维护者门槛。
 
 ## 示例应用
 

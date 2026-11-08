@@ -92,7 +92,7 @@ Internal (do not depend on them directly): `Fyrlet.Subscriptions.Observer`, `Fyr
 | Contract | Exports every entry the server can provide and lists the enabled capabilities; entries that depend on a capability appear only when that capability is enabled |
 | Capabilities | A connection may declare `capabilities` when joining (`{name: version}` or an array of names); what is enabled is the intersection with the server, with the lower version taken; a subscription that uses a dependent capability without declaring it gets `UNSUPPORTED_CAPABILITY` (HTTP 400) |
 | Definitions | A definition that implements only the base callbacks can be registered; the other callbacks are required only for operations that declare the corresponding kind |
-| Database | Migrations are append-only; a revert must not discard in-progress execution facts |
+| Database | Before the first release the core is one consolidated baseline and older development/test databases are recreated; releases then use additive migrations, and a revert must not discard in-progress execution facts |
 
 ### Automated verification coverage
 
@@ -116,9 +116,9 @@ bash scripts/package.sh
 bash scripts/install_smoke.sh
 ```
 
-Packaging first runs the client and React type checks and unit tests, then produces `.local/releases/fyrlet-source-0.1.0.tar.gz`, `fyrlet-client-0.1.0.tgz`, `fyrlet-react-0.1.0.tgz` and a `manifest.json` with sizes and SHA256. The source package contains the core, domain applications, capability packages, documentation and verification scripts, and excludes dependencies, build caches and local credentials. Installation acceptance unpacks into a separate temporary directory, reuses the downloaded Elixir dependencies and TypeScript toolchain, and runs the host tests; a separate npm consumer installs both `.tgz` files with React and verifies imports. This verifies distributed contents and path dependencies, without claiming offline installation or registry publication.
+Packaging removes stale SDK build output, runs the client and React type checks and unit tests, then produces four archives: `.local/releases/fyrlet-source-0.1.0.tar.gz`, `fyrlet-0.1.0.tar` (Hex), `fyrlet-client-0.1.0.tgz` and `fyrlet-react-0.1.0.tgz`, plus a `manifest.json` with the exact revision, source fingerprint, sizes and SHA-256. The source package contains the core, domain applications, capability packages, documentation and verification scripts, and excludes dependencies, build caches and local credentials. Installation acceptance rejects unsafe archive entries, compiles and loads the unpacked Hex package in a temporary consumer, and runs source-archive Inbox/Agent tests outside the repository. A separate npm consumer installs both `.tgz` files without registry network access by using locally packed third-party dependencies, verifies imports, and strictly compiles TypeScript consumers with `skipLibCheck: false`; the Elixir consumer reuses already downloaded dependencies. These are repository-external installation checks, not registry publication.
 
-After unpacking the source package into a fixed directory, the host uses `{:fyrlet, path: "/path/to/fyrlet"}`; the SDK uses `npm install /path/to/fyrlet/fyrlet-client-0.1.0.tgz`. `private: true` is kept; the Hex/npm release and the licence decision still have to be made by the maintainers.
+After unpacking the source package into a fixed directory, the host uses `{:fyrlet, path: "/path/to/fyrlet"}`; the SDK uses `npm install /path/to/fyrlet/fyrlet-client-0.1.0.tgz`. Apache-2.0 and public formal package metadata are selected. Actual Hex/npm publication, package-name ownership and registry credentials remain external maintainer gates.
 
 ## Example applications
 

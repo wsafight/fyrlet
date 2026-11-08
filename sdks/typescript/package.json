@@ -1,12 +1,24 @@
 {
   "name": "@fyrlet/client",
   "version": "0.1.0",
-  "private": true,
   "description": "Fyrlet client for typed operations and recoverable Phoenix subscriptions",
+  "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wsafight/fyrlet.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://github.com/wsafight/fyrlet/tree/main/sdks/typescript#readme",
+  "bugs": "https://github.com/wsafight/fyrlet/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
   ],
   "exports": {
     ".": {

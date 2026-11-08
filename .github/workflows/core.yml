@@ -45,6 +45,10 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Test the exact PR head rather than a synthetic merge commit so the
+          # acceptance fingerprint and release preflight refer to the same tree.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: ${{ matrix.elixir }}
@@ -92,7 +96,7 @@ jobs:
       - name: Run frozen-source acceptance
         run: >-
           node scripts/acceptance.mjs
-          --groups core,client,host,bench,contract,integration,restore,browser
+          --groups core,client,host,bench,contract,integration,restore,browser,package
           --out .local/readiness/ci
       - name: Validate Prometheus alert rules
         run: >-
