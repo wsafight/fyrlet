@@ -31,6 +31,11 @@ defmodule FyrletWebhooks do
   def version, do: "0.1.0"
   @impl true
   def capabilities, do: %{"webhooks" => 1}
+
+  # Senders authenticate with the per-source HMAC signature, not a Fyrlet credential;
+  # the receiver verifies it (and the timestamp) before anything is recorded.
+  @impl true
+  def public_paths, do: ["*"]
   @impl true
   def children(_config), do: [FyrletWebhooks.Pruner]
   @impl true

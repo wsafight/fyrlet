@@ -69,16 +69,64 @@ defmodule Fyrlet.Plugins do
     for %{module: module} <- active(), child <- call(module, :children, [[]], []), do: child
   end
 
-  @doc "Routes `/api/v1/plugins/<name>/...`. Unknown, closed or failed plugins answer 404."
+  @doc """
+  Routes `/api/v1/plugins/<name>/...`. Unknown, closed or failed plugins answer 404.
+
+  Authentication is enforced here, not left to each plugin: only paths listed in the plugin's
+  `public_paths/0` (segments, `*` matches one segment) are served anonymously. Everything else
+  needs a valid service key or user session before the plugin's `call/2` runs, so a plugin
+  that forgets to check credentials is still closed.
+  """
   def dispatch(conn, name, rest) do
     case Enum.find(active(), &(&1.module.name() == name)) do
       nil ->
         FyrletWeb.Response.error(conn, Error.not_found())
 
       %{module: module} ->
-        if function_exported?(module, :call, 2),
-          do: module.call(conn, rest),
-          else: FyrletWeb.Response.error(conn, Error.not_found())
+        cond do
+          not function_exported?(module, :call, 2) ->
+            FyrletWeb.Response.error(conn, Error.not_found())
+
+          public_path?(module, rest) or authenticated?(conn) ->
+            module.call(conn, rest)
+
+          true ->
+            FyrletWeb.Response.error(conn, Error.unauthorized())
+        end
+    end
+  end
+
+  defp public_path?(module, rest) do
+    module
+    |> call(:public_paths, [])
+    |> Enum.any?(fn pattern ->
+      segments = String.split(pattern, "/", trim: true)
+
+      length(segments) == length(rest) and
+        Enum.zip(segments, rest)
+        |> Enum.all?(fn {segment, part} ->
+          segment == "*" or segment == part
+        end)
+    end)
+  end
+
+  defp authenticated?(conn) do
+    with ["Bearer " <> token] <- Plug.Conn.get_req_header(conn, "authorization") do
+      case Fyrlet.Auth.authenticate_key(token) do
+        {:ok, _key} -> true
+        {:error, _reason} -> session?(conn, token)
+      end
+    else
+      _no_bearer -> false
+    end
+  end
+
+  defp session?(conn, token) do
+    with [project_id] <- Plug.Conn.get_req_header(conn, "x-project-id"),
+         {:ok, _actor} <- Fyrlet.Auth.authenticate(token, project_id) do
+      true
+    else
+      _no_session -> false
     end
   end
 

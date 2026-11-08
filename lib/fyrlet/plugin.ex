@@ -47,7 +47,14 @@ defmodule Fyrlet.Plugin do
   """
   @callback call(Plug.Conn.t(), [String.t()]) :: Plug.Conn.t()
 
-  @doc "Paths (relative to the plugin's prefix) that may be served without credentials. Default none."
+  @doc """
+  Paths (relative to the plugin's prefix) served without credentials. Default none.
+
+  `Fyrlet.Plugins.dispatch/3` enforces this: every other path requires a valid service key
+  or user session before `call/2` runs. Each entry is a relative path such as `"ping"` or
+  `"events/recent"`; the segment `*` matches any single segment. List a path only when the
+  plugin authenticates it another way (for example the webhooks HMAC signature).
+  """
   @callback public_paths() :: [String.t()]
 
   @optional_callbacks requires: 0,
