@@ -10,11 +10,41 @@ defmodule Fyrlet.Vault do
   are stored as they are. A value encrypted under a key that is no longer configured cannot be
   read: that fails loudly instead of returning something wrong.
 
+  A configuration that is present but unusable (no `:current`, an unknown or short key) is not
+  "no vault": `validate!/0` refuses to boot and `encrypt/1` raises, so a typo can never
+  silently downgrade data to plaintext. Corrupt or non-base64 ciphertext decrypts to `:error`
+  instead of raising, so one damaged row cannot crash its reader.
+
   Hashes used for de-duplication (`payload_hash`, request hashes) are computed from the
   plaintext before storing and are not encrypted, so de-duplication keeps working.
   """
 
   @aad "fyrlet.v1"
+
+  @doc "Raises at boot when a vault is configured but unusable; nil config means plaintext."
+  def validate! do
+    case Application.get_env(:fyrlet, :vault) do
+      nil ->
+        :ok
+
+      config when is_list(config) ->
+        keys = Keyword.get(config, :keys)
+
+        unless is_map(keys) and
+                 Enum.all?(keys, fn {id, key} ->
+                   is_binary(id) and is_binary(key) and byte_size(key) == 32
+                 end),
+               do: raise(ArgumentError, "Vault :keys must map id strings to 32-byte binary keys")
+
+        unless is_binary(config[:current]) and is_map_key(keys, config[:current]),
+          do: raise(ArgumentError, "Vault :current must name a key present in :keys")
+
+        :ok
+
+      other ->
+        raise ArgumentError, "Vault config must be a keyword list, got: #{inspect(other)}"
+    end
+  end
 
   def enabled?, do: current() != nil
 
@@ -35,7 +65,8 @@ defmodule Fyrlet.Vault do
 
   def decrypt(%{"__enc" => 1, "k" => id, "d" => data}) do
     with {:ok, key} <- key(id),
-         <<iv::binary-12, tag::binary-16, cipher::binary>> <- Base.decode64!(data),
+         {:ok, decoded} <- Base.decode64(data),
+         <<iv::binary-12, tag::binary-16, cipher::binary>> <- decoded,
          plain when is_binary(plain) <-
            :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, cipher, @aad, tag, false) do
       {:ok, Jason.decode!(plain)}
@@ -47,12 +78,24 @@ defmodule Fyrlet.Vault do
   def decrypt(%{} = value), do: {:ok, value}
 
   defp current do
-    with config when is_list(config) <- Application.get_env(:fyrlet, :vault),
-         id when is_binary(id) <- config[:current],
-         {:ok, key} <- key(id) do
-      {id, key}
-    else
-      _none -> nil
+    case Application.get_env(:fyrlet, :vault) do
+      nil ->
+        nil
+
+      config when is_list(config) ->
+        with id when is_binary(id) <- config[:current],
+             {:ok, key} <- key(id) do
+          {id, key}
+        else
+          _broken ->
+            raise ArgumentError,
+                  "Fyrlet vault is configured but unusable: :current must name a 32-byte " <>
+                    "key in :keys. Refusing to store plaintext silently; fix the config " <>
+                    "or remove :vault entirely for plaintext storage."
+        end
+
+      other ->
+        raise ArgumentError, "Vault config must be a keyword list, got: #{inspect(other)}"
     end
   end
 

@@ -117,7 +117,7 @@ defmodule Fyrlet.RunsPrivacyTest do
       assert {:ok, %{"x" => 1}} = Vault.decrypt(%{"x" => 1})
 
       Application.put_env(:fyrlet, :vault, keys: %{"short" => "tiny"}, current: "short")
-      refute Vault.enabled?()
+      assert_raise ArgumentError, fn -> Vault.enabled?() end
     end
   end
 

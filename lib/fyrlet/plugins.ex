@@ -261,7 +261,15 @@ defmodule Fyrlet.Plugins do
       do: apply(module, function, arguments),
       else: default
   rescue
-    _exception -> default
+    exception ->
+      require Logger
+
+      Logger.warning(
+        "Plugin #{inspect(module)}.#{function} raised, using its fail-closed default: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      default
   end
 
   def core_tables, do: @core_tables
