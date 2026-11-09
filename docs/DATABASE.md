@@ -49,7 +49,7 @@ projects
 ## Identity and sessions
 
 - **`subjects`**: maps an external identity to an internal subject; `(project_id, issuer, external_id)` is unique. A client cannot choose its own subject.
-- **`sessions`**: `kind` is `user` or `anonymous`. An anonymous session has no service key, so `service_key_id` may be null. `expires_at` marks expiry and `revoked_at` marks revocation; `sessions_anonymous_index` (anonymous sessions only) supports the issue rate and active-count statistics of the anonymous entry point. A write transaction takes a `FOR SHARE` lock on the session and revocation takes an update lock, so after a revocation returns, the old session can no longer commit writes (see [AUTH.md](AUTH.md#authorization-and-isolation)).
+- **`sessions`**: `kind` is `user` or `anonymous`. An anonymous session has no service key, so `service_key_id` may be null. `expires_at` marks expiry and `revoked_at` marks revocation; `sessions_anonymous_index` (anonymous sessions only, on `inserted_at`) supports the issue-rate count and `sessions_anonymous_active_index` (anonymous and unrevoked, on `expires_at`) supports the active-count of the anonymous entry point. A write transaction takes a `FOR SHARE` lock on the session and revocation takes an update lock, so after a revocation returns, the old session can no longer commit writes (see [AUTH.md](AUTH.md#authorization-and-isolation)).
 - **`service_keys`**: `revoked_at` only stops new sessions from being issued; it does not affect existing sessions.
 
 ## Idempotency

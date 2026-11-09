@@ -129,7 +129,9 @@ defmodule Fyrlet.RegistryTest do
   end
 
   test "fetch/2 requires a binary name" do
-    assert_raise FunctionClauseError, fn -> Registry.fetch("operations", :records_add) end
+    assert_raise FunctionClauseError, fn ->
+      apply(Registry, :fetch, ["operations", :records_add])
+    end
   end
 
   test "export/0 merges operations and subscriptions with protocol metadata" do

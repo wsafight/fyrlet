@@ -91,32 +91,45 @@ defmodule Fyrlet.Features.Stream do
       count = length(encoded)
       now = Auth.now()
 
-      {1, [%Head{head: head, epoch: epoch}]} =
-        Repo.insert_all(
-          Head,
-          [%{project_id: project_id, name: name, head: count, updated_at: now}],
-          on_conflict: [inc: [head: count], set: [updated_at: now]],
-          conflict_target: [:project_id, :name],
-          returning: [:head, :epoch]
-        )
-
-      first = head - count + 1
-
-      rows =
-        for {{data, bytes}, offset} <- Enum.with_index(encoded) do
-          %{
-            project_id: project_id,
-            stream: name,
-            pos: first + offset,
-            data: data,
-            bytes: bytes,
-            inserted_at: now
-          }
-        end
-
-      {^count, _} = Repo.insert_all(Entry, rows)
+      {head, epoch} = insert(project_id, name, count, now, encoded)
       {:ok, cursor(epoch, head)}
     end
+  end
+
+  # One statement does the head upsert and the entry inserts: the positions depend on the
+  # head the upsert just reserved, so a CTE passes it through instead of a second round
+  # trip. The head row's lock is held by the upsert until the caller's transaction commits,
+  # exactly as before.
+  @append_sql """
+  WITH h AS (
+    INSERT INTO fyrlet_streams AS s (project_id, name, head, updated_at)
+    VALUES ($1::uuid, $2, $3, $4)
+    ON CONFLICT (project_id, name)
+    DO UPDATE SET head = s.head + EXCLUDED.head, updated_at = EXCLUDED.updated_at
+    RETURNING s.head, s.epoch
+  ),
+  e AS (
+    INSERT INTO fyrlet_stream_entries (project_id, stream, pos, data, bytes, inserted_at)
+    SELECT $1, $2, (SELECT head FROM h) - $3 + i.n,
+           i.item -> 'data', (i.item ->> 'bytes')::integer, $4
+    FROM jsonb_array_elements(CAST($5 AS text)::jsonb) WITH ORDINALITY AS i(item, n)
+  )
+  SELECT head, epoch FROM h
+  """
+
+  defp insert(project_id, name, count, now, encoded) do
+    rows = for {data, bytes} <- encoded, do: %{"data" => data, "bytes" => bytes}
+
+    %{rows: [[head, epoch]]} =
+      Repo.query!(@append_sql, [
+        Ecto.UUID.dump!(project_id),
+        name,
+        count,
+        DateTime.to_naive(now),
+        Jason.encode!(rows)
+      ])
+
+    {head, epoch}
   end
 
   @doc """
@@ -268,8 +281,14 @@ defmodule Fyrlet.Features.Stream do
     rows = entries(project_id, name, position, upper)
     rows = take_within(rows, batch_bytes)
 
-    if rows != [] and
-         Enum.map(rows, & &1.pos) == Enum.to_list((position + 1)..(position + length(rows))) do
+    # Entries must continue the cursor with no hole: each row's pos is the previous one + 1.
+    contiguous? =
+      rows != [] and
+        rows
+        |> Enum.with_index()
+        |> Enum.all?(fn {row, index} -> row.pos == position + index + 1 end)
+
+    if contiguous? do
       {:ok, cursor(epoch, position), cursor(epoch, position + length(rows)),
        Enum.map(rows, & &1.data), position + length(rows) < head}
     else

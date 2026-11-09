@@ -417,3 +417,21 @@ CPU 与内存的范围不重叠；P95 与完成写入的范围有重叠，只能
 核心 Elixir 725 个测试、Inbox 18 个测试、TypeScript 305 个测试、React 21 个测试通过；两个 SDK 的 typecheck 和 `mix quality` 通过。回归覆盖私有/共享 ACK、ready 成员、撤销、慢 delta、静态 Step 默认值与加密输入、不同 cursor 并行、非共享空结果、快照不保留、参数复制及查询身份。
 
 Append 的 O(W) 窗口记账、结构 delta、`applyAppend` 和 Presence roster 仍有结构共享空间，但本轮没有新的 CPU/GC/分配测量依据，未改写这些数据结构。NIF、BEAM GC/分配器调参、增大连接池和另一套通用 View TTL 缓存同样没有新增依据，不进入本轮改动。
+
+## 19. Append 写入合并、窗口记账与一次回退的分发改动（2026-11-09）
+
+**Stream append 两条语句合并为一条**（`Features.Stream.append/3`）。head upsert（其行锁串行化位置分配）与条目插入改为一条 CTE：`INSERT ... ON CONFLICT` 返回新 head 与 epoch，条目在同一语句内取号。事务边界、锁时长、位置语义不变；每次 append 语句数 2 → 1。由 `test/fyrlet/features/stream_test.exs`（11 项）和构造正确性验证，不做延迟结论。原始 SQL 备忘：`Repo.query!/2` 把 Elixir 二进制按推断类型发送，传给 `jsonb_array_elements` 的 JSON 文档必须走 `CAST($n AS text)::jsonb`——直接绑 `$n::jsonb` 到达时是一个"装着 JSON 的 JSON 字符串"，不是数组。
+
+**Append Channel 窗口记账**（`FyrletWeb.AppendChannel`）。`sent_bytes` 改为在 `track`/`ack` 处累计，不再每批 `Enum.sum`，溢出检查变为每推送 O(1)；ack 路径在同一遍遍历里完成字节扣除。
+
+**Stream 批次连续性检查**（`Features.Stream.read_batch/6`）。孔洞检查原来把 `Enum.map(rows, & &1.pos)` 与物化的 `Enum.to_list(range)` 比较；现改为 `Enum.with_index` 单遍遍历、零分配，谓词语义不变。
+
+**匿名会话活动数索引**（迁移 + `Features.Anonymous.check_limits!/2`）。签发匿名会话时按 `expires_at > now` 统计项目内未过期匿名会话，原匿名索引建在 `inserted_at` 上，该计数要扫项目全部已过期行。新增部分索引 `sessions_anonymous_active_index (project_id, expires_at) WHERE kind = 'anonymous' AND revoked_at IS NULL`。同一预发布基线迁移文件；`DATABASE.md` 中英两份已更新。
+
+**TypeScript SDK 移除 socket 调用的双重序列化**（`sdks/typescript/src/client.ts`）。`socketCall` 收到已 stringify 的 body 后 `JSON.parse(body).input` 再交给 `channel.push` 重新 stringify。`mutate`/`execute`/`lookup`/`operation` 现直接传原 `input`，每次 socket 调用省一次 parse 加一次 stringify；`recover` 同路径。SDK 305 个测试通过。
+
+**已回退：`Observation.deliver/4` 只检查可投递成员。** 按 readiness/revision 先筛收件人再做 `permitted` 可使 unchanged 刷新零检查——但 `test/fyrlet_web/shared_scope_test.exs`（"ordinary invalidation revokes membership even when the shared data is unchanged"）捕获了语义变化：失效广播同时是成员资格撤销信号，每次刷新必须重查全部成员，与是否投递无关。该重排会让被移除的成员留到下一次 `:reconcile`（最长 `reconciliation_interval`）才被关闭。已完整回退，无净变化。
+
+**质量项。** 新增 `dialyxir`（`plt_add_apps: [:mix]`，使 `lib/mix/tasks` 能对 `Mix.Task` 做分析）。两个测试文件的编译期 warning 已消除：`conformance_plugin_test.exs` 的 `NoVersion` 不再声明 `@behaviour`（shape 检查看导出函数而非 behaviour 声明）；两处 `assert_raise FunctionClauseError` 改用 `apply/3`，既保持 typespec 干净又断言同样的运行时拒绝。`mix test --warnings-as-errors` 下 `test/bench/*.exs` 的 "load filters" warning 是有意命名约定（刻意不叫 `*_test.exs`），保留。
+
+**仍未变**（与第 12 节一致）：每次推送前的逐成员会话/授权/成员资格检查，以及每次 `:reconcile` 的全量重载，是正确性保证而非疏漏；改动它们需要显式的撤销延迟权衡与测量，或写路径在每次提交时维护一个持久化的 scope 水位。

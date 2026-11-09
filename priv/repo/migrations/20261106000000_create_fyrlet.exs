@@ -81,6 +81,13 @@ defmodule Fyrlet.Repo.Migrations.CreateFyrlet do
              name: :sessions_anonymous_index
            )
 
+    # Anonymous.check_limits!/2 counts the project's unexpired anonymous sessions on every
+    # issue; inserted_at does not help that filter.
+    create index(:sessions, [:project_id, :expires_at],
+             where: "kind = 'anonymous' AND revoked_at IS NULL",
+             name: :sessions_anonymous_active_index
+           )
+
     create table(:idempotency_results, primary_key: false) do
       add :id, :binary_id, primary_key: true
 

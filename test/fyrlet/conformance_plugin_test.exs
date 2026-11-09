@@ -14,8 +14,10 @@ defmodule Fyrlet.ConformancePluginTest do
     :ok
   end
 
+  # The deliberately missing `version/0` is what the shape check must report; not declaring
+  # `@behaviour` keeps that a property of the fixture rather than a compile warning here
+  # (`Fyrlet.Conformance.Plugin` checks exported functions, not the behaviour declaration).
   defmodule NoVersion do
-    @behaviour Fyrlet.Plugin
     def name, do: "noversion"
   end
 
