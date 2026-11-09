@@ -94,7 +94,9 @@ defmodule Fyrlet.AuthTest do
       assert_raise FunctionClauseError, fn -> Auth.create_project(name) end
     end
 
-    assert_raise FunctionClauseError, fn -> Auth.create_project(:atom) end
+    # `apply/3` keeps the typespec-clean compile while still asserting the guard rejects
+    # a non-binary name at runtime.
+    assert_raise FunctionClauseError, fn -> apply(Auth, :create_project, [:atom]) end
 
     assert {:ok, first} = Auth.create_project("Project One")
     assert {:ok, second} = Auth.create_project("Project One")

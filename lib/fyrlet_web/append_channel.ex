@@ -63,6 +63,7 @@ defmodule FyrletWeb.AppendChannel do
           seq: 1,
           cursor: window.cursor,
           sent: [],
+          sent_bytes: 0,
           snapshot_seq: 1,
           dirty: false,
           sync_queued: false,
@@ -104,12 +105,20 @@ defmodule FyrletWeb.AppendChannel do
   def handle_in("ack", %{"g" => generation, "s" => sequence, "c" => cursor}, socket)
       when is_integer(sequence) and is_binary(cursor) do
     if generation == socket.assigns.generation and acknowledged?(socket, sequence, cursor) do
-      sent = Enum.reject(socket.assigns.sent, &(&1.seq <= sequence))
+      {sent, sent_bytes} =
+        Enum.reduce(socket.assigns.sent, {[], socket.assigns.sent_bytes}, fn entry,
+                                                                             {kept, bytes} ->
+          if entry.seq <= sequence,
+            do: {kept, bytes - entry.bytes},
+            else: {[entry | kept], bytes}
+        end)
+
       snapshot_seq = socket.assigns.snapshot_seq
 
       socket =
         assign(socket,
-          sent: sent,
+          sent: Enum.reverse(sent),
+          sent_bytes: sent_bytes,
           snapshot_seq: if(snapshot_seq && snapshot_seq <= sequence, do: nil, else: snapshot_seq)
         )
 
@@ -223,7 +232,7 @@ defmodule FyrletWeb.AppendChannel do
       {:ok, base, cursor, %{json: encoded, count: count}, more?} when base == a.cursor ->
         bytes = byte_size(encoded)
 
-        if overflow?(a.sent, bytes) do
+        if overflow?(a, bytes) do
           socket |> reset("overflow") |> continue()
         else
           sequence = a.seq + 1
@@ -269,9 +278,9 @@ defmodule FyrletWeb.AppendChannel do
   defp continue({:stop, _reason, _socket} = stopped), do: stopped
   defp continue(socket), do: {:noreply, socket}
 
-  defp overflow?(sent, bytes) do
-    length(sent) + 1 > Stream.limit(:window_batches) or
-      Enum.sum(Enum.map(sent, & &1.bytes)) + bytes > Stream.limit(:window_bytes)
+  defp overflow?(assigns, bytes) do
+    length(assigns.sent) + 1 > Stream.limit(:window_batches) or
+      assigns.sent_bytes + bytes > Stream.limit(:window_bytes)
   end
 
   # Replaces the client's view with a fresh snapshot: same generation, higher seq.
@@ -288,6 +297,7 @@ defmodule FyrletWeb.AppendChannel do
           seq: sequence,
           cursor: window.cursor,
           sent: [],
+          sent_bytes: 0,
           snapshot_seq: sequence,
           dirty: false
         )
@@ -350,7 +360,11 @@ defmodule FyrletWeb.AppendChannel do
       at: System.monotonic_time(:millisecond)
     }
 
-    socket = assign(socket, sent: socket.assigns.sent ++ [entry])
+    socket =
+      assign(socket,
+        sent: socket.assigns.sent ++ [entry],
+        sent_bytes: socket.assigns.sent_bytes + bytes
+      )
 
     if socket.assigns.ack_timer,
       do: socket,

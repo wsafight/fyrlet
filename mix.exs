@@ -12,6 +12,7 @@ defmodule Fyrlet.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      dialyzer: [plt_add_apps: [:mix]],
       aliases: aliases(),
       deps: deps()
     ]
@@ -44,7 +45,8 @@ defmodule Fyrlet.MixProject do
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.8"},
       {:oban, "~> 2.19"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

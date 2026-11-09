@@ -165,13 +165,13 @@ class FyrletClient implements Client<FyrletContract> {
           this.retryControllers.add(controller);
           try {
             receipt = await retryOperation(kind, policy, controller.signal,
-              () => this.execute(name, body, key, controller.signal),
-              () => this.lookup(name, body, key, controller.signal), report);
+              () => this.execute(name, input, body, key, controller.signal),
+              () => this.lookup(name, input, body, key, controller.signal), report);
           } finally {
             this.retryControllers.delete(controller);
             this.requests.release(controller);
           }
-        } else receipt = await this.execute(name, body, key, options.signal);
+        } else receipt = await this.execute(name, input, body, key, options.signal);
         for (const { entry, overlay } of predicted) entry.settle(overlay);
         return receipt;
       } catch (error) {
@@ -181,7 +181,7 @@ class FyrletClient implements Client<FyrletContract> {
         }
         throw error;
       }
-    }, (recoveryOptions) => this.lookup(name, body, key, recoveryOptions.signal), this.options.onListenerError,
+    }, (recoveryOptions) => this.lookup(name, input, body, key, recoveryOptions.signal), this.options.onListenerError,
     async (error) => Promise.all(targets.filter(({ entry }) => !entry.presence).map(async ({ subscription, entry }): Promise<ViewConfirmation> => {
       if (error !== undefined) return { subscription, status: "unconfirmed", error };
       try {
@@ -192,13 +192,13 @@ class FyrletClient implements Client<FyrletContract> {
   }
 
   async recover(name: string, input: unknown, options: RecoveryOptions): Promise<RecoveryResult<unknown>> {
-    return this.lookup(name, JSON.stringify({ input }), options.idempotencyKey, options.signal);
+    return this.lookup(name, input, JSON.stringify({ input }), options.idempotencyKey, options.signal);
   }
 
-  private async execute(name: string, body: string, key: string, external?: AbortSignal): Promise<OperationReceipt<unknown>> {
+  private async execute(name: string, input: unknown, body: string, key: string, external?: AbortSignal): Promise<OperationReceipt<unknown>> {
     let sent = false;
     try {
-      const payload = await this.operation(name, body, key, "call", external, () => { sent = true; }, () => { sent = false; });
+      const payload = await this.operation(name, input, body, key, "call", external, () => { sent = true; }, () => { sent = false; });
       return operationReceipt(payload);
     } catch (error) {
       if (sent) throw new OutcomeUnknownError(name, key, error);
@@ -206,19 +206,19 @@ class FyrletClient implements Client<FyrletContract> {
     }
   }
 
-  private async lookup(name: string, body: string, key: string, signal?: AbortSignal): Promise<RecoveryResult<unknown>> {
-    const payload = await this.operation(name, body, key, "recover", signal);
+  private async lookup(name: string, input: unknown, body: string, key: string, signal?: AbortSignal): Promise<RecoveryResult<unknown>> {
+    const payload = await this.operation(name, input, body, key, "recover", signal);
     return recoveryResult(payload);
   }
 
   private operation(
-    name: string, body: string, key: string, event: "call" | "recover", external?: AbortSignal,
+    name: string, input: unknown, body: string, key: string, event: "call" | "recover", external?: AbortSignal,
     onSend: () => void = () => {}, onReject: () => void = () => {},
   ): Promise<unknown> {
     return this.requests.execute(external, async (token, signal) => {
       signal.throwIfAborted();
       try {
-        if (this.options.operationTransport === "socket") return await this.socketCall(name, body, key, signal, event, onSend);
+        if (this.options.operationTransport === "socket") return await this.socketCall(name, input, key, signal, event, onSend);
         onSend();
         return await this.http<unknown>(`/api/v1/operations/${encodeURIComponent(name)}${event === "recover" ? "/recover" : ""}`, token, {
           method: "POST", headers: { "content-type": "application/json", "idempotency-key": key }, body, signal,
@@ -512,7 +512,7 @@ class FyrletClient implements Client<FyrletContract> {
   }
 
   private async socketCall(
-    name: string, body: string, key: string, signal: AbortSignal, event: "call" | "recover", onSend: () => void,
+    name: string, input: unknown, key: string, signal: AbortSignal, event: "call" | "recover", onSend: () => void,
   ): Promise<unknown> {
     const channel = await awaitAbortable(this.operations(), signal);
     if (signal.aborted) throw signal.reason;
@@ -526,7 +526,7 @@ class FyrletClient implements Client<FyrletContract> {
       this.operationFailures.add(fail);
       signal.addEventListener("abort", abort, { once: true });
       onSend();
-      channel.push(event, { name, input: JSON.parse(body).input, idempotency_key: key }, this.options.timeoutMs ?? 10_000)
+      channel.push(event, { name, input, idempotency_key: key }, this.options.timeoutMs ?? 10_000)
         .receive("ok", (payload: unknown) => {
           cleanup();
           resolve(payload);

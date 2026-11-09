@@ -49,7 +49,7 @@ projects
 ## 身份与会话
 
 - **`subjects`**：外部身份到内部主体的映射，`(project_id, issuer, external_id)` 唯一。客户端不能自行选择主体。
-- **`sessions`**：`kind` 为 `user` 或 `anonymous`。匿名会话没有服务密钥，所以 `service_key_id` 可为空。`expires_at` 到期、`revoked_at` 撤销；`sessions_anonymous_index`（只含匿名会话）支撑匿名入口的签发速率与活动数统计。写入事务对会话加 `FOR SHARE` 锁，撤销用更新锁，所以撤销返回后旧会话不能再提交写入（见 [AUTH.md](AUTH.md#授权与隔离)）。
+- **`sessions`**：`kind` 为 `user` 或 `anonymous`。匿名会话没有服务密钥，所以 `service_key_id` 可为空。`expires_at` 到期、`revoked_at` 撤销；`sessions_anonymous_index`（只含匿名会话，建在 `inserted_at` 上）支撑匿名入口的签发速率统计，`sessions_anonymous_active_index`（匿名且未撤销，建在 `expires_at` 上）支撑活动数统计。写入事务对会话加 `FOR SHARE` 锁，撤销用更新锁，所以撤销返回后旧会话不能再提交写入（见 [AUTH.md](AUTH.md#授权与隔离)）。
 - **`service_keys`**：`revoked_at` 只阻止签发新会话，不影响既有会话。
 
 ## 幂等
