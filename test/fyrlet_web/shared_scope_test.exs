@@ -94,6 +94,59 @@ defmodule FyrletWeb.SharedScopeTest do
     leave(socket_b)
   end
 
+  test "unacknowledged members coalesce shared queries until one acknowledges", %{
+    alice: alice,
+    bob: bob,
+    project: project
+  } do
+    slow_reconcile()
+    {:ok, first, socket_a} = join_room(alice)
+    {:ok, _second, socket_b} = join_room(bob)
+    [{_key, observer}] = observers(project)
+    before = SharedRooms.queries()
+
+    for text <- ["one", "two", "three"] do
+      SharedRooms.post("r1", text)
+      Phoenix.PubSub.broadcast(Fyrlet.PubSub, "room:#{project.project.id}:r1", :invalidated)
+      flush(observer)
+    end
+
+    assert SharedRooms.queries() == before
+    refute_push "snapshot", _, 20
+    push(socket_a, "ack", ack(first))
+    flush(observer)
+    assert_push "snapshot", snapshot
+    assert Enum.map(snapshot["data"], & &1["text"]) == ["one", "two", "three"]
+    assert SharedRooms.queries() == before + 1
+    refute_push "snapshot", _, 20
+    leave(socket_a)
+    leave(socket_b)
+  end
+
+  test "an unacknowledged shared member is still revoked without loading data", %{
+    alice: alice,
+    bob: bob,
+    project: project
+  } do
+    slow_reconcile()
+    {:ok, _first, socket_a} = join_room(alice)
+    {:ok, _second, socket_b} = join_room(bob)
+    [{_key, _observer}] = observers(project)
+    before = SharedRooms.queries()
+    topic_b = socket_b.topic
+    SharedRooms.remove_member("r1", bob.actor.subject_id)
+    Phoenix.PubSub.broadcast(Fyrlet.PubSub, "room:#{project.project.id}:r1", :invalidated)
+
+    assert_receive %Phoenix.Socket.Message{
+      topic: ^topic_b,
+      event: "status",
+      payload: %{"error" => %{"code" => "FORBIDDEN"}}
+    }
+
+    assert SharedRooms.queries() == before
+    leave(socket_a)
+  end
+
   test "confirmation bypasses a warm shared cache and belongs only to the requesting member", %{
     alice: alice,
     bob: bob

@@ -37,7 +37,7 @@ export function useQuery<
   type Data = Contract["subscriptions"][Name]["output"];
   const encoded = queryKey(params);
   const mode = options.mode ?? "snapshot";
-  const store = useMemo(() => new QueryStore<Data>(client as unknown as Client<FyrletContract>, name, JSON.parse(encoded), mode), [client, name, encoded, mode]);
+  const store = useMemo(() => new QueryStore<Data>(client as unknown as Client<FyrletContract>, name, params, mode, encoded), [client, name, encoded, mode]);
   const selected = useMemo(() => selectSubscription<Data, Selected>({
     getState: store.getSnapshot,
     onChange: (listener) => store.subscribe(() => listener(store.getSnapshot())),

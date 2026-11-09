@@ -68,8 +68,9 @@ defmodule Fyrlet.ViewTest do
     # Unchanged records reuse the previous binary; changed ones are re-encoded.
     assert reset.encoded[record(2, "bb")["id"]] == previous.encoded[record(2, "bb")["id"]]
 
-    replaced = View.replace(previous, record(1, "a")["id"], record(1, "changed"), 100)
+    replaced = View.replace(previous, record(1, "a")["id"], record(1, "changed"))
     assert View.encode(replaced) == Jason.encode!(View.data(replaced))
+    assert replaced.sizes[record(1, "a")["id"]] == byte_size(Jason.encode!(record(1, "changed")))
   end
 
   test "patch diffs against the previous view only when asked" do

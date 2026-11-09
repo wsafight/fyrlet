@@ -184,7 +184,7 @@ defmodule Fyrlet.Runs do
         expires_at: expires_at
       })
 
-    for node <- plan["nodes"], do: insert_step(run.id, node)
+    insert_steps(run.id, plan["nodes"], now)
 
     Store.event(run.id, "run.created", nil, %{"nodes" => length(plan["nodes"])})
     Worker.wake(run.id)
@@ -193,9 +193,34 @@ defmodule Fyrlet.Runs do
      Fyrlet.Runs.Definition.scopes_for(run)}
   end
 
+  # Static plans know every step up front. Using the schema keeps EncryptedMap dumping in
+  # Ecto; ids and timestamps are explicit because insert_all does not run struct callbacks.
+  defp insert_steps(_run_id, [], _now), do: :ok
+
+  defp insert_steps(run_id, nodes, now) do
+    rows =
+      Enum.map(nodes, fn node ->
+        step_attributes(run_id, node)
+        |> Map.merge(%{
+          id: Ecto.UUID.generate(),
+          current_attempt: 0,
+          inserted_at: now,
+          updated_at: now
+        })
+      end)
+
+    count = length(nodes)
+    {^count, _} = Repo.insert_all(Step, rows)
+    :ok
+  end
+
   @doc false
   def insert_step(run_id, node) do
-    Repo.insert!(%Step{
+    Repo.insert!(struct(Step, step_attributes(run_id, node)))
+  end
+
+  defp step_attributes(run_id, node) do
+    %{
       run_id: run_id,
       type: node["type"],
       name: node["name"],
@@ -206,7 +231,7 @@ defmodule Fyrlet.Runs do
       wait_timeout_action: node["on_timeout"],
       max_attempts: node["max_attempts"] || 1,
       queue: node["queue"]
-    })
+    }
   end
 
   defp normalise_input({:ok, value}), do: {:ok, value}

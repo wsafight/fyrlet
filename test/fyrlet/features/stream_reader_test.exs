@@ -84,6 +84,73 @@ defmodule Fyrlet.Features.StreamReaderTest do
     assert {:ok, ^start, _, %{count: 1}, false} = hd(results)
   end
 
+  test "different cursors do not block each other's reads", %{project: p} do
+    test = self()
+
+    controlled = fn result ->
+      fn ->
+        send(test, {:read_started, result, self()})
+
+        receive do
+          :finish_read -> result
+        after
+          1_000 -> :timeout
+        end
+      end
+    end
+
+    first = Task.async(fn -> Reader.batch(p, "room", "one", [], controlled.(:first)) end)
+    assert_receive {:read_started, :first, first_reader}
+    second = Task.async(fn -> Reader.batch(p, "room", "two", [], controlled.(:second)) end)
+    assert_receive {:read_started, :second, second_reader}, 100
+    send(first_reader, :finish_read)
+    send(second_reader, :finish_read)
+    assert Task.await(first) == :first
+    assert Task.await(second) == :second
+  end
+
+  test "empty results are not shared with a queued caller", %{project: p} do
+    test = self()
+
+    read = fn ->
+      send(test, {:empty_read, self()})
+
+      receive do
+        :finish_read -> :none
+      after
+        1_000 -> :timeout
+      end
+    end
+
+    first = Task.async(fn -> Reader.batch(p, "room", "same", [], read) end)
+    assert_receive {:empty_read, first_reader}
+    second = Task.async(fn -> Reader.batch(p, "room", "same", [], read) end)
+    send(first_reader, :finish_read)
+    assert Task.await(first) == :none
+    assert_receive {:empty_read, second_reader}
+    send(second_reader, :finish_read)
+    assert Task.await(second) == :none
+  end
+
+  test "simultaneous snapshots share one read but are never retained", %{project: p} do
+    append(p, [%{"text" => "a"}, %{"text" => "b"}])
+
+    {results, reads} =
+      entry_reads(fn ->
+        1..30
+        |> Task.async_stream(fn _ -> Stream.snapshot_shared(p, "room", 5) end,
+          max_concurrency: 30
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+      end)
+
+    assert reads == 1
+    assert Enum.uniq(results) |> length() == 1
+    assert {:ok, %{encoded: ~s([{"text":"a"},{"text":"b"}])}} = hd(results)
+    {_, next} = entry_reads(fn -> Stream.snapshot_shared(p, "room", 5) end)
+    assert next == 1
+  end
+
   test "different cursors, streams, projects and limits never share an answer", %{project: p} do
     c1 = append(p, [%{"text" => "a"}])
     c2 = append(p, [%{"text" => "b"}])

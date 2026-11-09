@@ -45,6 +45,29 @@ test("equivalent JSON parameters share one channel with independent handles and 
   assert.equal(next.readyState, 3);
 });
 
+test("shared cache hits do not parse or freeze another copy of the parameters", async (context) => {
+  const instance = client(context);
+  const first = instance.subscribe("records.recent", { nested: { limit: 10 }, labels: ["a"] });
+  const parse = JSON.parse;
+  const freeze = Object.freeze;
+  let parses = 0;
+  let freezes = 0;
+  JSON.parse = (...args) => { parses++; return parse(...args); };
+  Object.freeze = (value) => { freezes++; return freeze(value); };
+  let second;
+  try {
+    second = instance.subscribe("records.recent", { labels: ["a"], nested: { limit: 10 } });
+  } finally {
+    JSON.parse = parse;
+    Object.freeze = freeze;
+  }
+  assert.equal(parses, 0);
+  assert.equal(freezes, 0);
+  assert.equal(TestWebSocket.instances.at(-1).joins.size, 1);
+  first.unsubscribe();
+  second.unsubscribe();
+});
+
 test("query names, parameters and delivery modes remain separate, and presence is never shared", async (context) => {
   const instance = client(context);
   const subscriptions = [

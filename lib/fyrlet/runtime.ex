@@ -267,14 +267,14 @@ defmodule Fyrlet.Runtime do
   defp write(actor, module, name, input, specification, key) do
     with :ok <- validate_key(key) do
       nested = Repo.in_transaction?()
+      lock_key = Enum.join([actor.project_id, actor.subject_id, name, key], ":")
+      input_hash = input_hash(input)
 
       result =
         Repo.transaction(fn ->
           current_actor = unwrap!(Auth.revalidate(actor, true))
           unwrap_authorization!(module.authorize(name, current_actor, input))
-          lock_key = Enum.join([actor.project_id, actor.subject_id, name, key], ":")
           Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock_key])
-          input_hash = input_hash(input)
 
           query =
             from(result in Idempotency,
@@ -383,8 +383,7 @@ defmodule Fyrlet.Runtime do
         %CommittedChange{
           change: change,
           output: checked,
-          schema: specification["output"],
-          bytes: byte_size(Jason.encode!(checked))
+          schema: specification["output"]
         }
       end
 
@@ -452,9 +451,8 @@ defmodule Fyrlet.Runtime do
       {:replace, identifier, record} when is_binary(identifier) ->
         if schema["type"] == "array" and Map.has_key?(previous.records, identifier) and
              is_map(record) and record["id"] == identifier do
-          with {:ok, checked, record_bytes} <-
-                 validate_replacement(schema["items"], record, change) do
-            {:ok, View.replace(previous, identifier, checked, record_bytes)}
+          with {:ok, checked} <- validate_replacement(schema["items"], record, change) do
+            {:ok, View.replace(previous, identifier, checked)}
           end
         else
           {:error, Error.new("INTERNAL_ERROR", "Invalid subscription replacement")}
@@ -492,17 +490,11 @@ defmodule Fyrlet.Runtime do
   defp change_body(%CommittedChange{change: change}), do: change
   defp change_body(change), do: change
 
-  defp validate_replacement(schema, record, %CommittedChange{
-         schema: schema,
-         output: record,
-         bytes: bytes
-       }),
-       do: {:ok, record, bytes}
+  defp validate_replacement(schema, record, %CommittedChange{schema: schema, output: record}),
+    do: {:ok, record}
 
-  defp validate_replacement(schema, record, _change) do
-    with {:ok, checked} <- validate_output(schema, record),
-         do: {:ok, checked, byte_size(Jason.encode!(checked))}
-  end
+  defp validate_replacement(schema, record, _change),
+    do: validate_output(schema, record)
 
   defp validate_output(schema, data) do
     case Schema.validate(schema, data) do

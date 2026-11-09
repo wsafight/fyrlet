@@ -28,6 +28,54 @@ defmodule Fyrlet.RunsTest do
       assert event_types(id) == ["run.created"]
     end
 
+    test "static steps are inserted in one statement with ids, timestamps and encrypted inputs",
+         %{
+           alice: alice
+         } do
+      handler = "run-step-inserts-#{Ecto.UUID.generate()}"
+      owner = self()
+
+      :telemetry.attach(
+        handler,
+        [:fyrlet, :repo, :query],
+        fn _, _, %{query: query}, owner ->
+          if query =~ ~s(INSERT INTO "fyrlet_run_steps"), do: send(owner, :step_insert)
+        end,
+        owner
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      for count <- [1, 10, 50] do
+        Application.put_env(:fyrlet, :run_plans, %{
+          "runs.demo" => fn _, _ ->
+            {:ok,
+             steps:
+               for(
+                 index <- 1..count,
+                 do: %{type: :step, name: "s#{index}", input: %{"index" => index}}
+               )}
+          end
+        })
+
+        id = start_run!(alice)
+        assert_receive :step_insert
+        refute_receive :step_insert, 20
+        rows = steps(id)
+        assert length(rows) == count
+        assert Enum.map(rows, & &1.seq) == Enum.to_list(0..(count - 1))
+        expected = for(index <- 1..count, do: %{"index" => index})
+        assert Enum.map(rows, & &1.input) == expected
+        assert rows |> Enum.map(& &1.id) |> Enum.uniq() |> length() == count
+
+        assert Enum.all?(rows, fn step ->
+                 step.current_attempt == 0 and
+                   step.max_attempts == Fyrlet.Runs.Limits.get(:max_attempts) and
+                   match?(%DateTime{}, step.inserted_at) and match?(%DateTime{}, step.updated_at)
+               end)
+      end
+    end
+
     test "the same key and input return the same run; different input conflicts", %{alice: alice} do
       key = key()
       assert {:ok, %{"run_id" => id}} = start_run(alice, "runs.demo", %{"source" => "a"}, key)
