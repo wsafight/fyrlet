@@ -231,6 +231,28 @@ test("rerendering structurally equal nested parameters keeps the subscription an
   assert.equal(document.body.textContent, 'ready:["retained"]');
 });
 
+test("query rendering materializes parameters only when a store is created", async () => {
+  const client = fakeClient();
+  const root = mountedRoot();
+  const parse = JSON.parse;
+  let parses = 0;
+  let initial;
+  let rerender;
+  JSON.parse = (...args) => { parses++; return parse(...args); };
+  try {
+    await act(() => root.render(tree(client, createElement(Component, { params: { filter: { limit: 2 } } }))));
+    initial = parses;
+    parses = 0;
+    await act(() => root.render(tree(client, createElement(Component, { params: { filter: { limit: 2 } } }))));
+    rerender = parses;
+  } finally {
+    JSON.parse = parse;
+  }
+  assert.equal(initial, 1);
+  assert.equal(rerender, 0);
+  assert.equal(client.subscriptions.length, 1);
+});
+
 test("unmounting one selected consumer removes only its own listener", async () => {
   const client = fakeClient();
   const root = mountedRoot();

@@ -10,8 +10,7 @@ export class QueryStore<Data> {
   private readonly params: unknown;
   private readonly key: string;
 
-  constructor(private readonly client: Client<FyrletContract>, private readonly name: string, params: unknown, private readonly mode: "snapshot" | "append") {
-    const encoded = queryKey(params);
+  constructor(private readonly client: Client<FyrletContract>, private readonly name: string, params: unknown, private readonly mode: "snapshot" | "append", encoded: string = queryKey(params)) {
     this.params = JSON.parse(encoded);
     this.key = JSON.stringify([name, mode, encoded]);
   }

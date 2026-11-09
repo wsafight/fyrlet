@@ -8,7 +8,7 @@ import { decodeFrames } from "./transport.js";
 import { PROTOCOL_VERSION } from "./protocol.js";
 import type { Identity } from "./protocol.js";
 import { awaitAbortable, RequestExecutor } from "./requests.js";
-import { queryParameters } from "./query.js";
+import { queryKey, queryValue } from "./query.js";
 import { retryOperation, retryPolicy } from "./retry.js";
 import { SubscriptionEntry as Entry } from "./subscription.js";
 import type { Overlay, SubscriptionEvent } from "./subscription.js";
@@ -256,10 +256,10 @@ class FyrletClient implements Client<FyrletContract> {
   private subscribeEntry(name: string, params: unknown, append: boolean, presence?: Entry["presence"]): Subscription<unknown> {
     this.assertOpen();
     let key: string | undefined;
+    let parameterKey: string | undefined;
     if (this.options.shareSubscriptions && !presence) {
-      const normalized = queryParameters(params);
-      key = JSON.stringify([this.options.projectId, name, append, normalized.key]);
-      params = normalized.value;
+      parameterKey = queryKey(params);
+      key = JSON.stringify([this.options.projectId, name, append, parameterKey]);
     }
     let entry = key === undefined ? undefined : this.sharedQueries.get(key);
     if (!entry) {
@@ -268,6 +268,7 @@ class FyrletClient implements Client<FyrletContract> {
       }
       const id = this.createId();
       if (this.entries.has(id)) throw new TypeError("createId returned a duplicate subscription ID");
+      if (parameterKey !== undefined) params = queryValue(parameterKey);
       entry = new Entry(id, name, params, this.options, append, presence);
       this.entries.set(id, entry);
       if (key !== undefined) {

@@ -103,6 +103,17 @@ defmodule FyrletWeb.PrivateSubscriptionTest do
        %{alice: alice} do
     {:ok, record} = add(alice.actor)
     {:ok, initial, socket} = join_private(alice, %{"delivery" => "delta-v1"})
+    handler = "unacknowledged-query-#{Ecto.UUID.generate()}"
+    reference = make_ref()
+
+    :telemetry.attach(
+      handler,
+      [:fyrlet, :subscription, :query],
+      fn _, _, _, owner -> send(owner, {reference, :queried}) end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
 
     for version <- 1..3 do
       assert {:ok, _} =
@@ -122,10 +133,13 @@ defmodule FyrletWeb.PrivateSubscriptionTest do
 
     refute_push "snapshot", _, 20
     refute_push "delta", _, 20
+    refute_receive {^reference, :queried}, 20
     acknowledge(socket, initial)
     assert_push "snapshot", snapshot
     assert hd(snapshot["data"])["version"] == 4
     assert snapshot["seq"] == 2
+    assert_receive {^reference, :queried}
+    refute_receive {^reference, :queried}, 20
     leave(socket)
   end
 
@@ -153,6 +167,14 @@ defmodule FyrletWeb.PrivateSubscriptionTest do
     {:ok, initial, socket} = join_private(alice)
     acknowledge(socket, initial)
     Application.put_env(:fyrlet, :private_revoke_on_load, true)
+    send(socket.channel_pid, :invalidated)
+    assert_push "status", %{"error" => %{"code" => "UNAUTHENTICATED"}}
+    refute_push "snapshot", _, 20
+  end
+
+  test "revocation is checked while a private view waits for acknowledgement", %{alice: alice} do
+    {:ok, _initial, socket} = join_private(alice)
+    {:ok, _} = Auth.revoke_own_session(alice.actor)
     send(socket.channel_pid, :invalidated)
     assert_push "status", %{"error" => %{"code" => "UNAUTHENTICATED"}}
     refute_push "snapshot", _, 20

@@ -320,17 +320,15 @@ defmodule FyrletWeb.AppendChannel do
   end
 
   defp read_window(actor, stream, subscription) do
-    with {:ok, %{cursor: cursor, items: items}} <-
-           Stream.snapshot(actor.project_id, stream, subscription.specification["max_items"]) do
-      encoded = Jason.encode!(items)
-
-      with :ok <-
-             Fyrlet.Subscriptions.Limits.check_snapshot(
-               byte_size(encoded),
-               subscription.specification
-             ),
-           do: {:ok, %{cursor: cursor, encoded: encoded, bytes: byte_size(encoded)}}
-    end
+    with {:ok, window} <-
+           Stream.snapshot_shared(
+             actor.project_id,
+             stream,
+             subscription.specification["max_items"]
+           ),
+         :ok <-
+           Fyrlet.Subscriptions.Limits.check_snapshot(window.bytes, subscription.specification),
+         do: {:ok, window}
   end
 
   defp snapshot_envelope(socket, window) do

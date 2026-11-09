@@ -94,7 +94,15 @@ defmodule Fyrlet.Subscriptions.View do
 
   def patch(%__MODULE__{}), do: nil
 
-  def replace(view, identifier, record, bytes) do
+  def replace(view, identifier, record) do
+    encoded = Jason.encode!(record)
+    replace_encoded(view, identifier, record, byte_size(encoded), encoded)
+  end
+
+  def replace(view, identifier, record, bytes),
+    do: replace_encoded(view, identifier, record, bytes, Jason.encode!(record))
+
+  defp replace_encoded(view, identifier, record, bytes, encoded) do
     old = Map.fetch!(view.records, identifier)
     {:ok, patch} = Delta.diff([old], [record])
 
@@ -102,7 +110,7 @@ defmodule Fyrlet.Subscriptions.View do
       view
       | records: Map.put(view.records, identifier, record),
         sizes: Map.put(view.sizes, identifier, bytes),
-        encoded: Map.put(view.encoded, identifier, Jason.encode!(record)),
+        encoded: Map.put(view.encoded, identifier, encoded),
         bytes: view.bytes - Map.fetch!(view.sizes, identifier) + bytes,
         patch: patch,
         previous: nil,

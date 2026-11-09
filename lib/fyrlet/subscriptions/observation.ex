@@ -38,6 +38,7 @@ defmodule Fyrlet.Subscriptions.Observation do
        clients: %{},
        recent: [],
        scheduled: false,
+       dirty: false,
        change: nil,
        reconcile_timer: reconcile_timer()
      }}
@@ -165,7 +166,9 @@ defmodule Fyrlet.Subscriptions.Observation do
         state = %{state | clients: Map.put(state.clients, channel, %{client | ready: true})}
 
         state =
-          if client.force or revision != state.revision, do: schedule(state, nil), else: state
+          if state.dirty or client.force or revision != state.revision,
+            do: schedule(state, nil),
+            else: state
 
         {:noreply, state}
 
@@ -223,14 +226,25 @@ defmodule Fyrlet.Subscriptions.Observation do
     confirming = Enum.any?(state.clients, fn {_channel, client} -> client.confirmations != [] end)
 
     result =
-      if queued > Application.fetch_env!(:fyrlet, :max_channel_queue),
-        do: {:error, Error.new("LIMIT_EXCEEDED", "The observer is overloaded; subscribe again")},
-        else: load_view(state, if(confirming, do: nil, else: state.view), state.change)
+      cond do
+        queued > Application.fetch_env!(:fyrlet, :max_channel_queue) ->
+          {:error, Error.new("LIMIT_EXCEEDED", "The observer is overloaded; subscribe again")}
+
+        waiting_for_ack?(state) ->
+          defer_refresh(state)
+
+        true ->
+          load_view(state, if(confirming, do: nil, else: state.view), state.change)
+      end
 
     case result do
+      {:deferred, state} ->
+        {:noreply, state}
+
       {:ok, view} ->
         previous_revision = state.revision
         changed = not view.unchanged
+        allow_delta = not state.dirty
 
         state = %{
           state
@@ -238,10 +252,11 @@ defmodule Fyrlet.Subscriptions.Observation do
             revision: state.revision + if(changed, do: 1, else: 0),
             encoded: if(changed, do: nil, else: state.encoded),
             scheduled: false,
+            dirty: false,
             change: nil
         }
 
-        {:noreply, state |> deliver(previous_revision, changed) |> release_encoded()}
+        {:noreply, state |> deliver(previous_revision, changed, allow_delta) |> release_encoded()}
 
       {:error, error} ->
         if state.local do
@@ -292,23 +307,32 @@ defmodule Fyrlet.Subscriptions.Observation do
     %{state | scheduled: true, change: change}
   end
 
-  defp deliver(state, previous_revision, changed) do
-    # The diff is only worth its CPU when at least one member can consume a delta.
-    patch =
-      if changed and
-           Enum.any?(state.clients, fn {_channel, client} ->
-             client.delivery == "delta-v1"
-           end) do
-        case View.patch(state.view) do
-          nil ->
-            nil
+  # An unacknowledged member cannot consume another delivery. Remember that the view is dirty,
+  # but keep doing the access checks that an ordinary refresh would do so revocation is not
+  # delayed until ACK. The next ready member triggers one authoritative load for all coalesced
+  # changes; a ready member in a shared observer never waits for its slower siblings.
+  defp waiting_for_ack?(state) do
+    map_size(state.clients) > 0 and
+      Enum.all?(state.clients, fn {_channel, client} -> not client.ready end)
+  end
 
-          patch ->
-            encoded = Jason.encode!(patch)
-            if byte_size(encoded) + 96 < state.view.bytes, do: encoded
-        end
-      end
+  defp defer_refresh(%{mode: :private} = state) do
+    with {:ok, actor} <- Auth.revalidate(state.actor),
+         :ok <-
+           state.subscription.module.authorize(
+             state.subscription.name,
+             actor,
+             state.subscription.parameters
+           ) do
+      {:deferred, mark_dirty(state)}
+    end
+  end
 
+  defp defer_refresh(state), do: {:deferred, state |> recheck_clients() |> mark_dirty()}
+
+  defp mark_dirty(state), do: %{state | scheduled: false, dirty: true, change: nil}
+
+  defp deliver(state, previous_revision, changed, allow_delta) do
     :telemetry.execute([:fyrlet, :scope, :shared], %{members: map_size(state.clients)}, %{
       name: state.subscription.name,
       mode: state.mode
@@ -316,39 +340,66 @@ defmodule Fyrlet.Subscriptions.Observation do
 
     checked = sessions(state, state.clients)
 
-    Enum.reduce(state.clients, state, fn {channel, client}, current ->
-      deliver_checked(current, channel, client, patch, previous_revision, checked[channel])
+    {state, recipients} =
+      Enum.reduce(state.clients, {state, []}, fn {channel, client}, {current, recipients} ->
+        case permitted(current, client, checked[channel]) do
+          {:error, error} ->
+            {drop_client(current, channel, client, error), recipients}
+
+          :ok ->
+            if client.ready and (client.force or client.revision != current.revision),
+              do: {current, [{channel, client} | recipients]},
+              else: {current, recipients}
+        end
+      end)
+
+    recipients = Enum.reverse(recipients)
+    patch = delta_patch(state, recipients, previous_revision, changed and allow_delta)
+
+    Enum.reduce(recipients, state, fn {channel, client}, current ->
+      deliver_client(current, channel, client, patch, previous_revision)
     end)
   end
 
-  defp deliver_checked(current, channel, client, patch, previous_revision, session) do
-    case permitted(current, client, session) do
-      {:error, error} ->
-        drop_client(current, channel, client, error)
+  # Check session, authorization and delivery eligibility before paying for a diff. In
+  # particular, lagging and forced-snapshot delta clients cannot make this refresh do work
+  # that no recipient can use.
+  defp delta_patch(state, recipients, previous_revision, changed) do
+    if changed and
+         Enum.any?(recipients, fn {_channel, client} ->
+           not client.force and client.delivery == "delta-v1" and
+             client.revision == previous_revision
+         end) do
+      case View.patch(state.view) do
+        nil ->
+          nil
 
-      :ok when not client.ready or (not client.force and client.revision == current.revision) ->
-        current
-
-      :ok ->
-        delta =
-          not is_nil(patch) and not client.force and client.delivery == "delta-v1" and
-            client.revision == previous_revision
-
-        current = if delta, do: current, else: encode_snapshot(current)
-        {event, body} = if delta, do: {:delta, patch}, else: {:snapshot, current.encoded}
-        event = if client.confirmations == [], do: event, else: {:snapshot, client.confirmations}
-        send(channel, {:observer_update, self(), current.revision, event, body})
-
-        client = %{
-          client
-          | ready: false,
-            force: false,
-            confirmations: [],
-            revision: current.revision
-        }
-
-        %{current | clients: Map.put(current.clients, channel, client)}
+        patch ->
+          encoded = Jason.encode!(patch)
+          if byte_size(encoded) + 96 < state.view.bytes, do: encoded
+      end
     end
+  end
+
+  defp deliver_client(current, channel, client, patch, previous_revision) do
+    delta =
+      not is_nil(patch) and not client.force and client.delivery == "delta-v1" and
+        client.revision == previous_revision
+
+    current = if delta, do: current, else: encode_snapshot(current)
+    {event, body} = if delta, do: {:delta, patch}, else: {:snapshot, current.encoded}
+    event = if client.confirmations == [], do: event, else: {:snapshot, client.confirmations}
+    send(channel, {:observer_update, self(), current.revision, event, body})
+
+    client = %{
+      client
+      | ready: false,
+        force: false,
+        confirmations: [],
+        revision: current.revision
+    }
+
+    %{current | clients: Map.put(current.clients, channel, client)}
   end
 
   defp encode_snapshot(%{encoded: nil} = state) do

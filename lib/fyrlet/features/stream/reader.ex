@@ -12,6 +12,7 @@ defmodule Fyrlet.Features.Stream.Reader do
   @table __MODULE__
   @partitions __MODULE__.Partitions
   @max_entries 10_000
+  @max_reads_per_partition 4
 
   # ---- supervision ----------------------------------------------------------------------
 
@@ -73,7 +74,7 @@ defmodule Fyrlet.Features.Stream.Reader do
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
   @impl true
-  def init(_options), do: {:ok, %{}}
+  def init(_options), do: {:ok, %{pending: %{}, queue: :queue.new(), active: %{}}}
 
   # ---- reading --------------------------------------------------------------------------
 
@@ -115,26 +116,131 @@ defmodule Fyrlet.Features.Stream.Reader do
   end
 
   @impl true
-  def handle_call({:fill, key, read}, _from, state) do
-    reply =
-      case lookup(key) do
-        {:ok, value} ->
-          value
+  def handle_call({:fill, key, read}, from, state) do
+    case lookup(key) do
+      {:ok, value} ->
+        {:reply, value, state}
 
-        :miss ->
-          try do
-            result = read.()
-            store(key, result)
-            result
-          rescue
-            _exception -> :unavailable
-          catch
-            _kind, _reason -> :unavailable
-          end
+      :miss ->
+        case Map.get(state.pending, key) do
+          nil ->
+            pending = %{leader: {from, read}, waiters: :queue.new()}
+
+            state = %{
+              state
+              | pending: Map.put(state.pending, key, pending),
+                queue: :queue.in(key, state.queue)
+            }
+
+            {:noreply, start_next(state)}
+
+          pending ->
+            waiters = :queue.in({from, read}, pending.waiters)
+            pending = Map.put(state.pending, key, %{pending | waiters: waiters})
+            {:noreply, %{state | pending: pending}}
+        end
+    end
+  end
+
+  @impl true
+  def handle_info({:read_result, reader, result}, state) do
+    case Map.get(state.active, reader) do
+      nil -> {:noreply, state}
+      {_monitor, _key} -> {:noreply, complete(state, reader, result)}
+    end
+  end
+
+  def handle_info({:DOWN, monitor, :process, reader, _reason}, state) do
+    case Map.get(state.active, reader) do
+      {^monitor, _key} -> {:noreply, complete(state, reader, :unavailable)}
+      _missing -> {:noreply, state}
+    end
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  # Distinct batch keys run in parallel, with a fixed bound per stream partition. Callers of
+  # one key share its in-flight read instead of queueing a database query behind the GenServer.
+  defp start_next(%{active: active} = state) when map_size(active) >= @max_reads_per_partition,
+    do: state
+
+  defp start_next(state) do
+    case :queue.out(state.queue) do
+      {{:value, key}, queue} ->
+        %{leader: {_from, read}} = Map.fetch!(state.pending, key)
+        server = self()
+
+        {reader, monitor} =
+          spawn_monitor(fn ->
+            result =
+              try do
+                read.()
+              rescue
+                _exception -> :unavailable
+              catch
+                _kind, _reason -> :unavailable
+              end
+
+            send(server, {:read_result, self(), result})
+          end)
+
+        state = %{
+          state
+          | queue: queue,
+            active: Map.put(state.active, reader, {monitor, key})
+        }
+
+        start_next(state)
+
+      {:empty, _queue} ->
+        state
+    end
+  end
+
+  defp complete(state, reader, result) do
+    {{monitor, key}, active} = Map.pop(state.active, reader)
+    Process.demonitor(monitor, [:flush])
+    pending = Map.fetch!(state.pending, key)
+
+    state =
+      if shareable?(result) do
+        store(key, result)
+        GenServer.reply(elem(pending.leader, 0), result)
+
+        Enum.each(:queue.to_list(pending.waiters), fn {from, _read} ->
+          GenServer.reply(from, result)
+        end)
+
+        %{state | pending: Map.delete(state.pending, key)}
+      else
+        # Empty, reset and failed reads are not shared: a later caller must get a fresh head,
+        # or its own fallback read, just as it did when reads ran serially in this process.
+        GenServer.reply(elem(pending.leader, 0), result)
+
+        case :queue.out(pending.waiters) do
+          {{:value, leader}, waiters} ->
+            state = %{
+              state
+              | pending: Map.put(state.pending, key, %{leader: leader, waiters: waiters}),
+                queue: :queue.in(key, state.queue)
+            }
+
+            state
+
+          {:empty, _waiters} ->
+            %{state | pending: Map.delete(state.pending, key)}
+        end
       end
 
-    {:reply, reply, state}
+    start_next(%{state | active: active})
   end
+
+  defp shareable?({:ok, _from, _to, _items, _more}), do: true
+
+  defp shareable?({:ok, %{encoded: encoded, bytes: bytes}}) when is_binary(encoded),
+    do: is_integer(bytes)
+
+  defp shareable?(_other), do: false
 
   defp lookup(key) do
     case :ets.lookup(@table, key) do

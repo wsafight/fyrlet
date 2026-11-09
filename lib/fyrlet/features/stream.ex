@@ -193,6 +193,19 @@ defmodule Fyrlet.Features.Stream do
     end
   end
 
+  @doc false
+  # Only coalesce snapshots that are already in flight; unlike batches, a snapshot is never
+  # retained in the TTL cache. Channel callers subscribe before this read, so an append that
+  # races it is picked up by their next sync. The shared read also encodes the window once.
+  def snapshot_shared(project_id, name, max_items) when max_items > 0 do
+    Fyrlet.Features.Stream.Reader.batch(project_id, name, :snapshot, [max_items: max_items], fn ->
+      with {:ok, %{cursor: cursor, items: items}} <- snapshot(project_id, name, max_items) do
+        encoded = Jason.encode!(items)
+        {:ok, %{cursor: cursor, encoded: encoded, bytes: byte_size(encoded)}}
+      end
+    end)
+  end
+
   @doc """
   Everything appended after `cursor`, as one bounded batch.
 

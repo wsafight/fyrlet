@@ -1,8 +1,8 @@
 import { immutable } from "./delta.js";
 
-export function queryKey(value: unknown): string { return queryParameters(value).key; }
+const encoder = new TextEncoder();
 
-export function queryParameters(value: unknown): { key: string; value: unknown } {
+export function queryKey(value: unknown): string {
   const seen = new Set<object>();
   function encode(value: unknown): string {
     if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -19,6 +19,9 @@ export function queryParameters(value: unknown): { key: string; value: unknown }
     } finally { seen.delete(value); }
   }
   const key = encode(value);
-  if (new TextEncoder().encode(key).byteLength > 65_536) throw new TypeError("Shared query parameters must fit within 64 KiB");
-  return { key, value: immutable(JSON.parse(key)) };
+  if (encoder.encode(key).byteLength > 65_536) throw new TypeError("Shared query parameters must fit within 64 KiB");
+  return key;
 }
+
+// Materialize only when a new subscription needs its own defensive parameter copy.
+export function queryValue(key: string): unknown { return immutable(JSON.parse(key)); }

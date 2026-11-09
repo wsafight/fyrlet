@@ -19,6 +19,7 @@
 | 私有视图嵌入 Channel，释放编码缓存 | 已实现 | Channel/进程 A/B：200 个私有视图由 400 降至 200 个进程；64 KiB 空闲保留内存 −45.3% |
 | 契约快照预算与节点 Channel 总上限 | 已实现 | 启动校验与运行时回归测试；不构成容量结论 |
 | Channel 与 SDK 重复逻辑 | 已精简 | 产品源码减少 131 个物理行、115 个非空行；生命周期与句柄归属回归测试 |
+| ACK 背压、静态 Run 批量写、Append 单飞与 SDK 参数物化 | 已实现 | 语句数/调用计数与回归测试；未跑新的端到端 ABBA |
 
 ## 1. Oban 清理器容量
 
@@ -397,3 +398,22 @@ CPU 与内存的范围不重叠；P95 与完成写入的范围有重叠，只能
 同镜像 500 次写入/秒的 ABBA 共运行 8 次，正确性均通过，但默认模式仅 3/4、通知模式仅 2/4 通过目标负载与延迟 SLO。物理主机 CPU 干扰、结果范围重叠，不能宣称提速，默认值不变。完整条件与数据见 [PERFORMANCE.md](PERFORMANCE.md#可选-postgresql-通知尚无性能收益证据2026-11-08) 及其链接的脱敏 JSON。
 
 公平测试工具现在保留各个 A/B 槽位，拒绝覆盖报告，检查资源限制与源码/镜像身份，记录生成器失败，并在退出时清理私有夹具与命名生成器。速率扫描至少重复三次，隔轮反向运行速率点。这些改动提高证据质量，不代表应用吞吐提升。
+
+## 18. ACK 背压、数据库往返与 SDK 参数物化（2026-11-09）
+
+本轮按“先补会失败的回归，再修改实现”的顺序处理数据库往返、背压和重复分配。证据是语句数、受控读取次数和 SDK 内置函数调用计数；**没有运行新的外部 ABBA，因此不声称端到端吞吐或延迟提升**。
+
+### 已实施的改动
+
+1. **未 ACK 时合并业务加载。** `Observation` 在全部成员都等待 ACK 时只记录 `dirty`，不执行应用查询和 View 构建，但仍立即复核会话、授权与共享成员资格。至少一个成员 ready 后做一次权威全量加载；由 dirty 状态恢复的慢 delta 客户端必须收到全量快照，不能把多个未确认状态压成一个 delta。共享 Observer 中 ready 的成员不被其他慢成员拖延。delta 也改为在会话、授权和实际投递资格筛选后计算。
+2. **静态 Run Step 批量插入。** 静态计划通过一次 `insert_all` 创建全部 Step；1、10、50 个节点的回归均只观察到一条 Step INSERT。UUID、时间戳与当前尝试次数显式写入，重试次数沿用 Plan，加密输入仍通过 Step schema 的 Ecto dump。动态 `insert_step/2` 仍逐条插入。
+3. **缩短写事务前处理。** 幂等输入哈希和 advisory lock key 在事务外计算。没有实施通用 Session/advisory CTE，因为它会改变既有锁顺序；也没有合并 HTTP 认证与请求校验，因为那会改变错误优先级。此前记录的 READ COMMITTED 快照问题仍是不能把 advisory lock 与幂等 SELECT 随意合并的原因。
+4. **Append 按完整 key 单飞并允许有界并行。** 同一项目、流、cursor 和选项的成功批次仍共享一次读取；不同 key 可在每个流分区最多 4 个读取中并行，不再被 Reader GenServer 串行阻塞。`:none`、`:reset` 和失败结果不交给排队调用者复用。join/reset 快照只合并同时在途的请求，不进入 TTL 缓存，并复用一次窗口 JSON 编码。
+5. **移除重复编码和宽删除返回。** `CommittedChange` 不再预先编码所有输出；真正执行 replacement 时，`View.replace/3` 的一次编码同时提供字节数和缓存 JSON。Inbox 删除只 `RETURNING id`，不再返回整行。
+6. **拆分 canonical key 与参数物化。** TypeScript `queryKey` 只规范化和检查 64 KiB 上限；只有创建新共享 Entry 时才 `JSON.parse` 并深冻结防御性副本，共享命中不再物化。React Hook 把已计算的 key 交给 `QueryStore`，不再重复规范化或解析。插桩回归中，首次 render 的 `JSON.parse` 从 4 次降为 1 次，结构相同参数的重渲染从 2 次降为 0 次；核心共享命中的解析和冻结均为 0 次。每次 render 仍重新计算 canonical key，因此同对象的原地修改不会被一个按引用缓存的 key 隐藏。
+
+### 验证与未做事项
+
+核心 Elixir 725 个测试、Inbox 18 个测试、TypeScript 305 个测试、React 21 个测试通过；两个 SDK 的 typecheck 和 `mix quality` 通过。回归覆盖私有/共享 ACK、ready 成员、撤销、慢 delta、静态 Step 默认值与加密输入、不同 cursor 并行、非共享空结果、快照不保留、参数复制及查询身份。
+
+Append 的 O(W) 窗口记账、结构 delta、`applyAppend` 和 Presence roster 仍有结构共享空间，但本轮没有新的 CPU/GC/分配测量依据，未改写这些数据结构。NIF、BEAM GC/分配器调参、增大连接池和另一套通用 View TTL 缓存同样没有新增依据，不进入本轮改动。

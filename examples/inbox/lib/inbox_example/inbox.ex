@@ -266,12 +266,12 @@ defmodule InboxExample.Inbox do
     query =
       from(item in owned(actor),
         where: item.id == ^input["id"] and item.version == ^input["expected_version"],
-        select: item
+        select: item.id
       )
 
     case Repo.delete_all(query) do
-      {1, [item]} ->
-        {:ok, %{"id" => item.id, "deleted" => true}, [scope("inbox.recent", actor, %{})]}
+      {1, [identifier]} ->
+        {:ok, %{"id" => identifier, "deleted" => true}, [scope("inbox.recent", actor, %{})]}
 
       {0, []} ->
         missing_or_conflict(actor, input["id"])
